@@ -4,11 +4,11 @@
 #include "profile/ProfileDumpTemplates.h"
 #include "profile_consumer/ProfileSession.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -32,10 +32,10 @@ void Expect(bool _condition, std::string_view _message) {
 class ScopedTimelineCapture final {
 public:
     ScopedTimelineCapture() {
-        static std::atomic_uint64_t next_id{0};
-        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
+        static std::atomic<Moer::uint64> next_id{0};
+        for (Moer::uint32 attempt = 0; attempt < 64; ++attempt) {
             const auto now =
-                static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+                static_cast<Moer::uint64>(std::chrono::steady_clock::now().time_since_epoch().count());
             directory_ = std::filesystem::temp_directory_path() /
                          ("moer-profile-timeline-index-" + std::to_string(now) + "-" +
                           std::to_string(next_id.fetch_add(1, std::memory_order_relaxed)));
@@ -68,11 +68,11 @@ private:
 
 void EmitCpuScope(
     SchemaHandle     _schema,
-    std::uint64_t    _thread_id,
+    Moer::uint64     _thread_id,
     std::string_view _name,
-    std::uint64_t    _begin_ns,
-    std::uint64_t    _end_ns,
-    std::uint32_t    _depth
+    Moer::uint64     _begin_ns,
+    Moer::uint64     _end_ns,
+    Moer::uint32     _depth
 ) {
     const std::array<FieldValueView, 5> values{
         _thread_id,
@@ -86,17 +86,17 @@ void EmitCpuScope(
 
 void EmitGpuFrame(
     SchemaHandle          _schema,
-    std::uint64_t         _frame_id,
+    Moer::uint64          _frame_id,
     ProfileGpuFrameStatus _status,
     bool                  _valid,
-    std::uint64_t         _admitted,
-    std::uint64_t         _dropped,
-    std::uint64_t         _errors,
+    Moer::uint64          _admitted,
+    Moer::uint64          _dropped,
+    Moer::uint64          _errors,
     std::string_view      _reason
 ) {
     const std::array<FieldValueView, 7> values{
         _frame_id,
-        static_cast<std::uint32_t>(_status),
+        static_cast<Moer::uint32>(_status),
         _valid,
         _admitted,
         _dropped,
@@ -108,23 +108,23 @@ void EmitGpuFrame(
 
 void EmitGpuScope(
     SchemaHandle          _schema,
-    std::uint64_t         _frame_id,
-    std::uint64_t         _scope_id,
-    std::uint64_t         _parent_scope_id,
-    std::uint64_t         _source_order,
-    std::uint64_t         _local_order,
+    Moer::uint64          _frame_id,
+    Moer::uint64          _scope_id,
+    Moer::uint64          _parent_scope_id,
+    Moer::uint64          _source_order,
+    Moer::uint64          _local_order,
     ProfileLogicalQueue   _logical_queue,
-    std::uint32_t         _native_queue_id,
-    std::uint32_t         _family_id,
+    Moer::uint32          _native_queue_id,
+    Moer::uint32          _family_id,
     std::string_view      _name,
     ProfileGpuScopeStatus _status,
-    std::uint64_t         _begin_tick,
-    std::uint64_t         _end_tick,
-    std::uint32_t         _valid_bits,
+    Moer::uint64          _begin_tick,
+    Moer::uint64          _end_tick,
+    Moer::uint32          _valid_bits,
     double                _tick_period_ns,
     double                _total_duration_ns,
     double                _exclusive_duration_ns,
-    std::uint32_t         _depth,
+    Moer::uint32          _depth,
     std::string_view      _error_reason
 ) {
     const std::array<FieldValueView, 18> values{
@@ -133,11 +133,11 @@ void EmitGpuScope(
         _parent_scope_id,
         _source_order,
         _local_order,
-        static_cast<std::uint32_t>(_logical_queue),
+        static_cast<Moer::uint32>(_logical_queue),
         _native_queue_id,
         _family_id,
         _name,
-        static_cast<std::uint32_t>(_status),
+        static_cast<Moer::uint32>(_status),
         _begin_tick,
         _end_tick,
         _valid_bits,
@@ -166,7 +166,7 @@ void WriteTimelineCapture(const std::filesystem::path& _path) {
         "fixture schemas did not register"
     );
 
-    constexpr std::uint64_t cpu_origin = (std::uint64_t{1} << 54) + 1000;
+    constexpr Moer::uint64 cpu_origin = (Moer::uint64{1} << 54) + 1000;
     // CPU parents are emitted after their children; the consumer reconstructs
     // topology from interval/depth plus producer record order.
     EmitCpuScope(cpu.handle, 11, "point", cpu_origin + 500, cpu_origin + 500, 2);
@@ -378,7 +378,7 @@ void WriteOrphanGpuScopeCapture(const std::filesystem::path& _path) {
     // record. Forensic loading can then prove that the orphan scope has a
     // compatible earlier record-sequence slot.
     const std::array<FieldValueView, 1> rejected_frame_values{
-        std::uint64_t{42},
+        Moer::uint64{42},
     };
     Expect(
         Emit(gpu_frame.handle, rejected_frame_values) == EmitStatus::ValueCountMismatch,
@@ -414,14 +414,14 @@ struct LoadedTimeline {
     ProfileSession    session{};
 };
 
-std::vector<std::uint8_t> ReadFile(const std::filesystem::path& _path);
+std::vector<Moer::uint8> ReadFile(const std::filesystem::path& _path);
 
 LoadedTimeline LoadComplete(const std::filesystem::path& _path) {
     LoadedTimeline loaded;
     loaded.result = LoadProfileSessionFile(_path, {}, loaded.session);
     if (loaded.result.status != SessionLoadStatus::Complete || !loaded.session.Valid()) {
         ProfileSessionReader            diagnostic_reader;
-        const std::vector<std::uint8_t> bytes = ReadFile(_path);
+        const std::vector<Moer::uint8>  bytes = ReadFile(_path);
         static_cast<void>(diagnostic_reader.Feed(bytes));
         static_cast<void>(diagnostic_reader.Finish());
         throw std::runtime_error(
@@ -435,12 +435,12 @@ LoadedTimeline LoadComplete(const std::filesystem::path& _path) {
     return loaded;
 }
 
-std::vector<std::uint8_t> ReadFile(const std::filesystem::path& _path) {
+std::vector<Moer::uint8> ReadFile(const std::filesystem::path& _path) {
     std::ifstream file(_path, std::ios::binary | std::ios::ate);
     Expect(file.is_open(), "timeline fixture file did not open");
     const std::streamoff end = file.tellg();
     Expect(end > 0, "timeline fixture file is empty");
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(end));
+    std::vector<Moer::uint8> bytes(static_cast<std::size_t>(end));
     file.seekg(0, std::ios::beg);
     file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     Expect(file.good(), "timeline fixture file read failed");
@@ -448,7 +448,7 @@ std::vector<std::uint8_t> ReadFile(const std::filesystem::path& _path) {
 }
 
 LoadedTimeline LoadForensicPrefix(const std::filesystem::path& _path) {
-    const std::vector<std::uint8_t> bytes              = ReadFile(_path);
+    const std::vector<Moer::uint8>  bytes              = ReadFile(_path);
     std::size_t                     offset             = 0;
     std::size_t                     session_end_offset = bytes.size();
     CodecLimits                     codec_limits;
@@ -457,7 +457,7 @@ LoadedTimeline LoadForensicPrefix(const std::filesystem::path& _path) {
         std::size_t consumed = 0;
         Expect(
             DecodePacket(
-                std::span<const std::uint8_t>(bytes).subspan(offset), codec_limits, packet, consumed
+                std::span<const Moer::uint8>(bytes).subspan(offset), codec_limits, packet, consumed
             ) == DecodeStatus::Ok,
             "timeline fixture packet decode failed"
         );
@@ -473,7 +473,7 @@ LoadedTimeline LoadForensicPrefix(const std::filesystem::path& _path) {
     options.allow_forensic_truncation = true;
     ProfileSessionReader reader(options);
     Expect(
-        reader.Feed(std::span<const std::uint8_t>(bytes).first(session_end_offset)).status ==
+        reader.Feed(std::span<const Moer::uint8>(bytes).first(session_end_offset)).status ==
             SessionLoadStatus::Reading,
         "forensic prefix became terminal before EOF"
     );
@@ -491,35 +491,35 @@ LoadedTimeline LoadForensicPrefix(const std::filesystem::path& _path) {
     return loaded;
 }
 
-std::uint32_t
-FindCpuTrack(const ProfileTimelineIndex& _index, const ProfileSession& _session, std::uint64_t _thread_id) {
+Moer::uint32
+FindCpuTrack(const ProfileTimelineIndex& _index, const ProfileSession& _session, Moer::uint64 _thread_id) {
     for (std::size_t index = 0; index < _index.CpuTracks().size(); ++index) {
         const CpuTimelineTrackIndex& track = _index.CpuTracks()[index];
         if (_session.CpuTracks()[track.source_track_index].thread_id == _thread_id) {
-            return static_cast<std::uint32_t>(index);
+            return static_cast<Moer::uint32>(index);
         }
     }
     throw std::runtime_error("expected CPU timeline track was not found");
 }
 
-std::uint32_t FindGpuTrack(
+Moer::uint32 FindGpuTrack(
     const ProfileTimelineIndex& _index,
     const ProfileSession&       _session,
     ProfileLogicalQueue         _queue,
-    std::uint32_t               _native_queue
+    Moer::uint32                _native_queue
 ) {
     for (std::size_t index = 0; index < _index.GpuTracks().size(); ++index) {
         const GpuTimelineTrackIndex& indexed = _index.GpuTracks()[index];
         const GpuTrack&              source  = _session.GpuTracks()[indexed.source_track_index];
         if (source.logical_queue == _queue && source.native_queue_id == _native_queue) {
-            return static_cast<std::uint32_t>(index);
+            return static_cast<Moer::uint32>(index);
         }
     }
     throw std::runtime_error("expected GPU timeline track was not found");
 }
 
 void VerifyCpuQueries(const ProfileTimelineIndex& _index, const ProfileSession& _session) {
-    const std::uint32_t          thread = FindCpuTrack(_index, _session, 11);
+    const Moer::uint32           thread = FindCpuTrack(_index, _session, 11);
     const CpuTimelineTrackIndex& track  = _index.CpuTracks()[thread];
     Expect(
         track.axis_index == 0 && track.begin_ns == 0 && track.end_ns == 5000 && track.max_depth == 6 &&
@@ -527,7 +527,7 @@ void VerifyCpuQueries(const ProfileTimelineIndex& _index, const ProfileSession& 
         "CPU relative axis or track range is wrong"
     );
 
-    std::array<std::uint64_t, 64> results{};
+    std::array<Moer::uint64, 64>  results{};
     TimelineOverlapQueryResult    query = _index.QueryCpuOverlaps(thread, 700, 800, results);
     Expect(
         query.valid && !query.truncated && query.written == 2,
@@ -538,7 +538,7 @@ void VerifyCpuQueries(const ProfileTimelineIndex& _index, const ProfileSession& 
             _session.String(_session.CpuScopes()[results[1]].name) == "child",
         "CPU query order is not deterministic begin-time order"
     );
-    std::array<std::uint64_t, 2> exact_results{};
+    std::array<Moer::uint64, 2> exact_results{};
     query = _index.QueryCpuOverlaps(thread, 700, 800, exact_results);
     Expect(
         query.valid && !query.truncated && query.written == exact_results.size(),
@@ -568,7 +568,7 @@ void VerifyCpuQueries(const ProfileTimelineIndex& _index, const ProfileSession& 
         "typed CPU query lost a zero-duration scope or its normalized point"
     );
 
-    query = _index.QueryCpuOverlaps(thread, 500, 501, std::span<std::uint64_t>(results).first(1));
+    query = _index.QueryCpuOverlaps(thread, 500, 501, std::span<Moer::uint64>(results).first(1));
     Expect(
         query.valid && query.truncated && query.written == 1,
         "CPU query did not stop at its caller-provided output bound"
@@ -601,23 +601,23 @@ void VerifyCpuQueries(const ProfileTimelineIndex& _index, const ProfileSession& 
         "empty CPU view was reported as a valid range query"
     );
     Expect(
-        !_index.QueryCpuOverlaps(static_cast<std::uint32_t>(_index.CpuTracks().size()), 0, 1, results).valid,
+        !_index.QueryCpuOverlaps(static_cast<Moer::uint32>(_index.CpuTracks().size()), 0, 1, results).valid,
         "invalid CPU track query was reported as valid"
     );
     Expect(
         !_index.QueryCpuTimelineOverlaps(thread, 500, 500, point_timeline_results).valid &&
             !_index
                  .QueryCpuTimelineOverlaps(
-                     static_cast<std::uint32_t>(_index.CpuTracks().size()), 0, 1, point_timeline_results
+                     static_cast<Moer::uint32>(_index.CpuTracks().size()), 0, 1, point_timeline_results
                  )
                  .valid,
         "typed CPU query accepted an empty range or invalid track"
     );
 
-    const auto expect_oracle = [&](std::uint64_t _begin, std::uint64_t _end) {
-        std::array<std::uint64_t, 64> expected{};
+    const auto expect_oracle = [&](Moer::uint64 _begin, Moer::uint64 _end) {
+        std::array<Moer::uint64, 64>  expected{};
         std::size_t                   expected_count = 0;
-        for (std::uint64_t local_index = 0; local_index < track.scope_count; ++local_index) {
+        for (Moer::uint64 local_index = 0; local_index < track.scope_count; ++local_index) {
             const CpuTimelineScopeRef& scope    = _index.CpuScopes()[track.first_scope + local_index];
             const bool                 overlaps = scope.end_ns > scope.begin_ns ?
                                                       scope.end_ns > _begin && scope.begin_ns < _end :
@@ -627,7 +627,7 @@ void VerifyCpuQueries(const ProfileTimelineIndex& _index, const ProfileSession& 
             }
         }
 
-        std::array<std::uint64_t, 64>    actual{};
+        std::array<Moer::uint64, 64>     actual{};
         const TimelineOverlapQueryResult actual_query = _index.QueryCpuOverlaps(thread, _begin, _end, actual);
         Expect(
             actual_query.valid && !actual_query.truncated && actual_query.written == expected_count &&
@@ -640,9 +640,9 @@ void VerifyCpuQueries(const ProfileTimelineIndex& _index, const ProfileSession& 
         );
     };
 
-    constexpr std::array<std::uint64_t, 5> widths{1, 17, 211, 997, 2048};
-    for (std::uint64_t begin = 0; begin < 5200; begin += 137) {
-        for (const std::uint64_t width : widths) {
+    constexpr std::array<Moer::uint64, 5> widths{1, 17, 211, 997, 2048};
+    for (Moer::uint64 begin = 0; begin < 5200; begin += 137) {
+        for (const Moer::uint64 width : widths) {
             expect_oracle(begin, begin + width);
         }
     }
@@ -673,11 +673,11 @@ void VerifyGpuDomainsAndSlices(const ProfileTimelineIndex& _index, const Profile
         );
     }
 
-    const std::uint32_t graphics   = FindGpuTrack(_index, _session, ProfileLogicalQueue::Graphics, 3);
-    const std::uint32_t compute    = FindGpuTrack(_index, _session, ProfileLogicalQueue::Compute, 3);
-    const std::uint32_t wrapped    = FindGpuTrack(_index, _session, ProfileLogicalQueue::Graphics, 4);
-    const std::uint32_t failed     = FindGpuTrack(_index, _session, ProfileLogicalQueue::Graphics, 5);
-    const std::uint32_t incomplete = FindGpuTrack(_index, _session, ProfileLogicalQueue::Copy, 6);
+    const Moer::uint32 graphics   = FindGpuTrack(_index, _session, ProfileLogicalQueue::Graphics, 3);
+    const Moer::uint32 compute    = FindGpuTrack(_index, _session, ProfileLogicalQueue::Compute, 3);
+    const Moer::uint32 wrapped    = FindGpuTrack(_index, _session, ProfileLogicalQueue::Graphics, 4);
+    const Moer::uint32 failed     = FindGpuTrack(_index, _session, ProfileLogicalQueue::Graphics, 5);
+    const Moer::uint32 incomplete = FindGpuTrack(_index, _session, ProfileLogicalQueue::Copy, 6);
     Expect(
         _index.GpuTracks()[graphics].axis_index == _index.GpuTracks()[compute].axis_index &&
             _index.GpuTracks()[graphics].axis_index != _index.GpuTracks()[wrapped].axis_index,
@@ -719,7 +719,7 @@ void VerifyGpuDomainsAndSlices(const ProfileTimelineIndex& _index, const Profile
         "incomplete GPU frame slice was hidden or marked trusted"
     );
 
-    const std::uint32_t         shared_axis       = _index.GpuTracks()[graphics].axis_index;
+    const Moer::uint32          shared_axis       = _index.GpuTracks()[graphics].axis_index;
     const GpuTimelineAxisFrame* shared_frame      = _index.FindGpuAxisFrame(shared_axis, 100);
     const GpuTimelineAxisFrame* next_shared_frame = _index.FindGpuAxisFrame(shared_axis, 103);
     const GpuTimelineAxisFrame* wrapped_frame =
@@ -761,7 +761,7 @@ void VerifyGpuDomainsAndSlices(const ProfileTimelineIndex& _index, const Profile
         "GPU track slices do not reference the expected frame-local timing data"
     );
 
-    std::array<std::uint64_t, 8> query_results{};
+    std::array<Moer::uint64, 8>  query_results{};
     TimelineOverlapQueryResult   query = _index.QueryGpuOverlaps(graphics, 100, 20, 30, query_results);
     Expect(
         query.valid && !query.truncated && query.written == 2 &&
@@ -769,7 +769,7 @@ void VerifyGpuDomainsAndSlices(const ProfileTimelineIndex& _index, const Profile
             _session.String(_session.GpuScopes()[query_results[1]].name) == "gfx-child",
         "GPU visible-range query lost nested scopes or deterministic order"
     );
-    std::array<std::uint64_t, 2> exact_gpu_results{};
+    std::array<Moer::uint64, 2> exact_gpu_results{};
     query = _index.QueryGpuOverlaps(graphics, 100, 20, 30, exact_gpu_results);
     Expect(
         query.valid && !query.truncated && query.written == exact_gpu_results.size(),
@@ -807,7 +807,7 @@ void VerifyGpuDomainsAndSlices(const ProfileTimelineIndex& _index, const Profile
             wrapped_timeline_result[0].end_tick_offset == 32,
         "typed GPU query did not preserve timestamp-wrap normalization"
     );
-    query = _index.QueryGpuOverlaps(graphics, 100, 20, 30, std::span<std::uint64_t>(query_results).first(1));
+    query = _index.QueryGpuOverlaps(graphics, 100, 20, 30, std::span<Moer::uint64>(query_results).first(1));
     Expect(
         query.valid && query.truncated && query.written == 1,
         "GPU query did not honor its caller-provided output bound"
@@ -840,7 +840,7 @@ void VerifyGpuDomainsAndSlices(const ProfileTimelineIndex& _index, const Profile
         _index.FindGpuFrame(999) == nullptr && _index.FindGpuFrame(104) != nullptr &&
             _index.FindGpuFrameSlice(graphics, 104) == nullptr &&
             _index.FindGpuAxisFrame(shared_axis, 999) == nullptr &&
-            _index.FindGpuFrameSlice(static_cast<std::uint32_t>(_index.GpuTracks().size()), 100) == nullptr,
+            _index.FindGpuFrameSlice(static_cast<Moer::uint32>(_index.GpuTracks().size()), 100) == nullptr,
         "missing GPU frame or invalid track lookup returned a result"
     );
 }
@@ -854,7 +854,7 @@ void VerifyPublicRangeIntegrity(const ProfileTimelineIndex& _index, const Profil
         "timeline index omitted a public source track or record"
     );
 
-    std::uint64_t cpu_scope_cursor = 0;
+    Moer::uint64 cpu_scope_cursor = 0;
     for (const CpuTimelineTrackIndex& indexed : _index.CpuTracks()) {
         Expect(
             indexed.source_track_index < _session.CpuTracks().size() &&
@@ -867,9 +867,9 @@ void VerifyPublicRangeIntegrity(const ProfileTimelineIndex& _index, const Profil
             indexed.scope_count == source_track.scope_count,
             "CPU timeline track count disagrees with its source track"
         );
-        for (std::uint64_t local_index = 0; local_index < indexed.scope_count; ++local_index) {
+        for (Moer::uint64 local_index = 0; local_index < indexed.scope_count; ++local_index) {
             const CpuTimelineScopeRef& retained = _index.CpuScopes()[indexed.first_scope + local_index];
-            const std::uint64_t        expected_source = source_track.first_scope + local_index;
+            const Moer::uint64         expected_source = source_track.first_scope + local_index;
             Expect(
                 retained.source_scope_index == expected_source &&
                     expected_source < _session.CpuScopes().size(),
@@ -898,8 +898,8 @@ void VerifyPublicRangeIntegrity(const ProfileTimelineIndex& _index, const Profil
         );
     }
 
-    std::uint64_t gpu_slice_cursor    = 0;
-    std::uint64_t gpu_timeline_cursor = 0;
+    Moer::uint64 gpu_slice_cursor    = 0;
+    Moer::uint64 gpu_timeline_cursor = 0;
     for (const GpuTimelineTrackIndex& indexed : _index.GpuTracks()) {
         Expect(
             indexed.source_track_index < _session.GpuTracks().size() &&
@@ -921,10 +921,10 @@ void VerifyPublicRangeIntegrity(const ProfileTimelineIndex& _index, const Profil
             "GPU timeline axis disagrees with its physical source domain"
         );
 
-        std::uint64_t previous_frame = 0;
+        Moer::uint64  previous_frame = 0;
         bool          has_frame      = false;
-        std::uint64_t source_cursor  = source_track.first_scope;
-        for (std::uint64_t local_index = 0; local_index < indexed.frame_slice_count; ++local_index) {
+        Moer::uint64  source_cursor  = source_track.first_scope;
+        for (Moer::uint64 local_index = 0; local_index < indexed.frame_slice_count; ++local_index) {
             const GpuTimelineFrameSlice& slice =
                 _index.GpuFrameSlices()[indexed.first_frame_slice + local_index];
             Expect(
@@ -944,8 +944,8 @@ void VerifyPublicRangeIntegrity(const ProfileTimelineIndex& _index, const Profil
             has_frame      = true;
             source_cursor += slice.scope_count;
 
-            std::uint64_t ready_scope_count = 0;
-            for (std::uint64_t scope_offset = 0; scope_offset < slice.scope_count; ++scope_offset) {
+            Moer::uint64 ready_scope_count = 0;
+            for (Moer::uint64 scope_offset = 0; scope_offset < slice.scope_count; ++scope_offset) {
                 const GpuScopeRecord& scope = _session.GpuScopes()[slice.first_scope + scope_offset];
                 Expect(
                     scope.track_index == indexed.source_track_index &&
@@ -953,7 +953,7 @@ void VerifyPublicRangeIntegrity(const ProfileTimelineIndex& _index, const Profil
                         scope.frame_index == slice.source_frame_index,
                     "GPU frame slice disagrees with one of its source scopes"
                 );
-                ready_scope_count += static_cast<std::uint64_t>(scope.status == ProfileGpuScopeStatus::Ready);
+                ready_scope_count += static_cast<Moer::uint64>(scope.status == ProfileGpuScopeStatus::Ready);
             }
             const GpuTimelineAxisFrame& axis_frame = _index.GpuAxisFrames()[slice.axis_frame_index];
             Expect(
@@ -962,7 +962,7 @@ void VerifyPublicRangeIntegrity(const ProfileTimelineIndex& _index, const Profil
                     slice.timeline_scope_count == (axis_frame.timing_available ? ready_scope_count : 0),
                 "GPU frame slice disagrees with its physical axis-frame metadata"
             );
-            for (std::uint64_t timeline_offset = 0; timeline_offset < slice.timeline_scope_count;
+            for (Moer::uint64 timeline_offset = 0; timeline_offset < slice.timeline_scope_count;
                  ++timeline_offset) {
                 const GpuTimelineScopeRef& retained =
                     _index.GpuTimelineScopes()[slice.first_timeline_scope + timeline_offset];
@@ -990,7 +990,7 @@ void VerifyPublicRangeIntegrity(const ProfileTimelineIndex& _index, const Profil
         "GPU tracks did not cover every retained slice or timeline scope"
     );
 
-    std::vector<std::pair<std::uint32_t, std::uint64_t>> expected_axis_frames;
+    std::vector<std::pair<Moer::uint32, Moer::uint64>> expected_axis_frames;
     expected_axis_frames.reserve(_session.GpuScopes().size());
     for (const GpuScopeRecord& scope : _session.GpuScopes()) {
         expected_axis_frames.emplace_back(scope.domain_index, scope.frame_id);
@@ -1062,37 +1062,37 @@ bool MatchesSnapshot(const ProfileTimelineIndex& _index, const TimelineIndexSnap
            equals(_index.GpuTimelineScopes(), _snapshot.gpu_scopes);
 }
 
-std::uint64_t TreeValueCount(std::uint64_t _scope_count) {
-    std::uint64_t leaves = 1;
+Moer::uint64 TreeValueCount(Moer::uint64 _scope_count) {
+    Moer::uint64 leaves = 1;
     while (leaves < _scope_count) {
         leaves *= 2;
     }
     return leaves * 2;
 }
 
-std::uint64_t ExpectedLogicalBytes(const ProfileTimelineIndex& _index) {
-    std::uint64_t cpu_tree_values = 0;
+Moer::uint64 ExpectedLogicalBytes(const ProfileTimelineIndex& _index) {
+    Moer::uint64 cpu_tree_values = 0;
     for (const CpuTimelineTrackIndex& track : _index.CpuTracks()) {
         cpu_tree_values += TreeValueCount(track.scope_count);
     }
-    std::uint64_t gpu_tree_values = 0;
+    Moer::uint64 gpu_tree_values = 0;
     for (const GpuTimelineFrameSlice& slice : _index.GpuFrameSlices()) {
         const GpuTimelineAxisFrame& axis_frame = _index.GpuAxisFrames()[slice.axis_frame_index];
         if (axis_frame.timing_available) {
             gpu_tree_values += TreeValueCount(slice.timeline_scope_count);
         }
     }
-    constexpr std::uint64_t interval_tree_bytes = sizeof(std::uint64_t) * 2;
+    constexpr Moer::uint64 interval_tree_bytes = sizeof(Moer::uint64) * 2;
     return _index.Axes().size() * sizeof(TimelineAxis) +
            _index.CpuTracks().size() * sizeof(CpuTimelineTrackIndex) +
            _index.CpuScopes().size() * sizeof(CpuTimelineScopeRef) +
-           _index.CpuTracks().size() * interval_tree_bytes + cpu_tree_values * sizeof(std::uint64_t) +
+           _index.CpuTracks().size() * interval_tree_bytes + cpu_tree_values * sizeof(Moer::uint64) +
            _index.GpuFrames().size() * sizeof(GpuTimelineFrameRef) +
            _index.GpuTracks().size() * sizeof(GpuTimelineTrackIndex) +
            _index.GpuFrameSlices().size() * sizeof(GpuTimelineFrameSlice) +
            _index.GpuAxisFrames().size() * sizeof(GpuTimelineAxisFrame) +
            _index.GpuTimelineScopes().size() * sizeof(GpuTimelineScopeRef) +
-           _index.GpuFrameSlices().size() * interval_tree_bytes + gpu_tree_values * sizeof(std::uint64_t);
+           _index.GpuFrameSlices().size() * interval_tree_bytes + gpu_tree_values * sizeof(Moer::uint64);
 }
 
 void VerifyQualityAndAtomicLimits(LoadedTimeline& _complete, const LoadedTimeline& _forensic) {
@@ -1108,7 +1108,7 @@ void VerifyQualityAndAtomicLimits(LoadedTimeline& _complete, const LoadedTimelin
         "timeline index matched a different immutable session with the same shape"
     );
     const ProfileTimelineQuality& quality = index.Quality();
-    const std::uint32_t           expected_quality_flags =
+    const Moer::uint32            expected_quality_flags =
         TimelineQualityBit(TimelineQualityFlag::IncompleteGpuFrames) |
         TimelineQualityBit(TimelineQualityFlag::InvalidGpuFrames) |
         TimelineQualityBit(TimelineQualityFlag::GpuScopeErrors) |
@@ -1137,7 +1137,7 @@ void VerifyQualityAndAtomicLimits(LoadedTimeline& _complete, const LoadedTimelin
         "forensic session quality was not retained"
     );
 
-    const std::uint64_t retained_bytes = index.BuildResult().logical_bytes;
+    const Moer::uint64 retained_bytes = index.BuildResult().logical_bytes;
     Expect(
         retained_bytes != 0 && retained_bytes == ExpectedLogicalBytes(index),
         "timeline index logical bytes do not cover every retained vector"
@@ -1277,7 +1277,7 @@ void VerifyQualityAndAtomicLimits(LoadedTimeline& _complete, const LoadedTimelin
         "zero cancellation interval or a non-requested live stop token rejected a valid build"
     );
 
-    const auto build_with_budget = [&](std::uint64_t _budget, ProfileTimelineIndex& _output) {
+    const auto build_with_budget = [&](Moer::uint64 _budget, ProfileTimelineIndex& _output) {
         return BuildProfileTimelineIndex(
             _complete.session,
             _complete.result,
@@ -1289,7 +1289,7 @@ void VerifyQualityAndAtomicLimits(LoadedTimeline& _complete, const LoadedTimelin
             }
         );
     };
-    std::uint64_t minimum_success_budget = 1;
+    Moer::uint64 minimum_success_budget = 1;
     for (;;) {
         ProfileTimelineIndex           probe;
         const TimelineIndexBuildResult probe_result = build_with_budget(minimum_success_budget, probe);
@@ -1301,14 +1301,14 @@ void VerifyQualityAndAtomicLimits(LoadedTimeline& _complete, const LoadedTimelin
             "cooperative work budget produced a non-cancellation failure"
         );
         Expect(
-            minimum_success_budget <= (std::uint64_t{1} << 20),
+            minimum_success_budget <= (Moer::uint64{1} << 20),
             "cooperative cancellation checkpoint count exceeded the test bound"
         );
         minimum_success_budget *= 2;
     }
-    std::uint64_t cancelled_budget = minimum_success_budget / 2;
+    Moer::uint64 cancelled_budget = minimum_success_budget / 2;
     while (cancelled_budget + 1 < minimum_success_budget) {
-        const std::uint64_t  middle = cancelled_budget + (minimum_success_budget - cancelled_budget) / 2;
+        const Moer::uint64   middle = cancelled_budget + (minimum_success_budget - cancelled_budget) / 2;
         ProfileTimelineIndex probe;
         if (build_with_budget(middle, probe).Succeeded()) {
             minimum_success_budget = middle;
@@ -1352,7 +1352,7 @@ void VerifyEmptySession(const LoadedTimeline& _empty) {
         "empty profile session did not produce a valid empty timeline index"
     );
 
-    std::array<std::uint64_t, 1> output{};
+    std::array<Moer::uint64, 1> output{};
     Expect(
         !index.QueryCpuOverlaps(0, 0, 1, output).valid && index.FindGpuFrame(0) == nullptr &&
             index.FindGpuFrameSlice(0, 0) == nullptr && index.FindGpuAxisFrame(0, 0) == nullptr &&

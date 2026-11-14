@@ -6,9 +6,9 @@
 #include "misc/AtomicSharedPtr.h"
 #include "rhi/RHIGpuScope.h"
 
+#include "misc/Types.h"
 #include <atomic>
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 
 namespace Moer::Render {
@@ -19,13 +19,13 @@ namespace RenderProfileDetail {
 struct CaptureState;
 }
 
-enum class GpuFrameCaptureStatus : std::uint32_t {
+enum class GpuFrameCaptureStatus : uint32 {
     Complete = 0,
     Incomplete,
     Invalid,
 };
 
-enum class RenderProfileBindResult : std::uint8_t {
+enum class RenderProfileBindResult : uint8 {
     Bound = 0,
     Inactive,
     InvalidFrame,
@@ -34,7 +34,7 @@ enum class RenderProfileBindResult : std::uint8_t {
     CommandListRejected,
 };
 
-enum class RenderProfileSessionStartResult : std::uint8_t {
+enum class RenderProfileSessionStartResult : uint8 {
     Started = 0,
     AlreadyActive,
     GenerationAlreadyUsed,
@@ -45,13 +45,13 @@ enum class RenderProfileSessionStartResult : std::uint8_t {
     ResourceExhausted,
 };
 
-enum class RenderProfileSessionStopResult : std::uint8_t {
+enum class RenderProfileSessionStopResult : uint8 {
     StopRequested = 0,
     AlreadyStopping,
     Inactive,
 };
 
-enum class RenderProfileSessionFinishResult : std::uint8_t {
+enum class RenderProfileSessionFinishResult : uint8 {
     Pending = 0,
     Closed,
     // The session drained and closed, but at least one frame, source, scope,
@@ -65,22 +65,22 @@ enum class RenderProfileSessionFinishResult : std::uint8_t {
 struct RenderProfileCaptureStats {
     bool          accepting{false};
     bool          closed{false};
-    std::uint64_t generation{0};
+    uint64        generation{0};
 
-    std::uint64_t frames_attempted{0};
-    std::uint64_t frames_admitted{0};
-    std::uint64_t frames_admission_rejected{0};
-    std::uint64_t frames_sealed{0};
-    std::uint64_t frames_emitted{0};
-    std::uint64_t frames_invalid{0};
-    std::uint64_t frame_records_dropped{0};
+    uint64 frames_attempted{0};
+    uint64 frames_admitted{0};
+    uint64 frames_admission_rejected{0};
+    uint64 frames_sealed{0};
+    uint64 frames_emitted{0};
+    uint64 frames_invalid{0};
+    uint64 frame_records_dropped{0};
 
-    std::uint64_t sources_bound{0};
-    std::uint64_t sources_rejected{0};
-    std::uint64_t scopes_emitted{0};
-    std::uint64_t scope_records_dropped{0};
-    std::uint64_t terminal_faults{0};
-    std::uint64_t shutdown_abandoned_frames{0};
+    uint64 sources_bound{0};
+    uint64 sources_rejected{0};
+    uint64 scopes_emitted{0};
+    uint64 scope_records_dropped{0};
+    uint64 terminal_faults{0};
+    uint64 shutdown_abandoned_frames{0};
 
     GpuScopeStreamStats stream{};
 };
@@ -96,20 +96,20 @@ public:
     RenderProfileFrameToken& operator=(RenderProfileFrameToken&& _other) noexcept;
 
     [[nodiscard]] bool          Valid() const noexcept;
-    [[nodiscard]] std::uint64_t FrameId() const noexcept;
+    [[nodiscard]] uint64        FrameId() const noexcept;
 
 private:
     RenderProfileFrameToken(
         std::shared_ptr<RenderProfileDetail::CaptureState> _state,
         GpuScopeFrameHandle                                _frame,
-        std::uint64_t                                      _frame_id
+        uint64                                             _frame_id
     ) noexcept;
 
     void SealIfNeeded() noexcept;
 
     std::shared_ptr<RenderProfileDetail::CaptureState> state_{};
     GpuScopeFrameHandle                                frame_{};
-    std::uint64_t                                      frame_id_{0};
+    uint64                                             frame_id_{0};
     bool                                               sealed_{false};
 
     friend class RenderProfileCapture;
@@ -155,7 +155,7 @@ public:
         RenderProfileFrameToken& _frame,
         CommandList&             _command_list,
         RHIQueueBinding          _queue_binding,
-        std::uint64_t            _source_order
+        uint64                   _source_order
     ) noexcept;
     [[nodiscard]] bool Seal(RenderProfileFrameToken& _frame) noexcept;
 
@@ -188,7 +188,7 @@ RENDER_API void InjectNextStartValidationException() noexcept;
 RENDER_API void ClearStartValidationException() noexcept;
 
 RENDER_API void
-InstallStartPublishPause(std::atomic_uint32_t& _entered_count, std::atomic_bool& _release) noexcept;
+InstallStartPublishPause(std::atomic<uint32>& _entered_count, std::atomic_bool& _release) noexcept;
 RENDER_API void ClearStartPublishPause() noexcept;
 } // namespace RenderProfileTesting
 #endif

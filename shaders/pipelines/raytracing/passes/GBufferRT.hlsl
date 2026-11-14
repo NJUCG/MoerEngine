@@ -19,7 +19,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 
 #include <pipelines/raytracing/inline/RaytracingCommon.hlsli>
 
-[[vk::push_constant]] ConstantBuffer<Moer::GBufferPassParams> param;
+DEFINE_SHADER_CONSTANT(Moer::GBufferPassParams, param)
 
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::GBufferConstants> gbuffer_constants;
 
@@ -46,37 +46,22 @@ struct RayPayload {
     bool   b_backface;
 };
 
-bool ProcessAnyHit(
-    inout RayPayload payload,
-    uint             instance_id,
-    uint             geom_id,
-    uint             prim_id,
-    float2           barycentrics,
-    float            t,
-    bool             b_backface = false
+bool PassesAlphaMaskTest(
+    uint   instance_id,
+    uint   geom_id,
+    uint   prim_id,
+    float2 barycentrics,
+    bool   b_backface = false
 ) {
 
     Moer::GeometryRecord geom =
-        Moer::GetGeometryRecordFrom(param, instance_id, geom_id, prim_id, barycentrics, Moer::EGA_UV, b_backface);
+        Moer::GetGeometryRecordFrom(moer_constants.param, instance_id, geom_id, prim_id, barycentrics, Moer::EGA_UV, b_backface);
 
     Moer::MaterialSample mat_sample =
         Moer::SampleGeometryMaterial(geom, 0.f, 0.f, 0.f, Moer::EMA_BaseColor | Moer::EMA_Transmission);
 
     bool alpha_mask = mat_sample.opacity > 0.5f; // TODO: alpha cut off
-    // todo: update glass info here
     return alpha_mask;
-}
-
-// test
-float3 UintHashToColor(uint _idx) {
-    uint hash = STL::Sequence::Hash(_idx);
-    // r11g11b10
-
-    float r = (hash & 0x7ff) / 2047.f;
-    float g = ((hash >> 11) & 0x7ff) / 2047.f;
-    float b = ((hash >> 22) & 0x3ff) / 1023.f;
-
-    return float3(r, g, b);
 }
 
 #define USE_RAYQUERY 1
@@ -117,13 +102,11 @@ float3 UintHashToColor(uint _idx) {
     ray_query.TraceRayInline(tlas, ray_flags, instance_mask, ray);
     while (ray_query.Proceed()) {
         if (ray_query.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
-            if (ProcessAnyHit(
-                    payload,
+            if (PassesAlphaMaskTest(
                     ray_query.CandidateInstanceID(),
                     ray_query.CandidateGeometryIndex(),
                     ray_query.CandidatePrimitiveIndex(), // 返回的应该是三角形索引，而非index(uint)索引
-                    ray_query.CandidateTriangleBarycentrics(),
-                    ray_query.CandidateTriangleRayT()
+                    ray_query.CandidateTriangleBarycentrics()
                 )) {
                 ray_query.CommitNonOpaqueTriangleHit();
             }
@@ -149,7 +132,7 @@ float3 UintHashToColor(uint _idx) {
 
     if (payload.instance_id != ~0u) {
         Moer::GeometryRecord geom = Moer::GetGeometryRecordFrom(
-            param,
+            moer_constants.param,
             payload.instance_id,
             payload.geom_id,
             payload.prim_id,

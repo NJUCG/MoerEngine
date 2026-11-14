@@ -1,9 +1,9 @@
 #pragma once
 
-#include <cstdint>
+#include "misc/Types.h"
 
 // Vertex storage and fetch interpretation, independent of texture pixel formats.
-enum class EVertexFormat : uint8_t {
+enum class EVertexFormat : Moer::uint8 {
     Undefined,
     Float1,
     Float2,
@@ -13,7 +13,7 @@ enum class EVertexFormat : uint8_t {
     UByte4Normalized
 };
 
-[[nodiscard]] constexpr uint32_t GetVertexFormatByteSize(EVertexFormat format) noexcept {
+[[nodiscard]] constexpr Moer::uint32 GetVertexFormatByteSize(EVertexFormat format) noexcept {
     switch (format) {
         case EVertexFormat::Float1:
         case EVertexFormat::UInt:

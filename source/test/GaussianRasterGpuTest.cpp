@@ -4,19 +4,27 @@
 #include "renderer/raster/GaussianSplatPass.h"
 #include "renderer/raster/GaussianCompositePass.h"
 #include "renderer/raster/GaussianShadowPass.h"
+#include "renderer/raster/RasterGraphResourceAccess.h"
+#include "rendergraph/RenderGraphUpload.h"
 #include "scene/RenderScene.h"
 #include "scene/Scene.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "scene/loader/GaussianPlyLoader.h"
 #include "taskgraph/TaskSystem.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <span>
 #include <stb/stb_image.h>
 #include <stdexcept>
 #include <thread>
+#include <utility>
+#if defined(_MSC_VER) && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
 using namespace Moer;
 using namespace Moer::Render;
 namespace {
@@ -33,6 +41,106 @@ public:
 void Require(bool condition, const char* message) {
     if (!condition)
         throw std::runtime_error(message);
+}
+
+// Every standalone step starts and finishes at the same graphics boundary as
+// the production passes: sampled textures and shader-readable buffers.
+template<typename Declare, typename Record>
+void RecordGpuStep(
+    CommandList& commands, std::string_view name, RenderGraph::GpuWorkType work,
+    Declare&& declare, Record&& record
+) {
+    RenderGraph graph(name, RenderGraph::QueueTopology::FromRHI());
+    graph.AddRecordPass(
+        name,
+        [&](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, work).SideEffect();
+            declare(graph, builder);
+        },
+        std::forward<Record>(record),
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    RecordGraphicsUploadGraph(graph, commands);
+}
+
+void DeclareTransferRead(RenderGraph& graph, RenderGraph::PassBuilder& builder, TextureView view) {
+    const auto texture = Raster::ImportRasterTexture(graph, "Test.readback", view.GetTexture());
+    builder.Read(
+        texture,
+        RenderGraph::TextureAccessType::TransferSource,
+        {.mip_first = view.mip_level, .mip_count = view.num_mips,
+         .layer_first = view.array_layer, .layer_count = view.num_array}
+    );
+}
+
+void DeclareTransferRead(RenderGraph& graph, RenderGraph::PassBuilder& builder, BufferView view) {
+    const auto buffer = Raster::ImportRasterBuffer(graph, "Test.readback", view.GetBuffer());
+    builder.Read(buffer, RenderGraph::BufferAccessType::TransferSource);
+}
+
+template<typename View>
+ReadbackFuture RecordReadback(CommandList& commands, View view, std::string_view name) {
+    ReadbackFuture result;
+    RecordGpuStep(
+        commands, name, RenderGraph::GpuWorkType::Transfer,
+        [view](RenderGraph& graph, RenderGraph::PassBuilder& builder) {
+            DeclareTransferRead(graph, builder, view);
+        },
+        [&](CommandList& list) {
+            result = list.Readback(view, name);
+        }
+    );
+    return result;
+}
+
+void RecordNewTextureClear(CommandList& commands, TextureRef texture, float4 color) {
+    RecordGpuStep(
+        commands, "Test.ClearTexture", RenderGraph::GpuWorkType::Transfer,
+        [texture](RenderGraph& graph, RenderGraph::PassBuilder& builder) {
+            const auto image = graph.ImportTexture("Image", texture, Raster::DescribeShadowTexture(texture));
+            graph.SetInitialState(image, RenderGraph::TextureBoundary::Undefined,
+                RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+            graph.Export(image, RenderGraph::TextureAccessType::Sampled,
+                RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+            builder.Write(image, RenderGraph::TextureAccessType::TransferDestination);
+        },
+        [texture, color](CommandList& list) {
+            list.ClearResource(texture->GetView(), color);
+        }
+    );
+}
+
+void RecordBufferClear(CommandList& commands, BufferRef buffer) {
+    RecordGpuStep(
+        commands, "Test.ClearBuffer", RenderGraph::GpuWorkType::Transfer,
+        [buffer](RenderGraph& graph, RenderGraph::PassBuilder& builder) {
+            builder.Write(Raster::ImportRasterBuffer(graph, "Buffer", buffer.Get()),
+                RenderGraph::BufferAccessType::TransferDestination);
+        },
+        [buffer](CommandList& list) {
+            list.ClearResource(buffer->GetView(), 0u);
+        }
+    );
+}
+
+void RecordShadowGraph(
+    CommandList& commands, Raster::GaussianShadowPass& pass,
+    Raster::GaussianShadowPass::RecordParameters parameters
+) {
+    RenderGraph graph("Test.GaussianShadow", RenderGraph::QueueTopology::FromRHI());
+    pass.AddToGraph(graph, std::make_shared<const Raster::GaussianShadowPass::RecordParameters>(
+        std::move(parameters)));
+    RecordGraphicsUploadGraph(graph, commands);
+}
+
+TextureRef RecordShadowDebugGraph(
+    CommandList& commands, Raster::GaussianShadowPass& pass,
+    const Raster::GaussianShadowPass::RecordParameters& parameters
+) {
+    RenderGraph graph("Test.GaussianShadowDebug", RenderGraph::QueueTopology::FromRHI());
+    auto output = pass.AddDepthDebugToGraph(graph, parameters);
+    RecordGraphicsUploadGraph(graph, commands);
+    return output;
 }
 std::shared_ptr<GaussianAsset> Synthetic(uint count) {
     auto asset = std::make_shared<GaussianAsset>();
@@ -89,9 +197,9 @@ void Run(
         manager, {.tile_pair_capacity = should_test_overflow ? 128u : 4u * 1024u * 1024u}
     );
     const auto display        = pass.Record(commands, &scene, camera, uint2(width, height), false);
-    auto       display_future = commands.Readback(display->GetView(), "Gaussian display RGB");
-    auto       color_future   = commands.Readback(pass.GetColor()->GetView(), "Gaussian test RGB");
-    auto transmittance_future = commands.Readback(pass.GetTransmittance()->GetView(), "Gaussian test T");
+    auto       display_future = RecordReadback(commands, display->GetView(), "Gaussian display RGB");
+    auto       color_future   = RecordReadback(commands, pass.GetColor()->GetView(), "Gaussian test RGB");
+    auto transmittance_future = RecordReadback(commands, pass.GetTransmittance()->GetView(), "Gaussian test T");
     RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     const auto color         = color_future.Get().CopyAs<float>();
@@ -273,7 +381,7 @@ void Run(
     // Shrink to empty and reuse the same workspace: no previous tile/range contents may leak.
     CommandList empty_commands(EQueueType::Graphics);
     pass.Record(empty_commands, nullptr, camera, uint2(32, 48), false);
-    auto empty_future = empty_commands.Readback(pass.GetColor()->GetView(), "Gaussian empty RGB");
+    auto empty_future = RecordReadback(empty_commands, pass.GetColor()->GetView(), "Gaussian empty RGB");
     RHIExecutor::Get().Submit(EQueueType::Graphics, empty_commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     const auto empty = empty_future.Get().CopyAs<float>();
@@ -313,9 +421,9 @@ void RunViewSettings(ShaderManager& manager) {
             settings.debug_view = EGaussianDebugView::TileCoverage;
         CommandList commands(EQueueType::Graphics);
         const auto  display    = pass.Record(commands, &scene, camera, uint2(64, 64), false, false, settings);
-        auto        rgb_future = commands.Readback(pass.GetColor()->GetView(), "view raw");
-        auto        transmittance_future = commands.Readback(pass.GetTransmittance()->GetView(), "view T");
-        auto        display_future       = commands.Readback(display->GetView(), "view display");
+        auto        rgb_future = RecordReadback(commands, pass.GetColor()->GetView(), "view raw");
+        auto        transmittance_future = RecordReadback(commands, pass.GetTransmittance()->GetView(), "view T");
+        auto        display_future       = RecordReadback(commands, display->GetView(), "view display");
         RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
         const auto rgb           = rgb_future.Get().CopyAs<float>();
         const auto transmittance = transmittance_future.Get().CopyAs<float>();
@@ -377,7 +485,7 @@ void RunInFlightResize(ShaderManager& manager) {
         if (frame_id % 2 == 0) {
             pass.Record(commands, &scene, camera, size, false);
             results.push_back(
-                commands.Readback(pass.GetColor()->GetView(), "Gaussian reference in-flight resize")
+                RecordReadback(commands, pass.GetColor()->GetView(), "Gaussian reference in-flight resize")
             );
         } else {
             auto parameters = pass.Prepare(&scene, camera, size, false, {}, TextureRef{}, frame_id % 3 == 0);
@@ -389,7 +497,7 @@ void RunInFlightResize(ShaderManager& manager) {
                 ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS |
                     ETextureUsageFlags::TRANSFER_DST
             );
-            commands.ClearResource(background->GetView(), float4(.1f, .2f, .3f, 1));
+            RecordNewTextureClear(commands, background, float4(.1f, .2f, .3f, 1));
             auto parameters_composite = composite.Prepare(
                 TextureWithHandle{.tex = background},
                 pass.GetColor(),
@@ -398,8 +506,8 @@ void RunInFlightResize(ShaderManager& manager) {
                 pass.GetRanges()
             );
             composite.Record(commands, parameters_composite);
-            results.push_back(commands.Readback(
-                parameters_composite.output.tex->GetView(), "Gaussian common in-flight resize"
+            results.push_back(RecordReadback(
+                commands, parameters_composite.output.tex->GetView(), "Gaussian common in-flight resize"
             ));
         }
         RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::None);
@@ -442,7 +550,7 @@ void RunViewportPng() {
         PF_R8G8B8A8_UNORM,
         ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
     );
-    auto status = device.CreateBuffer<uint>(
+    auto status = device.CreateBuffer<uint32>(
         "Viewport PNG status",
         4,
         EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_SRC |
@@ -450,8 +558,8 @@ void RunViewportPng() {
     );
     unsigned char pixels[] = {0, 128, 255, 255, 64, 0, 0, 255};
     CommandList   commands(EQueueType::Graphics);
-    commands.CopyFrom(std::span<byte>(reinterpret_cast<byte*>(pixels), sizeof(pixels)), image->GetView());
-    commands.ClearResource(status->GetView(), 0u);
+    RecordNewGraphicsTextureUpload(commands, std::as_bytes(std::span(pixels)), image->GetView());
+    RecordBufferClear(commands, status);
     Raster::GaussianImageExport exporter;
     exporter.Request(commands, image->GetView(), status->GetView(), uint2(2, 1), path, 1);
     RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
@@ -534,14 +642,8 @@ void RunHybrid(
     Raster::GaussianCompositePass composite(manager, bindless);
     CommandList                   commands(EQueueType::Graphics);
     scene.ApplyUpdate(snapshot, commands);
-    commands.CopyFrom(
-        std::span<byte>(reinterpret_cast<byte*>(depths.data()), depths.size() * sizeof(float)),
-        depth->GetView()
-    );
-    commands.CopyFrom(
-        std::span<byte>(reinterpret_cast<byte*>(mesh_pixels.data()), mesh_pixels.size() * sizeof(float)),
-        mesh->GetView()
-    );
+    RecordNewGraphicsTextureUpload(commands, std::as_bytes(std::span(depths)), depth->GetView());
+    RecordNewGraphicsTextureUpload(commands, std::as_bytes(std::span(mesh_pixels)), mesh->GetView());
     GaussianViewSettings settings;
     settings.exposure_ev       = exposure_ev;
     settings.background        = is_gaussian_only ? float3(.15f, .3f, .7f) : float3(0);
@@ -570,10 +672,8 @@ void RunHybrid(
         float d = cube_shadow ? .01f / (.01f - 100.f) - .01f * 100.f / ((.01f - 100.f) * 2.5f) : .7f;
         std::vector<float> shadow_pixels(8 * 8, d);
         for (uint face = 0; face < (cube_shadow ? 6u : 1u); ++face)
-            commands.CopyFrom(
-                std::span<byte>(
-                    reinterpret_cast<byte*>(shadow_pixels.data()), shadow_pixels.size() * sizeof(float)
-                ),
+            RecordNewGraphicsTextureUpload(
+                commands, std::as_bytes(std::span(shadow_pixels)),
                 cube_shadow ? shadow_texture->GetView().Slice(face, 1) : shadow_texture->GetView()
             );
         shadow_handle =
@@ -587,11 +687,12 @@ void RunHybrid(
         for (auto& matrix : shadow.world_to_clip)
             matrix = Transpose(matrix);
         shadow.world_to_view = Transpose(shadow.world_to_view);
-        commands.CopyFrom(
-            std::span<byte>(reinterpret_cast<byte*>(&shadow), sizeof(shadow)), shadow_buffer->GetView()
+        RecordGraphicsBufferUpload(
+            commands, std::as_bytes(std::span(&shadow, 1)), shadow_buffer->GetView()
         );
         parameters.shadow_data                      = shadow_buffer;
         parameters.shadow_bindless                  = bindless;
+        parameters.shadow_maps.push_back(shadow_texture);
         parameters.settings.shadow_receive_strength = shadow_strength;
         if (debug_visibility)
             parameters.settings.debug_view = EGaussianDebugView::ShadowVisibility;
@@ -608,9 +709,9 @@ void RunHybrid(
     if (use_graph) {
         RenderGraph graph("HybridContract", RenderGraph::QueueTopology::FromRHI());
         auto        resources      = splats.ImportGraphResources(graph);
-        auto        depth_resource = graph.ImportTexture("mesh_depth", depth, {});
-        auto        mesh_resource  = graph.ImportTexture("mesh_color", mesh, {});
-        auto        output         = graph.ImportTexture("composite", merge.output.tex, {});
+        auto        depth_resource = Raster::ImportRasterTexture(graph, "mesh_depth", depth.Get());
+        auto        mesh_resource  = Raster::ImportRasterTexture(graph, "mesh_color", mesh.Get());
+        auto        output         = Raster::ImportRasterTexture(graph, "composite", merge.output.tex.Get());
         splats.AddToGraph(graph, parameters, resources, depth_resource);
         composite.AddToGraph(
             graph,
@@ -622,7 +723,7 @@ void RunHybrid(
             resources.ranges,
             output
         );
-        graph.Export(output);
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         if (!graph.Compile())
             throw std::runtime_error("Hybrid graph: " + graph.GetCompileError());
         Require(graph.RecordAndMergeFrontendCommands(commands, true), "Hybrid graph recording failed");
@@ -630,10 +731,10 @@ void RunHybrid(
         splats.Record(commands, parameters);
         composite.Record(commands, merge);
     }
-    auto reference = commands.Readback(splats.GetDisplay()->GetView(), "Hybrid reference display");
-    auto colors    = commands.Readback(splats.GetColor()->GetView(), "Hybrid Gaussian color");
-    auto transmit  = commands.Readback(splats.GetTransmittance()->GetView(), "Hybrid transmittance");
-    auto final     = commands.Readback(merge.output.tex->GetView(), "Hybrid scene color");
+    auto reference = RecordReadback(commands, splats.GetDisplay()->GetView(), "Hybrid reference display");
+    auto colors    = RecordReadback(commands, splats.GetColor()->GetView(), "Hybrid Gaussian color");
+    auto transmit  = RecordReadback(commands, splats.GetTransmittance()->GetView(), "Hybrid transmittance");
+    auto final     = RecordReadback(commands, merge.output.tex->GetView(), "Hybrid scene color");
     RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
     auto color = colors.Get().CopyAs<float>(), t = transmit.Get().CopyAs<float>(),
          image            = final.Get().CopyAs<float>();
@@ -761,7 +862,8 @@ void RunGaussianShadows(ShaderManager& manager, bool cube, float opacity_multipl
     }
     uint map_handle=bindless->AllocateTexture(parameters.maps[0]->GetView(),Sampler(SF_NEAREST,SAM_CLAMP_TO_EDGE));
     parameters.data.gaussian_maps.x=map_handle;
-    shadows.Record(commands,parameters);
+    InitializeGraphicsTexture(parameters.maps[0]);
+    RecordShadowGraph(commands, shadows, parameters);
     TextureRef legacy_cube;
     uint       legacy_handle = 0;
     if (cube) {
@@ -778,12 +880,13 @@ void RunGaussianShadows(ShaderManager& manager, bool cube, float opacity_multipl
         for (uint face = 0; face < 6; ++face)
             for (uint column = 0; column < 4; ++column)
                 legacy.data.world_to_clip[face][1][column] *= -1.f;
-        shadows.Record(commands, legacy);
+        InitializeGraphicsTexture(legacy_cube);
+        RecordShadowGraph(commands, shadows, legacy);
         legacy_handle =
             bindless->AllocateTexture(legacy_cube->GetView(), Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
     }
-    auto debug=shadows.RecordDepthDebug(commands,parameters);
-    auto readback = commands.Readback(debug->GetView(),"Gaussian shadow depth contract");
+    auto debug = RecordShadowDebugGraph(commands, shadows, parameters);
+    auto readback = RecordReadback(commands, debug->GetView(),"Gaussian shadow depth contract");
     RHIExecutor::Get().Submit(EQueueType::Graphics,commands.Submit(),ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     auto shadow_readback = readback.Get();
@@ -854,28 +957,45 @@ void RunGaussianShadows(ShaderManager& manager, bool cube, float opacity_multipl
     for (auto& matrix : gpu_shadow_data.world_to_clip)
         matrix = Transpose(matrix);
     gpu_shadow_data.world_to_view = Transpose(gpu_shadow_data.world_to_view);
-    commands.CopyFrom(
-        std::span<const byte>(reinterpret_cast<const byte*>(&gpu_shadow_data), sizeof(gpu_shadow_data)),
+    RecordGraphicsBufferUpload(
+        commands, std::as_bytes(std::span(&gpu_shadow_data, 1)),
         parameters.data_buffer->GetView()
     );
-    commands.CopyFrom(
-        std::span<const byte>(reinterpret_cast<const byte*>(queries.data()), queries.size() * sizeof(float4)),
+    RecordGraphicsBufferUpload(
+        commands, std::as_bytes(std::span(queries)),
         query_input->GetView()
     );
     const uint data_handle = bindless->AllocateBuffer(parameters.data_buffer->GetView());
-    commands.UpdateBindlessArray(bindless);
     auto query_pipeline = manager.Compute<GaussianShadowQueryPipeline>("test/GaussianShadowQuery.comp.hlsl");
-    commands
-        .Compute(
-            query_pipeline,
-            uint4(data_handle, uint(queries.size()), 0, 0),
-            parameters.data_buffer->GetView(),
-            query_output->GetView(),
-            query_input->GetView(),
-            bindless
-        )
-        .Dispatch(uint3(uint(queries.size()), 1, 1), "Gaussian shadow shared query contract");
-    auto query_readback = commands.Readback(query_output->GetView(), "Gaussian shadow shared query");
+    RecordGpuStep(
+        commands, "Gaussian shadow shared query contract", RenderGraph::GpuWorkType::Compute,
+        [=](RenderGraph& graph, RenderGraph::PassBuilder& builder) {
+            using BS = RenderGraph::BufferAccessType;
+            builder.Read(Raster::ImportRasterBuffer(graph, "Shadow.views", parameters.data_buffer.Get()), BS::ShaderRead)
+                .Read(Raster::ImportRasterBuffer(graph, "Shadow.queries", query_input.Get()), BS::ShaderRead)
+                .Write(Raster::ImportRasterBuffer(graph, "Shadow.results", query_output.Get()), BS::Storage)
+                .Read(Raster::ImportRasterTexture(graph, "Shadow.map", parameters.maps[0].Get()),
+                    RenderGraph::TextureAccessType::Sampled)
+                .Write(graph.ImportToken("Shadow.bindless", bindless.Get()));
+            if (legacy_cube) {
+                builder.Read(Raster::ImportRasterTexture(graph, "Shadow.legacy_map", legacy_cube.Get()),
+                    RenderGraph::TextureAccessType::Sampled);
+            }
+        },
+        [&](CommandList& list) {
+            list.UpdateBindlessArray(bindless);
+            list.Compute(
+                    query_pipeline,
+                    uint4(data_handle, uint32(queries.size()), 0, 0),
+                    parameters.data_buffer->GetView(),
+                    query_output->GetView(),
+                    query_input->GetView(),
+                    bindless
+                )
+                .Dispatch(uint3(uint32(queries.size()), 1, 1), "Gaussian shadow shared query contract");
+        }
+    );
+    auto query_readback = RecordReadback(commands, query_output->GetView(), "Gaussian shadow shared query");
     RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     auto query_pixels = query_readback.Get().CopyAs<float>();
@@ -931,6 +1051,12 @@ void RunGaussianShadows(ShaderManager& manager, bool cube, float opacity_multipl
 }
 
 int main(int argc, char** argv) {
+#if defined(_MSC_VER) && defined(_DEBUG)
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
     bool has_device = false, has_tasks = false, has_shaders = false;
     try {
         LogSystem::Init();
@@ -941,9 +1067,7 @@ int main(int argc, char** argv) {
             DeviceInitInfo{
                 .rhi_type        = ERHIType::Vulkan,
                 .name            = "GaussianRasterGpuTest",
-                .rhi_api_version = "1.3",
-                .rhi_thread      = false,
-                .rhi_bypass      = true
+                .rhi_api_version = "1.3"
             }
         );
         has_device    = true;

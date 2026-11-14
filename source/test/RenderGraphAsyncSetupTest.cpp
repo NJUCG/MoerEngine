@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "rendergraph/RenderGraphPassParameters.h"
 #include "rendergraph/RenderGraphSetup.h"
 #include "taskgraph/TaskGraph.h"
@@ -60,7 +61,7 @@ private:
         RenderGraph&                      graph,
         RenderGraph::SetupFaultForTesting fault
     ) noexcept {
-        graph.setup_faults_for_testing |= static_cast<uint8_t>(fault);
+        graph.setup_faults_for_testing |= static_cast<uint8>(fault);
     }
 };
 
@@ -207,10 +208,11 @@ struct ChildProcessResult {
 #endif
 
 void AddNoOpPass(RenderGraph& graph, std::string_view name = "NoOp") {
-    graph.AddPass(
+    graph.AddRecordPass(
         name,
         [](RenderGraph::PassBuilder& builder) { builder.SideEffect(); },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 }
 
@@ -513,13 +515,13 @@ int RunNormalWorkerStarvationChild() {
     struct StartBarrier {
         std::mutex              mutex{};
         std::condition_variable cv{};
-        uint32_t                arrived = 0;
-        uint32_t                target  = 0;
+        Moer::uint32            arrived = 0;
+        Moer::uint32            target  = 0;
     };
 
     Moer::TaskSystem::Init();
     TaskGraph& task_graph = TaskGraph::GetInterface();
-    const uint32_t normal_worker_count =
+    const Moer::uint32 normal_worker_count =
         task_graph.GetWorkerThreadCount(EThread::AnyThread_NormalPri);
     if (normal_worker_count == 0) {
         Moer::TaskSystem::ShutDown();
@@ -529,11 +531,11 @@ int RunNormalWorkerStarvationChild() {
 
     auto barrier    = std::make_shared<StartBarrier>();
     barrier->target = normal_worker_count;
-    auto failures   = std::make_shared<std::atomic<uint32_t>>(0);
+    auto            failures = std::make_shared<std::atomic<Moer::uint32>>(0);
     GraphEventArray compile_events;
     compile_events.reserve(normal_worker_count);
 
-    for (uint32_t worker = 0; worker < normal_worker_count; ++worker) {
+    for (Moer::uint32 worker = 0; worker < normal_worker_count; ++worker) {
         compile_events.emplace_back(LambdaTask::Dispatch(
             [barrier, failures, worker] {
                 {
@@ -551,10 +553,12 @@ int RunNormalWorkerStarvationChild() {
 
                 try {
                     RenderGraph graph("NormalWorkerSetupStarvation");
-                    const auto prepared = graph.AddSetupPass(
+                    const auto  prepared = graph.AddSetupPass(
                         "PrepareOnSaturatedPool",
                         worker,
-                        [](const uint32_t& input) { return input + 1; }
+                        [](const Moer::uint32& input) {
+                            return input + 1;
+                        }
                     );
                     AddNoOpPass(graph);
                     if (!graph.Compile() || prepared.Get() != worker + 1) {
@@ -569,7 +573,7 @@ int RunNormalWorkerStarvationChild() {
     }
 
     task_graph.WaitUntilTasksComplete(compile_events, EThread::EMainThread);
-    const uint32_t failure_count = failures->load(std::memory_order_relaxed);
+    const Moer::uint32 failure_count = failures->load(std::memory_order_relaxed);
     Moer::TaskSystem::ShutDown();
     if (failure_count != 0) {
         std::cerr << "normal worker starvation child: " << failure_count
@@ -639,7 +643,7 @@ void TestFailureJoinAndStableRetry(TestSuite& suite) {
         [&](CommandList&) {
             record_calls.fetch_add(1, std::memory_order_relaxed);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     std::thread releaser([&] {
@@ -686,7 +690,7 @@ void TestFailureJoinAndStableRetry(TestSuite& suite) {
         "Compile retry re-executed one-shot setup work"
     );
     suite.Check(
-        !graph.ExecuteFrontendRecordingPlan({}, {}, true) &&
+        !graph.ExecuteFrontendRecordingPlan({}, true) &&
             record_calls.load(std::memory_order_relaxed) == 0,
         test_name,
         "recording ran after setup/compiler failure"
@@ -975,7 +979,7 @@ void TestParallelRecordingReadsOnePreparedValue(TestSuite& suite) {
             graph.AddRecordPass(
                 name,
                 std::move(parameters),
-                [](RenderGraph::PassBuilder& builder) { builder.SideEffect(); },
+                [](RenderGraph::PassBuilder& builder) { builder.SideEffect().RecordWorkload(8); },
                 [&](CommandList&, const ConsumerParameters& immutable_parameters) {
                     const auto& payload = immutable_parameters.prepared.Get();
                     const void* expected = nullptr;
@@ -1002,7 +1006,7 @@ void TestParallelRecordingReadsOnePreparedValue(TestSuite& suite) {
                     record_count.fetch_add(1, std::memory_order_relaxed);
                     inflight.fetch_sub(1);
                 },
-                RenderGraph::PassExecutionClass::ParallelRecordEligible
+                RenderGraph::PassRecordPolicy::ParallelAllowed
             );
         };
         add_consumer("FirstConsumer", first_token);
@@ -1011,7 +1015,6 @@ void TestParallelRecordingReadsOnePreparedValue(TestSuite& suite) {
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         size_t published_sources = 0;
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             true,
             [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
@@ -1090,15 +1093,13 @@ void TestExplicitPreparedPassComposition(TestSuite& suite) {
             static_assert(std::is_const_v<
                           std::remove_reference_t<decltype(immutable_parameters)>>);
             record_value.store(immutable_parameters, std::memory_order_release);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const RenderGraph::PreparedPassHandle handles{
-        prepared.GetSetupPass(),
-        pass
-    };
 
     suite.Check(
-        handles.IsValid() && prepare_calls.load(std::memory_order_acquire) == 0 &&
+        prepared.IsValid() && pass.IsValid() &&
+            prepare_calls.load(std::memory_order_acquire) == 0 &&
             record_value.load(std::memory_order_acquire) == 0,
         test_name,
         "registration eagerly executed Prepare or Record"
@@ -1111,7 +1112,6 @@ void TestExplicitPreparedPassComposition(TestSuite& suite) {
     );
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         true,
         [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}
     );
@@ -1122,46 +1122,71 @@ void TestExplicitPreparedPassComposition(TestSuite& suite) {
     );
 }
 
-void TestCombinedPreparedPassContract(TestSuite& suite) {
+void TestSharedSetupResultFeedsRecordPasses(TestSuite& suite) {
     constexpr std::string_view test_name =
-        "combined prepared pass exposes const setup result to record";
+        "one setup result outlives its local handle and feeds multiple record passes";
 
-    RenderGraph     graph("CombinedPreparedPass");
-    const auto      token = graph.CreateTransientToken("Output");
+    RenderGraph graph("SharedSetupResult");
+    const auto first_output = graph.CreateTransientToken("FirstOutput");
+    const auto second_output = graph.CreateTransientToken("SecondOutput");
     std::atomic<int> prepare_calls{0};
-    std::atomic<int> record_value{0};
+    std::atomic<int> first_value{0};
+    std::atomic<int> second_value{0};
+    RenderGraph::PassHandle first_pass{};
+    RenderGraph::PassHandle second_pass{};
+    {
+        const auto prepared = graph.AddSetupPass(
+            "Shared.Prepare",
+            21,
+            [&](const int& input) {
+                prepare_calls.fetch_add(1, std::memory_order_relaxed);
+                return input * 2;
+            }
+        );
+        first_pass = graph.AddRecordPass(
+            "FirstConsumer",
+            [first_output](RenderGraph::PassBuilder& builder) {
+                builder.Write(first_output).SideEffect();
+            },
+            [prepared, &first_value](CommandList&) {
+                first_value.store(prepared.Get(), std::memory_order_release);
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        second_pass = graph.AddRecordPass(
+            "SecondConsumer",
+            [second_output](RenderGraph::PassBuilder& builder) {
+                builder.Write(second_output).SideEffect();
+            },
+            [prepared, &second_value](CommandList&) {
+                second_value.store(prepared.Get() + 1, std::memory_order_release);
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+    }
 
-    const auto handles = graph.AddPreparedPass(
-        "Prepared",
-        21,
-        [&](const int& input) {
-            prepare_calls.fetch_add(1, std::memory_order_relaxed);
-            return input * 2;
-        },
-        [&](RenderGraph::PassBuilder& builder) {
-            builder.Write(token).SideEffect();
-        },
-        [&](CommandList&, const int& immutable_parameters) {
-            static_assert(std::is_const_v<
-                          std::remove_reference_t<decltype(immutable_parameters)>>);
-            record_value.store(immutable_parameters, std::memory_order_release);
-        }
-    );
-
-    suite.Check(handles.IsValid(), test_name, "combined pass handles are invalid");
     suite.Check(
-        graph.Compile() && prepare_calls.load(std::memory_order_acquire) == 1,
+        first_pass.IsValid() && second_pass.IsValid() && first_pass != second_pass &&
+            prepare_calls.load(std::memory_order_acquire) == 0,
+        test_name,
+        "record passes were not registered independently of the deferred setup"
+    );
+    suite.Check(
+        graph.Compile() && prepare_calls.load(std::memory_order_acquire) == 1 &&
+            first_value.load(std::memory_order_acquire) == 0 &&
+            second_value.load(std::memory_order_acquire) == 0,
         test_name,
         graph.GetCompileError()
     );
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         true,
         [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}
     );
     suite.Check(
-        executed && record_value.load(std::memory_order_acquire) == 42,
+        executed && prepare_calls.load(std::memory_order_acquire) == 1 &&
+            first_value.load(std::memory_order_acquire) == 42 &&
+            second_value.load(std::memory_order_acquire) == 43,
         test_name,
         graph.GetCompileError()
     );
@@ -1237,7 +1262,7 @@ int main(int argc, char** argv) {
     TestFailureJoinAndStableRetry(suite);
     TestParallelRecordingReadsOnePreparedValue(suite);
     TestExplicitPreparedPassComposition(suite);
-    TestCombinedPreparedPassContract(suite);
+    TestSharedSetupResultFeedsRecordPasses(suite);
     TestDeclarationFreezeAfterDispatch(suite);
     TestFailureDiagnosticFaultIsTerminal(suite);
     TestTaskDispatchAndDiagnosticFaultsAreTerminal(suite);

@@ -57,14 +57,9 @@ bool IsDirectionalLight_Dir() {
         stats.uvCrossSum  = 0;                                                                               \
                                                                                                              \
         float2x2 rotation    = GetRandomRotation(ctx.screenUV);                                              \
-        float    dynamicBias = SHADOW_BIAS;                                                                  \
-                                                                                                             \
-        if (PCSS_DYNAMIC_DEPTH_BIAS) {                                                                       \
-            dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);                                      \
-            if (PCSS_MAX_DEPTH_BIAS) {                                                                       \
-                dynamicBias = min(dynamicBias, SHADOW_BIAS);                                                 \
-            }                                                                                                \
-        }                                                                                                    \
+        float dynamicBias = GetShadowDepthBias(                                                              \
+            ctx.normal, ctx.lightDir, SHADOW_BIAS, PCSS_DYNAMIC_DEPTH_BIAS != 0, PCSS_MAX_DEPTH_BIAS != 0        \
+        );                                                                                                   \
                                                                                                              \
         [loop] for (int i = 0; i < PCSS_SEARCH_SAMPLES; ++i) {                                             \
             float2 raw_offset = mul(rotation, POISSON_DISK[i]);                                              \
@@ -117,6 +112,71 @@ bool IsDirectionalLight_Dir() {
 DEFINE_FIND_BLOCKER(Point)
 DEFINE_FIND_BLOCKER(Dir)
 
+float2x2 GetAdaptivePcfTransform(BlockerStats stats) {
+    /* 我们利用 SumWeight * Sum(XY) - Sum(X)*Sum(Y) 的形式来避免过早除法带来的精度损失 */
+    float N = stats.numBlockers;
+
+    /* 协方差矩阵 */
+    float  cov_xy = N * stats.uvCrossSum - stats.uvSum.x * stats.uvSum.y;
+    float2 var    = N * stats.uvSqSum - stats.uvSum * stats.uvSum; /* var.x, var.y */
+
+    /* 特征值分解 */
+    float trace    = var.x + var.y;
+    float det_part = sqrt(max(0.0, trace * trace - 4.0 * (var.x * var.y - cov_xy * cov_xy)));
+
+    float2 eigen_values = 0.5 * (trace + float2(det_part, -det_part));
+    float  max_eigen    = max(eigen_values.x, eigen_values.y);
+    float  min_eigen    = min(eigen_values.x, eigen_values.y);
+
+    /* 计算主特征向量 */
+    float2 major_axis = normalize(float2(max_eigen - var.y, cov_xy));
+    /* 如果 cov_xy 接近0，上述计算可能不稳定，加个保护 */
+    if (abs(cov_xy) < 1e-6)
+        major_axis = float2(1, 0);
+
+    /* 计算椭圆拉伸系数 */
+    float axis_ratio     = sqrt(max_eigen / max(min_eigen, 1e-6));
+    float stretch_factor = axis_ratio - 1.3; /* 1.3 是个经验阈值，只有比率超过它才开始拉伸 */
+
+    /* 混合因子：如果遮挡物太少(N<2)，协方差矩阵不可靠，就不要拉伸 */
+    float covariance_fade = saturate((N >= 2.0 ? 1.0 : 0.0) * stretch_factor);
+
+    /* 启发式调整 */
+    /* 如果遮挡物重心偏离中心很远(mean很大)，说明是边缘，我们更倾向于相信这个方向 */
+    /* 这里简化了 UE 的复杂逻辑，直接取一个简单的混合 */
+    float elliptical_factor = min(8.0 * stretch_factor, 6.0) * covariance_fade;
+
+    /* 生成变换矩阵 */
+    return GenerateDirectionalScale2x2Matrix(major_axis, elliptical_factor);
+}
+
+float SharpenPcfVisibility(float shadow_visibility, float penumbra_uv, float shadow_map_size, BlockerStats stats) {
+    const float AverageSampleDistance = sqrt(1.0 / (float(PCSS_SEARCH_SAMPLES) * 3.14159265359));
+    const float MaxSharpnessFactor    = 4.0;
+
+    /* 一个纹素的大小 */
+    float min_filter_size = 1.0 / shadow_map_size;
+
+    /* 当前的半影半径 */
+    float raw_filter_radius = penumbra_uv;
+
+    /* 计算锐化衰减 */
+    /* 逻辑：如果遮挡物重心偏离中心很远 (length 大)，说明在边缘，需要锐化 (Fading -> 1) */
+    /* 如果重心在中间 (length 小)，说明在内部，不需要锐化 (Fading -> 0) */
+    float2 normalized_gradient = stats.uvSum / stats.numBlockers; /* 使用遮挡物重心作为梯度近似 */
+
+    float sharpeness_fading = saturate(1.5 * (length(normalized_gradient) - AverageSampleDistance));
+
+    /* 计算最终锐化强度 */
+    /* 如果radius_ratio很小，接近min_filter_size，说明是硬阴影，可以大力锐化（提高锐化上限到MaxSharpnessFactor） */
+    /* 如果半影很大，ratio 接近 0，lerp 结果接近 1 (不锐化) */
+    float radius_ratio = min_filter_size / max(raw_filter_radius, 1e-6);
+    float final_sharpness_factor =
+        lerp(1.0, clamp(radius_ratio, 1.0, MaxSharpnessFactor), sharpeness_fading);
+
+    return saturate(final_sharpness_factor * (shadow_visibility - 0.5) + 0.5);
+}
+
 #define DEFINE_CALCULATE_PCSS(SUFFIX)                                                                                       \
     float CalculatePcss##SUFFIX(ShadowContext ctx) {                                                                        \
         /* Blocker Search */                                                                                                \
@@ -133,10 +193,7 @@ DEFINE_FIND_BLOCKER(Dir)
         if (stats.numBlockers < 0.1)                                                                                        \
             return 1.0;                                                                                                     \
                                                                                                                             \
-        /* 全遮挡 early-out：所有样本都是 blocker，PCF 必然返回 0，直接跳过整个 PCF 阶段 */                                 \
-        if (stats.numBlockers > (float(PCSS_SEARCH_SAMPLES) - 0.5))                                                         \
-            return 0.0;                                                                                                     \
-                                                                                                                            \
+        /* Search and filtering can cover different footprints, so full search coverage still requires PCF. */            \
         float penumbra_uv = CalculatePenumbra##SUFFIX(ctx, stats.avgDepth);                                                 \
                                                                                                                             \
         /* 原 #if PCSS_LIGHT_TYPE == 1 */                                                                                   \
@@ -153,75 +210,16 @@ DEFINE_FIND_BLOCKER(Dir)
         /* 计算自适应采样矩阵 */                                                                                            \
         float2x2 pcf_matrix = float2x2(1, 0, 0, 1); /* 默认为单位矩阵(圆形) */                                              \
                                                                                                                             \
-        if (PCSS_ANTI_ALIASING_METHOD == 2) {                                                                               \
-            /* 我们利用 SumWeight * Sum(XY) - Sum(X)*Sum(Y) 的形式来避免过早除法带来的精度损失 */                           \
-            float N = stats.numBlockers;                                                                                    \
-            /* float2 mean = stats.uvSum / N; (未使用) */                                                                   \
-                                                                                                                            \
-            /* 协方差矩阵 */                                                                                                \
-            float  cov_xy = N * stats.uvCrossSum - stats.uvSum.x * stats.uvSum.y;                                           \
-            float2 var    = N * stats.uvSqSum - stats.uvSum * stats.uvSum; /* var.x, var.y */                               \
-                                                                                                                            \
-            /* 特征值分解 */                                                                                                \
-            float trace    = var.x + var.y;                                                                                 \
-            float det_part = sqrt(max(0.0, trace * trace - 4.0 * (var.x * var.y - cov_xy * cov_xy)));                       \
-                                                                                                                            \
-            float2 eigen_values = 0.5 * (trace + float2(det_part, -det_part));                                              \
-            float  max_eigen    = max(eigen_values.x, eigen_values.y);                                                      \
-            float  min_eigen    = min(eigen_values.x, eigen_values.y);                                                      \
-                                                                                                                            \
-            /* 计算主特征向量 */                                                                                            \
-            float2 major_axis = normalize(float2(max_eigen - var.y, cov_xy));                                               \
-            /* 如果 cov_xy 接近0，上述计算可能不稳定，加个保护 */                                                           \
-            if (abs(cov_xy) < 1e-6)                                                                                         \
-                major_axis = float2(1, 0);                                                                                  \
-                                                                                                                            \
-            /* 计算椭圆拉伸系数 */                                                                                          \
-            float axis_ratio     = sqrt(max_eigen / max(min_eigen, 1e-6));                                                  \
-            float stretch_factor = axis_ratio - 1.3; /* 1.3 是个经验阈值，只有比率超过它才开始拉伸 */                       \
-                                                                                                                            \
-            /* 混合因子：如果遮挡物太少(N<2)，协方差矩阵不可靠，就不要拉伸 */                                               \
-            float covariance_fade = saturate((N >= 2.0 ? 1.0 : 0.0) * stretch_factor);                                      \
-                                                                                                                            \
-            /* 启发式调整 */                                                                                                \
-            /* 如果遮挡物重心偏离中心很远(mean很大)，说明是边缘，我们更倾向于相信这个方向 */                                \
-            /* 这里简化了 UE 的复杂逻辑，直接取一个简单的混合 */                                                            \
-            float elliptical_factor = min(8.0 * stretch_factor, 6.0) * covariance_fade;                                     \
-                                                                                                                            \
-            /* 生成变换矩阵 */                                                                                              \
-            pcf_matrix = GenerateDirectionalScale2x2Matrix(major_axis, elliptical_factor);                                  \
-        }                                                                                                                   \
-                                                                                                                            \
+        if (PCSS_ANTI_ALIASING_METHOD == 2) {                                                                          \
+            pcf_matrix = GetAdaptivePcfTransform(stats);                                                               \
+        }                                                                                                              \
+                                                                                                                       \
         float shadow_visibility = CalculatePcf##SUFFIX(ctx, penumbra_uv, pcf_matrix);                                       \
                                                                                                                             \
-        if (PCSS_ENABLE_POST_PCF_SHARPENING) {                                                                              \
-            const float AverageSampleDistance = sqrt(1.0 / (float(PCSS_SEARCH_SAMPLES) * 3.14159265359));                   \
-            const float MaxSharpnessFactor    = 4.0;                                                                        \
-                                                                                                                            \
-            /* 一个纹素的大小 */                                                                                            \
-            float min_filter_size = 1.0 / ctx.shadowMapSize;                                                                \
-                                                                                                                            \
-            /* 当前的半影半径 */                                                                                            \
-            float raw_filter_radius = penumbra_uv;                                                                          \
-                                                                                                                            \
-            /* 计算锐化衰减 */                                                                                              \
-            /* 逻辑：如果遮挡物重心偏离中心很远 (length 大)，说明在边缘，需要锐化 (Fading -> 1) */                          \
-            /* 如果重心在中间 (length 小)，说明在内部，不需要锐化 (Fading -> 0) */                                          \
-            /* float2 normalized_gradient = occluder_uv_gradient / max(search_radius_uv, 1e-6); */                          \
-            float2 normalized_gradient = stats.uvSum / stats.numBlockers; /* 使用遮挡物重心作为梯度近似 */                  \
-                                                                                                                            \
-            float sharpeness_fading = saturate(1.5 * (length(normalized_gradient) - AverageSampleDistance));                \
-                                                                                                                            \
-            /* 计算最终锐化强度 */                                                                                          \
-            /* 如果radius_ratio很小，接近min_filter_size，说明是硬阴影，可以大力锐化（提高锐化上限到MaxSharpnessFactor） */ \
-            /* 如果半影很大，ratio 接近 0，lerp 结果接近 1 (不锐化) */                                                      \
-            float radius_ratio = min_filter_size / max(raw_filter_radius, 1e-6);                                            \
-            float final_sharpness_factor =                                                                                  \
-                lerp(1.0, clamp(radius_ratio, 1.0, MaxSharpnessFactor), sharpeness_fading);                                 \
-                                                                                                                            \
-            shadow_visibility = saturate(final_sharpness_factor * (shadow_visibility - 0.5) + 0.5);                         \
-        }                                                                                                                   \
-                                                                                                                            \
+        if (PCSS_ENABLE_POST_PCF_SHARPENING) {                                                                         \
+            shadow_visibility = SharpenPcfVisibility(shadow_visibility, penumbra_uv, ctx.shadowMapSize, stats);        \
+        }                                                                                                              \
+                                                                                                                       \
         return shadow_visibility;                                                                                           \
     }
 

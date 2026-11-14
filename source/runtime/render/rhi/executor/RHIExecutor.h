@@ -1,0 +1,171 @@
+#pragma once
+
+#include "RenderAPI.h"
+#include "rhi/RHISubmissionPipelinePolicy.h"
+#include "rhi/executor/RHIExecutorBackend.h"
+#include "rhi/executor/RHIExecutorWorkQueue.h"
+
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+
+namespace Moer::Render {
+
+struct RHIRecordingFencePoint {
+    FenceRef fence{};
+    uint64   value{0};
+};
+
+struct RHIRecordingSubmitMetadata {
+    std::optional<std::string>                 debug_label{};
+    float4                                     debug_label_color{GpuMarkerPalette::Pass()};
+    std::optional<ERHIProfilingPhase>          profiling_phase{};
+    std::optional<ERHITranslateExecutionClass> translate_execution_class{};
+    // Shutdown leaves this metadata untouched while either the producer or
+    // optional commit gate is Pending. Those fences remain with the opaque
+    // graph owner until the complete ownership boundary becomes terminal.
+    Array<RHIRecordingFencePoint> wait_fences{};
+    Array<RHIRecordingFencePoint> signal_fences{};
+    /**
+     * Non-zero scopes opt a contiguous graph transaction into dependency-led
+     * cross-native-queue overlap. Zero preserves the legacy total GPU order.
+     */
+    uint64 async_queue_scope{0};
+};
+
+// One independently recorded source. completion must be signalled only after
+// the producer has stopped mutating command_list. An optional commit gate adds
+// a graph-wide transaction boundary: the RHI worker may observe completed
+// producers early, but cannot seal any source until the owner commits the
+// complete graph. submit_metadata is immutable at publication and deliberately
+// contains data rather than an arbitrary Executor-thread callback, so
+// finalization cannot recursively Flush/Sync. The producer owns the only
+// mutable reference until it calls Signal()/Fail(). It must not call
+// RHIExecutor::Flush, Sync or ShutDown while recording; those are
+// ordering/lifecycle boundaries owned by the submitting thread.
+struct RHIRecordingSource {
+    SharedPtr<CommandList>     command_list{};
+    RHIRecordingGateView       completion{};
+    RHIRecordingGateView       commit{};
+    RHIRecordingSubmitMetadata submit_metadata{};
+    // Stable, thread-safe cancellation seam for the CommandList generation
+    // being recorded. Shutdown may cancel pending host futures through these
+    // views without reading or destroying a producer-owned command stream.
+    // Publishing Error only bounds host waiters: it neither completes the
+    // completion/commit gates nor transfers CommandList ownership. An opaque
+    // producer must still stop mutation and Signal()/Fail() its gate.
+    GpuCompletionCancellationView gpu_completion_cancellation{};
+    QueryCancellationView         query_cancellation{};
+};
+
+class RENDER_API RHIExecutor {
+public:
+    static RHIExecutor& Get();
+    static void         StartUp();
+    static void         StartUp(uint32 _submission_batch_window);
+
+    void Submit(
+        EQueueType          _queue,
+        CmdSubmit&&         _submit,
+        ERHIExecSubmitFlags _flags   = ERHIExecSubmitFlags::FlushGPU,
+        RHIPresentRequest*  _present = nullptr
+    );
+    void Submit(
+        Array<RHISubmissionRequest>&& _submits,
+        ERHIExecSubmitFlags           _flags   = ERHIExecSubmitFlags::FlushGPU,
+        RHIPresentRequest*            _present = nullptr
+    );
+    void Submit(
+        Array<CommandList>&& _command_lists,
+        ERHIExecSubmitFlags  _flags   = ERHIExecSubmitFlags::FlushGPU,
+        RHIPresentRequest*   _present = nullptr
+    );
+
+    // Submit asynchronously recorded sources. They remain shared and mutable
+    // until their recording and optional commit gates complete; the Executor
+    // worker then seals them into CmdSubmit payloads in input order. A batch
+    // may use one common gate or a distinct gate per source through the
+    // RHIRecordingSource overload. If any producer or transaction fails, the
+    // whole group waits for all prerequisites, runs ordinary CommandList
+    // cleanup callbacks once, skips success callbacks, and never reaches a GPU
+    // queue. Shutdown cancellation remains non-blocking and does not inspect
+    // CommandLists whose producers may still be active.
+    void SubmitRecording(
+        SharedPtr<CommandList> _command_list,
+        RHIRecordingGateRef    _completion,
+        ERHIExecSubmitFlags    _flags = ERHIExecSubmitFlags::FlushGPU
+    );
+    void SubmitRecording(
+        Array<SharedPtr<CommandList>>&& _command_lists,
+        RHIRecordingGateRef             _batch_completion,
+        ERHIExecSubmitFlags             _flags = ERHIExecSubmitFlags::FlushGPU
+    );
+    void SubmitRecording(
+        Array<RHIRecordingSource>&& _sources,
+        ERHIExecSubmitFlags         _flags = ERHIExecSubmitFlags::FlushGPU
+    );
+    void Present(RHIPresentRequest&& _present, bool _flush = true);
+
+    // Request publication of preceding pending submissions in Executor FIFO
+    // order. Return does not guarantee backend publication, native GPU
+    // submission, or GPU completion.
+    void Flush();
+    // Blocking lifecycle boundaries must not be called recursively from an
+    // RHI completion callback whose completion they are waiting for.
+    // Normal return confirms the preceding work has reached the requested
+    // completion boundary; individual submissions may have been rejected.
+    // Throws if this Sync is cancelled, rejected or fails to reach that boundary.
+    // Failure does not make in-flight resources safe to release.
+    void        Sync(ERHISyncDepth _depth = ERHISyncDepth::RHI);
+    static void ShutDown();
+
+private:
+    enum class ELifecycleState : uint8 {
+        Stopped,
+        Running,
+        Stopping,
+    };
+
+    struct PendingBatchPublication;
+    // Caller holds submit_mutex; publication additionally requires dispatch_mutex.
+    PendingBatchPublication             PreparePendingBatchLocked();
+    std::shared_ptr<RHIBackendExecutor> GetOrCreateBackendExecutorLocked();
+    RHISubmissionBatch                  TakePendingSubmissionBatchLocked();
+
+    void AppendPendingRequestsLocked(Array<RHISubmissionRequest>& _submits, RHIPresentRequest* _present);
+
+    // A value makes this caller responsible for finishing that shutdown
+    // generation. No value means shutdown is already complete or this call
+    // waited for another caller to complete it; no further work is needed.
+    // _backend_to_cancel is valid only when a generation is returned.
+    std::optional<uint64>                  BeginShutdown(std::shared_ptr<RHIBackendExecutor>& _backend_to_cancel);
+    void                                  FinishShutdown(uint64 _generation);
+    static std::vector<RHIRecordingGateRef> CollectRecordingPrerequisites(
+        const Array<RHIRecordingSource>& _sources
+    );
+
+    // Run on the Executor worker after preceding work has been processed.
+    void ProcessSubmissionRequests(
+        Array<RHISubmissionRequest>&& _submits,
+        ERHIExecSubmitFlags           _flags,
+        RHIPresentRequest*            _present
+    );
+    void ProcessFlushRequest();
+    void ProcessSyncRequest(ERHISyncDepth _depth);
+
+    std::mutex                          submit_mutex;
+    std::condition_variable             lifecycle_cv;
+    std::mutex                          dispatch_mutex;
+    std::shared_ptr<RHIBackendExecutor> backend_executor{};
+    Array<RHISubmissionRequest>         pending_submits{};
+    std::optional<RHIPresentRequest>    pending_present{};
+    uint64                              next_batch_sequence{1};
+    size_t                              active_sync_calls{0};
+    uint64                              shutdown_generation{0};
+    uint64                              completed_shutdown_generation{0};
+    uint32                              submission_batch_window{RHISubmissionPipelinePolicy::DefaultBatchWindow};
+    ELifecycleState                     lifecycle_state{ELifecycleState::Stopped};
+    RHIExecutorWorkQueue                work_queue{};
+};
+
+} // namespace Moer::Render

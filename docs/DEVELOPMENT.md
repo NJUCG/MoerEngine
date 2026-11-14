@@ -5,6 +5,7 @@
 - [1. 推荐使用的开发工具](#1-推荐使用的开发工具)
   - [just](#just)
 - [2. 设计思路](#2-设计思路)
+  - [从真实约束推导设计](#从真实约束推导设计)
   - [ECS框架](#ecs框架)
 - [3. 规范](#3-规范)
   - [Git规范](#git规范)
@@ -26,15 +27,40 @@
 
 推荐的使用方式大致如下：
 
-1. 安装 `just`  
-   - Windows：可以通过 `cargo` 安装（`cargo install just`）。  
+1. 安装 `just`
+   - Windows：可以通过 `cargo` 安装（`cargo install just`）。
    - Linux / macOS：参考官方仓库 `casey/just` 的 README 即可。【安装细节请自行询问AI】
-2. 通过简短命令完成日常操作  
+2. 通过简短命令完成日常操作
    - 例如：`just build`、`just run`、`just gbr`（实际命令以 `justfile` 中为准）。
 
 总之，**把常用、复杂、容易忘的命令都写在 `justfile` 里，然后只记住几个简短的 `just xxx` 就好**，既减少心智负担，也方便团队成员共享统一的开发流程。
 
 ## 2. 设计思路
+
+### 从真实约束推导设计
+
+设计应当能从少数真实约束推导出来：每个状态有明确含义，每个机制有具体责任，新增复杂度能说明来源和收益。阅读、解释或重构系统时，都应追问：
+
+> 我们是在解决原本存在的问题，还是在不断解决上一个抽象引入的问题？
+
+先区分复杂度的来源：API、硬件的强制要求；业务、并发和资源生命周期的实际要求；实现自行选择的数据组织、缓存、封装和性能优化。第三类可以有价值，但需要说明取舍，不能当成底层强制要求，也不能仅凭 UE 等成熟引擎采用过就认定必要。
+
+解释一个机制时，按以下顺序展开：
+
+1. **真实约束是什么？** 给出具体场景和依据。删除机制后，究竟会违反什么条件？“调用方当前依赖它”只是依赖关系，还需要继续追问调用方为何这样设计。
+2. **满足约束的最简可行模型是什么？** 先讲清数据、所有权、有效期和操作顺序，再映射到当前类型与函数。不要只复述调用链来解释必要性。
+3. **当前实现额外选择了什么？** 说明新增状态、缓存、包装层或同步逻辑解决的具体问题、引入的维护责任，以及放弃它的代价。性能收益应区分实测结果与推测。
+4. **复杂度应该放在哪里？** 检查能否复用已有机制，是否适合由更粗的生命周期边界承担，或者是否遗漏了必须独立处理的约束。
+
+| 判断 | 处理方式 | 需要确认的条件 |
+|---|---|---|
+| 已有机制能够承担相同责任 | 合并重复状态、接口或流程，保留明确的信息来源 | 现有机制的语义与覆盖范围确实匹配 |
+| 细粒度管理并非必要 | 将分配、回收或同步移到更粗的生命周期边界 | 该边界覆盖所有使用者，且资源占用、等待等代价可接受 |
+| 此前遗漏了真实约束 | 补充必要的状态或机制，并写清它维护的条件 | 能指出具体失败场景，已有机制无法正确覆盖 |
+
+对每个需要长期保存的状态，应能回答：它表示什么、谁拥有并更新它、何时有效或失效、何时回收、能否从已有状态推导。保存派生数据时，应说明缓存收益以及如何保持一致。
+
+函数名和变量名应体现责任与含义，函数抽取应呈现清楚的处理步骤。仅仅把复杂代码搬进更多辅助函数，不能证明架构变简单。评估重点是需要独立理解和维护的概念、状态及不变量是否减少，而不是类或函数的数量是否减少。
 
 ### ECS框架
 
@@ -149,7 +175,13 @@ Commit信息，请遵循 [Conventional Commits](https://www.conventionalcommits.
 
 此外，**请务必检查头文件是否有额外要求！**例如，`volk` 要求include头文件前定义平台相关宏、`NRD` 要求特定的头文件include顺序。这种情况下，请 **务必创建一个单独的头文件来封装该依赖库的include逻辑**，否则会导致其他开发者错误的include行为。
 
-Vulkan 后端统一通过 `rhi/vulkan/VulkanCommon.h` 获取 Vulkan 声明。Render 模块内不要直接 include `<volk.h>`、`<vulkan/vulkan_core.h>` 或平台 Vulkan 头文件；公开或消费 Vulkan 类型的 CMake target 应链接 `Moer::VulkanHeaders`，由它传递 `VK_NO_PROTOTYPES`、平台宏、头文件路径和 Volk 依赖。`source/profile/VkLayer.cpp` 是独立 Vulkan Layer，不受 Render 模块规则约束。修改该契约后，应构建 `TestVulkanHeaderContract` 并运行名为 `VulkanHeaderContract` 的 CTest。
+Vulkan 后端统一通过 `rhi/backends/vulkan/VulkanCommon.h` 获取 Vulkan 声明。Render 模块内不要直接 include `<volk.h>`、`<vulkan/vulkan_core.h>` 或平台 Vulkan 头文件；公开或消费 Vulkan 类型的 CMake target 应链接 `Moer::VulkanHeaders`，由它传递 `VK_NO_PROTOTYPES`、平台宏、头文件路径和 Volk 依赖。`source/profile/VkLayer.cpp` 是独立 Vulkan Layer，不受 Render 模块规则约束。修改该契约后，应构建 `TestVulkanHeaderContract` 并运行名为 `VulkanHeaderContract` 的 CTest。
+
+这些宏只由 CMake 定义，并同时传给 Volk 本体和调用方。`VulkanCommon.h` 只检查编译约定并引入 Volk，不补定义宏；查询重置方式等策略类型由对应机制的头文件定义。
+
+Vulkan 后端固定以 API 1.3 为目标，配置中的 `api_version` 必须为 `"1.3"`，物理设备可以支持更新版本。Feature 和 Property 缓存只保存值；`pNext` 仅在查询或创建设备的调用期间连接，不随缓存保留。
+
+实例必需扩展和设备扩展的查询、依赖检查、启用均集中在 `VulkanDeviceInitialization.cpp`。Device 保存已启用名称、能力值和属性快照；新增扩展时在该初始化流程中补充对应结构和条件，不创建独立扩展对象。
 
 ### C++规范
 
@@ -159,10 +191,15 @@ MoerEngine开发早期使用 `.clang-tidy` 对命名风格进行规范，但强�
 
 此处规范和先前规范的主要区别在于：形参不应该以 `_` 开头；非POD成员变量应该以 `m_` 开头。此文档优先级高于 `.clang-tidy`
 
+#### 固定宽度整数
+
+引擎自有 C++ 代码统一使用 `misc/Types.h` 中的 `uint8 / uint16 / uint32 / uint64` 和 `int8 / int16 / int32 / int64`。这些名称直接别名到 `<cstdint>` 的对应类型；固定宽度原子整数写作 `std::atomic<uint32>` 等。命名空间外使用 `Moer::uint32` 等限定名。
+
+`size_t`、`uintptr_t`、`VkDeviceSize` 等具有具体用途的类型保留原名。第三方和生成代码沿用原有约定；CUDA 互操作边界保留其类型契约。HLSL 与双语言共享头继续使用 `uint`，C++ 侧兼容别名由 `misc/Traits.h` 提供。新增纯 C++ 代码使用 `uint32`。
+
 #### 命名规范 - 变量
 
 **变量均为 全小写 & 下划线 风格**。
-
 
 | 类别                   | 命名风格                               | 示例                                                |
 | ---------------------- | -------------------------------------- | --------------------------------------------------- |
@@ -218,10 +255,10 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
   ```cmake
   # Moer::Render
   set(target_name moer_render)
-  
+
   add_library(${target_name} SHARED ...)
   add_library(Moer::Render ALIAS ${target_name})
-  
+
   # Moer::Cuda
   set(target_name moer_cuda)
   add_library(${target_name} SHARED ${moer_cuda_h} ${moer_cuda_cu})
@@ -258,6 +295,151 @@ Shaders文件夹架构及相关规范见`/shaders/README.md`。
 
 ## 7. RHI 顶点格式
 
+D3D12 的功能范围、提交所有权和验证入口见 [D3D12 后端](D3D12_BACKEND.md)。
+
 顶点声明和光追几何的 `vertex_format` 使用 `EVertexFormat`（`rhi/VertexFormat.h`），纹理和 texel buffer 使用 `EPixelFormat`。两者不能隐式转换，避免将深度、压缩或 sRGB 像素格式误用于顶点输入。
 
-`Float1`～`Float4` 表示 32 位浮点分量，`UInt` 表示一个 32 位无符号整数，`UByte4Normalized` 表示四个 8 位无符号分量，读取时归一化到 `[0, 1]`。通过 `GetVertexFormatByteSize()` 计算顶点属性的字节数，由 Metal / Vulkan 各自映射到原生顶点格式；新增格式时同步补充这两处映射。
+`Float1`～`Float4` 表示 32 位浮点分量，`UInt` 表示一个 32 位无符号整数，`UByte4Normalized` 表示四个 8 位无符号分量，读取时归一化到 `[0, 1]`。通过 `GetVertexFormatByteSize()` 计算顶点属性的字节数，由 Metal / Vulkan / D3D12 各自映射到原生顶点格式；新增格式时同步补充对应映射。
+
+## 8. RDG 编译执行与资源边界
+
+GPU 真正要求的是访问顺序、内存可见性、图像布局、队列所有权与使用期间的资源存活。
+Vulkan 渲染路径由 RDG 根据显式声明生成这些依赖，RHI 按编译顺序执行命令和 barrier。
+Raster、Raytracing、UI、场景上传、环境贴图处理和导出读回都采用 `Compiled`；编译或录制失败不会回退到 reorderer。
+串行/并行录制只改变 CPU 调度，不改变这个契约。
+
+一次访问由 `TextureAccessType` / `BufferAccessType`（用途）、`AccessMode`（读写）、
+执行域和子资源范围共同描述。它们与创建资源时的 usage flags 不同：创建能力允许多种用途，
+pass 声明选择本次用途。lowering 据此生成 stage、access mask 和图像布局。
+`Sampled` 使用只读 shader 布局，`Storage` 使用 GENERAL；storage 的只读访问仍声明为
+`Read/Storage`。颜色和深度附件分别使用 `ColorAttachment`、`DepthStencilAttachment`，
+深度读写权限只由 `AccessMode` 决定。相同用途之间发生写后读，仍由编译器建立内存依赖。
+
+普通 pass 不能传入边界枚举。`TextureBoundary::Undefined`、`BufferBoundary::Undefined`
+只用于声明无须保留内容的初始状态；`TextureBoundary::PresentationSource` 表达呈现复制的
+交接约定。初始化和导出接口通过类型安全的 variant 接受普通用途或对应资源的特殊边界，
+内部 `ResourceState` 统一保存这些状态，不引入另一份状态账本。没有执行端点的 `Present`
+已移除。`Unspecified` 仅保留给逻辑依赖声明；实际 lowering 必须得到明确的访问类型。
+
+| 责任 | 保证者 |
+| --- | --- |
+| pass 访问哪些资源、读写方式、mip/layer 范围 | pass 声明；多阶段算法按依赖拆成节点 |
+| pass 顺序、barrier、托管队列间等待与所有权转移 | RDG 编译与 lowering |
+| bindless 实际可能访问的目标集合 | 场景/资源所有者提供候选集合；绑定整个 heap 不等于声明目标访问 |
+| bindless 索引、descriptor 存储的更新与发布 | Vulkan 内部固定协议，不扫描应用目标资源 |
+| BLAS 顶点/索引输入、BLAS/TLAS 公共输出 | RDG 声明 |
+| AS scratch、TLAS instance 上传及其内部依赖 | Vulkan 构建命令的私有协议 |
+| 资源保活、提交接受、GPU 完成与回收 | 沿用 RHI 提交/完成机制；三者不混为一项状态 |
+
+跨图资源采用固定边界：普通图像为 `Sampled`，presentation source 为
+`PresentationSource`，普通场景 buffer 为 `ShaderRead`，加速结构为
+`AccelerationStructureRead`。所有者在新图像分配时建立布局；每张图导出约定状态。
+这把跨图协调放到明确的边界，省去另一份后端 preferred-state 表和 TLAS 地址登记表，
+代价是图之间可能增加状态转换。图内仍按实际依赖同步。
+
+新图像只建立布局，不因此获得有效内容。TAA、ReSTIR、NRD 的历史有效性仍由
+实际接受的帧推进；录制成功不代表 native submit 已接受，更不代表 GPU 已完成。
+
+场景上传与后续 AS 构建合为一个 Graphics 命令流，避免额外的场景 Copy 提交与手工交接。
+这放弃初始场景上传的独立 Copy 重叠。独立运行时贴图加载仍由一张 RDG 图执行
+Copy → Graphics 交接，跨队列依赖由编译结果生成。
+
+NRD 的公共纹理依赖也由图声明：RELAX 读取 motion，REBLUR 还可能写回 motion，因此后者
+声明为 `ReadWrite/Storage`。NRD/NRI 负责 pass 内部临时纹理及多次 dispatch 的同步，
+并依据实际结束状态将公共纹理恢复到声明状态，再交回 RDG；插件不再访问后端资源 tracker。
+其串行 native 录制约束来自 NRI 的可变 descriptor 和 command-buffer 缓存，与资源依赖分析无关。
+
+Vulkan 只接受 `Compiled` 命令流；任何非空的非 compiled 提交和推断式 barrier 都在 native
+录制之前被拒绝。旧 reorderer、状态 tracker、preferred-state 恢复、StateSeed 和分层 native
+并行录制器已经移除。后端仅将完整屏障翻译为 Vulkan 屏障，并校验范围与队列端点。
+同状态只读访问无需屏障；buffer 字节区间和 texture aspect/mip/layer 范围直接保留。
+新增入口应补充 RDG 资源声明或明确的私有同步协议。
+
+并行化保留在两个已有边界：RDG 的独立 pass 录制，以及 RHI 的独立 source/native queue
+翻译。旧 `RHI.CommandRecording.Parallel*` 配置已移除。资源保活仍随提交进入 Completion，
+回读 staging 在 GPU 完成后读取并回收；没有新增一份资源生命周期。
+
+Vulkan 提交统一由 `RHIExecutor` 调度：Translate 只录制并交接拥有资源的提交包，Submission
+独占原生提交，Completion 在 GPU 完成后发布结果并回收。Queue 不再保存另一套 RHI 工作队列；
+直接调用 Queue 的 `Execute/Present/Wait` 会被拒绝，依赖随提交包交给 Executor。
+RHI 层的 `RHISubmissionRequest` 表示一份带逻辑队列选择的 `CmdSubmit`，
+`RHISubmissionBatch` 将一组请求、拓扑和可选 Present 一起交给后端。
+`Submit` 接管请求并排入 Executor 工作队列，`ProcessSubmissionRequests` 在该线程暂存或发布请求；
+`ProcessFlushRequest` 和 `ProcessSyncRequest` 分别处理发布与同步边界。
+Executor 模块集中在 `source/runtime/render/rhi/executor/`，调用方通过
+`rhi/executor/RHIExecutor.h` 使用公共入口。实现按责任分开：
+`RHIExecutor.cpp` 保留入口、批次发布和生命周期；
+`RHIExecutorRecording.cpp` 负责将录制结果封装为提交请求并应用元数据；
+`RHIExecutorRejection.cpp` 负责失败、取消时的结果通知和清理；
+`RHIExecutorBackend.cpp` 负责后端工厂及非 Vulkan 队列适配。
+`RHIExecutorWorkQueue` 持有 Executor 工作线程，所有操作统一通过 `Enqueue` 入队。
+任务的 `prerequisites` 表示需要等待的 CPU 录制条件；即使为空也遵循 FIFO 顺序。
+回调接收 `Execute`、`Reject` 或 `Cancel`，分别执行正常处理、录制失败收尾或关闭取消收尾。
+`RHIExecutorInternal.h` 只声明实现文件间共享的辅助函数。
+测试钩子放在模块内的 `executor/testing/`，不再由公共 `RHIExecutor.h` 暴露。
+各图形 API 的实现统一放在 `rhi/backends/` 下的 `vulkan/`、`metal/`、`d3d12/`，
+其中 `VulkanSubmissionExecutor` 属于 Vulkan 后端；公共 Executor、线程设施和提交拓扑保留在 RHI 层。
+提交、Flush、Sync 和关闭共用批次发布过程；待发布批次始终保留未被后端接收的数据，
+失败通知在锁外完成。Present 的接纳和发布仍在同一发布锁范围内，防止后续操作越过它。
+Vulkan 的 `RunTranslateThread` 和 `RunSubmissionThread` 对应后端的两条工作线程。
+其内部 `WorkerRequest` 包含批次提交、同步或停止操作，`CpuTaskCompletion` 通知 CPU 工作完成；
+`VulkanSubmissionResult` 表示原生提交是否接受及可用的完成等待点，GPU 完成仍由队列 timeline 确认。
+完成队列只接收拥有本次资源的完成包，不再逐条分派回调、Context 或 descriptor lease。
+`ReserveSubmission` 从入口起以统一的 `VulkanPendingSubmission`
+持有 Graphics、Compute、Copy 请求并预留逻辑队列序号，Executor 再调用 `VulkanCommandRecorder::Record`。录制失败也保留这个拥有资源的包，
+继续由 Submission 发布批次结果，再交给 Completion 收尾，避免局部变量析构提前触发通知。
+`submission_outcome` 为空表示尚未决定提交结果，有值表示已接受或已拒绝；它不表示 GPU 已完成。
+
+每份请求通过 `VulkanSubmissionCompletion` 独立确认 GPU 完成、发布自身结果、执行回调和回收资源。
+同属一个提交批次不承诺其他请求的结果已经就绪，也不建立跨请求的回调层级或跨队列通知屏障。
+同一份完成记录仍先发布全部 Query / GPU completion 终态，再依次执行 GPU completion、Query、普通和成功通知；
+资源保活覆盖自身回调，单个队列 Sync 等待本队列 CPU 退役，全局 Sync 逐一排空所有队列。
+RHI 阶段线程禁止通过 Query / GPU completion Future 阻塞等待尚未终态的结果，避免回调阻塞结果生产者。
+一个逻辑请求拆成多个原生提交时，原请求的普通和成功回调仍由源级多段聚合统一收尾；
+这个边界只覆盖同一请求，不扩展到同批其他独立请求。录制事务的提交门和批次失败收尾继续保护原有接纳与所有权约束。
+
+原生提交成功后先保存结果，再发布其他状态，后续 CPU bookkeeping 异常不能把已接受的工作误当作未提交。
+
+录制与提交由 Executor 显式串联：预留序号 → Recorder 录制 → Queue 提交 → Completion 收尾。
+Device 为 Graphics、Compute、Copy 各持有一个 Recorder；原来的 Context 池、隔离区和录制统计迁入 Recorder，
+没有增加第二份池或工作线程。录制中的 Context 随提交包转交，Completion 发布查询结果并执行 Context 回调后，
+才调用 Recorder 的 `RecycleContext` 复用或隔离。Device 先排空并销毁 Queue，再销毁 Recorder。
+原来的 transferable lease 随提交包覆盖录制到提交决策，仍用于串行保护同一逻辑队列的可变录制状态。
+
+`VulkanCommandRecording.cpp` 实现命令 visitor 与 Graphics/Compute 录制，`VulkanCopyCommandRecording.cpp`
+处理 Copy 校验与录制；它们属于 Recorder，不再实现 Queue 成员。
+`VulkanSubmission.h` 定义三阶段共享的拥有资源的交接包，Recorder 头文件不依赖 Queue。
+`VulkanQueueCompletion.cpp` 确认 GPU 完成并收尾；`VulkanQueuePresentation.cpp` 保留交换链获取、呈现状态事务
+及获取图像后才能录制的私有复制操作。`VulkanCommandProfiler.*` 由 Recorder 持有，Queue 仅转发查询接口。
+`VulkanQueueInternal.*` 共享依赖等待、结果发布等实现函数，不另设状态所有者。
+
+提交顺序由 Executor 保证，共享 `VkQueue`
+的 host 锁仍负责原生队列互斥。同步边界先排空 Executor 的录制与提交，再等待 Queue 的完成
+处理，不能只等待 GPU timeline 而漏掉 CPU 回收。`rhi_thread/rhi_bypass` 和旧
+`parallel_record*` 配置已移除；Render Thread、帧延迟和 RDG 并行录制仍是独立的上层选择。
+
+完成进度与关闭标志的更新必须和条件变量等待共用 `event_mutex`，防止通知落在条件检查与
+真正睡眠之间；回调仍在锁外执行。Graphics/Compute 的工作等待与回收等待共用一个条件变量，
+入队时使用 `notify_all`，避免只唤醒回收等待者而让 Completion 工作线程继续睡眠。
+
+CUDA/TensorRT 使用两个 compiled 图之间的显式交接，不在 RDG 录制回调内提交队列。
+前图先导出固定边界并提交；interop owner 把具体共享纹理从 `Sampled` 转为 `GENERAL`、
+交给 external queue family，并通过导出的 RHI timeline 让 CUDA 等待。
+CUDA stream 完成后，后续 RHI 提交等待 CUDA 的 timeline，收回纹理并恢复 `Sampled`，然后录制后图。
+这些 Vulkan 提交也采用 `Compiled`；不存在 native queue 的旁路提交或资源推断。
+这是 [Vulkan 外部资源所有权与同步](https://docs.vulkan.org/spec/latest/chapters/synchronization.html#synchronization-queue-transfers)
+所需的交接。当前实现选择在此边界等待 CUDA 和收回提交完成，以统一临时映射、推理 buffer 和 semaphore 的复用条件；
+代价是启用 CUDA 时增加提交及 CPU 等待，暂不追求 Vulkan/CUDA 重叠。
+外部交接在图之间完成，不作为普通 GPU pass 的一种执行分类。
+
+GPU pass 统一通过 `AddRecordPass` 接收 RDG 独占分配的 CommandList；回调不负责封装或提交它。
+`PassRecordPolicy` 只描述 CPU 录制约束，并由调用方在该接口中显式声明一次：
+`ParallelAllowed` 允许同组回调并发录制；`Serial` 等待前组结束，在调用线程执行，再开始后组。
+GPU 资源依赖、Token 与 `DependsOn` 仍约束命令执行顺序，不隐含 CPU 回调的先后关系。
+串行录制不等待 GPU 完成，也不提供跨图或后端线程互斥。
+
+UI frame packet 状态推进、Culling 共享读回槽和 bindless 待更新队列的消费仍保留串行约束。
+不可变上传、已准备的 AS 命令及仅声明 GPU 边界的 pass 可以并行录制。CPU 准备使用 Setup pass，
+接受/完成后的状态更新继续归提交回调所有；原来的 MainThread、CpuPrepare、ExternalControl
+执行模型及 caller-owned CommandList 衔接已经移除。原生翻译策略保持独立，NRD 的前端录制
+可以并行，而 NRI 可变缓存仍由后端 `SerialControl` 保护。

@@ -1,0 +1,398 @@
+#ifndef VULKAN_DEVICE_H
+#define VULKAN_DEVICE_H
+
+#include "VulkanCommon.h"
+#include "VulkanDescriptor.h"
+#include "VulkanDeviceFeature.h"
+#include "VulkanDeviceProperty.h"
+#include "VulkanFault.h"
+#include "VulkanMemoryAllocator.h"
+#include "VulkanTypeDefs.h"
+#include "misc/Types.h"
+#include "VulkanDeviceInitialization.h"
+
+#include "misc/LockFree.h"
+#include "misc/STL.h"
+#include "rhi/RHIImpl.h"
+#include "rhi/RHIMultiview.h"
+
+#include <array>
+#include <atomic>
+#include <mutex>
+#include <optional>
+#include <shared_mutex>
+#include <span>
+#include <string>
+#include <string_view>
+
+namespace Moer::Render {
+
+enum class EVulkanTimestampQueryResetMode : uint8;
+
+class VulkanCommandQueue;
+class VulkanCopyQueue;
+class VulkanCommandRecorder;
+namespace Ext {
+class VkNRDPlugin;
+}
+
+class VulkanDevice : public RenderDevice::Impl {
+public:
+    // Lifecycle.
+    VulkanDevice();
+    ~VulkanDevice() override;
+
+    // Shared resource limits.
+    static constexpr uint32 bindless_sampler_count = 256;
+
+    // RHI resource creation.
+    TextureRef CreateTexture(std::string_view _name, const TextureInfo& _info) override;
+
+    BufferRef CreateBuffer(
+        std::string_view  _name,
+        uint32            _element_cnt,
+        uint32            _byte_stride,
+        EBufferUsageFlags _usage,
+        EPixelFormat      _format
+    ) override;
+
+    BindlessArrayRef      CreateBindlessArray(uint32 _max_size) override;
+    FenceRef         CreateFence() override;
+    RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) override;
+
+    RaytracingSceneRef CreateRaytracingScene() override;
+    SwapchainRef CreateSwapchain(const SwapchainCreateInfo& _info) override;
+
+    // RHI pipeline creation.
+    PipelineHandle CreatePipeline(GfxPsoCreateInfo&& _pso_info, PipelineShaderInfo&& _shaders) override;
+    PipelineHandle CreatePipeline(PipelineShaderInfo&& _shaders) override;
+
+    // RHI queues and synchronization.
+    CommandQueue& GetCommandQueue(EQueueType _type) override;
+
+    CopyQueue& GetCopyQueue() override;
+
+    VulkanCommandRecorder& GetCommandRecorder(EQueueType _type);
+
+    RHIQueueTopology GetQueueTopology() const override;
+    void WaitIdle() override;
+
+    // RHI capabilities and extensions.
+    bool SupportsTessellation() const override {
+        return m_device_info.core_features.GetCore10Features().tessellationShader == VK_TRUE;
+    }
+
+    uint32 GetMaxTessellationFactor() const override {
+        return SupportsTessellation() ?
+                   m_device_info.core_properties.core_1_0.limits.maxTessellationGenerationLevel :
+                   0;
+    }
+
+    bool SupportsMultiview(uint32 view_count) const override {
+        return Multiview::SupportsViewCount(
+            m_device_info.core_features.GetCore11Features().multiview == VK_TRUE,
+            m_device_info.core_properties.core_1_1.maxMultiviewViewCount,
+            view_count
+        );
+    }
+
+    bool SupportsRaytracingAccelerationStructures() const override {
+        return true;
+    }
+
+    bool                            IsExtensionCooperativeEnabled() const override;
+    const CooperativeExtensionInfo& GetCooperativeExtensionInfo() const override;
+    bool                            TryConvertCooperativeVectorMatrix(
+        const CooperativeVectorConversionDesc& _desc,
+        std::span<const byte>                  _src_data,
+        std::span<byte>                        _dst_data
+    ) const override;
+
+    void FlushDebugMessages() const override;
+    RuntimePlugin* LoadPlugin(std::string_view _name) override;
+
+    // Native Vulkan handles.
+    VkPhysicalDevice GetGpu() const {
+        return m_gpu;
+    }
+    VkInstance GetInstance() const {
+        return m_instance;
+    }
+    VkDevice GetDevice() const {
+        return m_device;
+    }
+
+    // Device properties and extension queries.
+    const VulkanDeviceCapabilities& GetCapabilities() const {
+        return m_device_info.capabilities;
+    }
+    const VulkanDeviceFeatures& GetCoreFeatures() const {
+        return m_device_info.core_features;
+    }
+    const VulkanCoreDeviceProperties& GetCoreProperties() const {
+        return m_device_info.core_properties;
+    }
+    const VulkanOptionalDeviceProperties& GetOptionalProperties() const {
+        return m_device_info.optional_properties;
+    }
+    QueueFamilyIndices GetQueueFamilyIndices() const {
+        return m_device_info.queue_family_indices;
+    }
+    // 查询当前设备是否启用了指定的 device extension（基于已启用扩展列表）
+    bool HasDeviceExtension(std::string_view _ext_name) const;
+
+    // Native queues and timestamp queries.
+    // Read the family selected for an engine queue role during initialization.
+    uint32 GetQueueFamilyIndex(EQueueType _queue_type) const;
+
+    VkQueue GetGraphicsQueue() const {
+        return m_graphics_queue_handle;
+    }
+    VkQueue GetComputeQueue() const {
+        return m_compute_queue_handle;
+    }
+    VkQueue GetTransferQueue() const {
+        return m_transfer_queue_handle;
+    }
+
+    [[nodiscard]] RENDER_API uint32 GetTimestampValidBits(
+        EQueueType _queue_type
+    ) const;
+    [[nodiscard]] RENDER_API VkQueueFlags GetQueueFamilyFlags(
+        EQueueType _queue_type
+    ) const;
+    [[nodiscard]] RENDER_API EVulkanTimestampQueryResetMode
+    GetTimestampQueryResetMode(
+        EQueueType _queue_type,
+        uint32     _effective_valid_bits
+    ) const;
+    [[nodiscard]] RENDER_API EVulkanTimestampQueryResetMode
+    GetTimestampQueryResetMode(
+        EQueueType _queue_type
+    ) const;
+
+    VulkanDescriptorMode GetDescriptorMode() const {
+        return descriptor_mode;
+    }
+    const VulkanDescriptorCapabilities& GetDescriptorCapabilities() const {
+        return descriptor_caps;
+    }
+    const VulkanDescriptorHeapFunctions& GetDescriptorHeapFunctions() const {
+        return descriptor_heap_functions;
+    }
+    const VkSamplerCreateInfo& GetSamplerCreateInfo(uint32 index) const {
+        return immutable_sampler_infos[index];
+    }
+
+    // Shared backend resources.
+    DeviceInternalShaders& GetInternalShaders() {
+        return *m_internal_shaders;
+    }
+    VulkanDescriptorHeap& GetGlobalDescriptorHeap() {
+        return m_global_descriptor_heap.value();
+    }
+    const VulkanDescriptorHeap& GetGlobalDescriptorHeap() const {
+        return m_global_descriptor_heap.value();
+    }
+    VmaAllocator GetVmaAllocator() const {
+        return m_allocator;
+    }
+
+    constexpr uint32 ImmutableSamplerCount() const {
+        return immutable_sampler_count;
+    }
+    const VkSampler* GetImmutableSamplers() const {
+        return immutable_samplers.data();
+    }
+    VkSampler GetSampler(Sampler _sampler) const;
+    uint32    GetSamplerIndex(Sampler _sampler) const {
+        uint32 filter  = uint32(_sampler.filter);
+        uint32 address = uint32(_sampler.address_mode);
+        uint32 compare = uint32(_sampler.compare_function);
+        return (uint32(SF_Num) * uint32(SAM_Num)) * compare + (uint32(SF_Num)) * address + filter;
+    }
+    void CopyData(const BufferView& _dst, const void* _data, uint64 _size);
+    void CopyData(void* _dst, const BufferView& _src, uint64 _size);
+    void           EnqueueDeferredRelease(RHIResource* _object);
+    void           FlushDeferredReleases();
+
+    // Native queue operations and admission.
+    VulkanOperationResult SubmitOnQueue(
+        VkQueue                       _queue,
+        const VkSubmitInfo2&          _submit_info,
+        VkFence                       _fence,
+        const VulkanOperationContext& _context
+    );
+    VulkanOperationResult PresentOnQueue(
+        VkQueue                       _queue,
+        const VkPresentInfoKHR&       _present_info,
+        const VulkanOperationContext& _context
+    );
+    VulkanOperationResult AcquireNextImage(
+        VkSwapchainKHR                _swapchain,
+        uint64                        _timeout,
+        VkSemaphore                   _semaphore,
+        VkFence                       _fence,
+        uint32*                       _image_index,
+        const VulkanOperationContext& _context
+    );
+    VkResult ResetCommandPool(VkCommandPool _pool, const VulkanOperationContext& _context);
+    using FaultAdmissionLock = std::unique_lock<std::shared_mutex>;
+    [[nodiscard]] FaultAdmissionLock AcquireFaultAdmission() {
+        return FaultAdmissionLock(native_queue_gate);
+    }
+
+    // Fault handling and diagnostics.
+    bool TryLatchFirstFault(
+        const VulkanOperationContext& _context,
+        VkResult                      _result,
+        bool                          _injected = false,
+        bool                          _predrained = false,
+        bool                          _force_terminal = false
+    );
+    [[nodiscard]] bool IsFaulted() const;
+    [[nodiscard]] bool IsDeviceLost() const;
+    [[nodiscard]] VkResult GetFirstFaultResult() const;
+    [[noreturn]] void EmergencyExitWithoutVulkanCleanup(
+        const VulkanOperationContext& _context, VkResult _result
+    );
+    void RecordRejectedSubmit();
+    void RecordRejectedPresent();
+    void RecordAllocatorQuarantine();
+    void RecordSkippedCommandPoolReset();
+    void RecordQueueSyncComplete();
+    void SetResourceName(uint64 _object, VkObjectType _object_type, const std::string_view _name);
+
+private:
+    friend class VulkanResourceStateValidator;
+    std::array<std::array<uint64, 3>, 3> accepted_queue_clocks{};
+    friend VulkanCommandQueue;
+    friend VulkanCommandRecorder;
+    friend class VulkanNativeQueue;
+#if MOER_VULKAN_TEST_SUPPORT
+    friend struct VulkanFaultInjection;
+#endif
+
+    // Initialization and shutdown.
+    void             InitVulkanInstance();
+    VkPhysicalDevice SelectGpu();
+    void             InitGpu();
+    void             LogGpuEnvironment() const;
+    void             CreateDevice();
+    void             CreateMemoryAllocator();
+    void             CreateDescriptorHeap();
+    void             DestroyDescriptorHeap();
+    void             CreateInternalResources();
+    void             DestroyInternalResources();
+    void             CreateImmutableSamplers();
+    void             DestroyImmutableSamplers();
+    void             PostInit() override;
+
+    void CreateInternalShaders();
+    void DestroyInternalShaders();
+
+    void Destroy();
+    void LogFaultSummary() const;
+
+    static Set<std::string> GetGpuExtensions(VkPhysicalDevice _gpu, const char* _layer_name = nullptr);
+    static TQueueFamilyPropertiesArray GetQueueFamilyProperties(VkPhysicalDevice _gpu);
+
+    QueueFamilyIndices SelectQueueFamilyIndices(VkPhysicalDevice _gpu) const;
+    void PopulateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& _create_info);
+    void SetupDebugUtilsMessengerEXT();
+
+    // Native synchronization and fault publication.
+    // Publishing closes admission before the first fault record is fully written.
+    enum class EVulkanFaultPublishState : uint8 {
+        Healthy,
+        Publishing,
+        Faulted
+    };
+
+    std::mutex& GetQueueHostMutex(VkQueue _queue);
+    Array<std::mutex*> GetUniqueQueueHostMutexes();
+    bool TryBeginFirstFault(VkResult _result);
+    void PublishFirstFaultLocked(
+        const VulkanOperationContext& _context,
+        VkResult                      _result,
+        bool                          _injected,
+        bool                          _predrained
+    );
+
+#if WITH_NRD
+    UniquePtr<Ext::VkNRDPlugin> nrd_plugin;
+#endif
+
+    // Cooperative capability metadata.
+    CooperativeExtensionInfo m_cooperative_extension_info{};
+
+    // Native device and queue handles.
+    VkInstance            m_instance                  = VK_NULL_HANDLE;
+    VkPhysicalDevice      m_gpu                       = VK_NULL_HANDLE;
+    VkDevice              m_device                    = VK_NULL_HANDLE;
+    VkQueue               m_graphics_queue_handle     = VK_NULL_HANDLE;
+    VkQueue               m_present_queue_handle      = VK_NULL_HANDLE;
+    VkQueue               m_compute_queue_handle      = VK_NULL_HANDLE;
+    VkQueue               m_transfer_queue_handle     = VK_NULL_HANDLE;
+
+    // Device properties.
+    VulkanDeviceInfo m_device_info{};
+
+    // Validation diagnostics.
+    VkDebugUtilsMessengerEXT m_debug_utils_messenger    = VK_NULL_HANDLE;
+    bool                     validation_layer_requested = false;
+    bool                     validation_layer_available = false;
+    bool                     validation_layer_enabled   = false;
+
+    // Shared resources and command queues.
+    VmaAllocator m_allocator = VK_NULL_HANDLE;
+    // Construct after the device and samplers; reset before destroying VMA.
+    VulkanDescriptorMode                                    descriptor_mode = VulkanDescriptorMode::Sets;
+    VulkanDescriptorCapabilities                            descriptor_caps;
+    VulkanDescriptorHeapFunctions                           descriptor_heap_functions;
+    std::array<VkSamplerCreateInfo, bindless_sampler_count> immutable_sampler_infos{};
+    std::optional<VulkanDescriptorHeap> m_global_descriptor_heap;
+    // Recording workspaces outlive queues, whose Completion workers return contexts.
+    UniquePtr<VulkanCommandRecorder> m_graphics_command_recorder{};
+    UniquePtr<VulkanCommandRecorder> m_compute_command_recorder{};
+    UniquePtr<VulkanCommandRecorder> m_copy_command_recorder{};
+    UniquePtr<VulkanCommandQueue> m_graphics_command_queue{};
+    UniquePtr<VulkanCommandQueue> m_compute_command_queue{};
+    UniquePtr<VulkanCopyQueue>    m_copy_queue{};
+
+    // Fault publication and diagnostics.
+    std::atomic<EVulkanFaultPublishState> fault_state{EVulkanFaultPublishState::Healthy};
+    std::atomic_bool                      device_lost_observed{false};
+    VulkanFaultRecord                     first_fault{};
+    std::atomic<uint32>                   first_fault_count{0};
+    std::atomic<uint64>                   native_submit_call_count{0};
+    std::atomic<uint64>                   native_present_call_count{0};
+    std::atomic<uint64>                   fault_submit_call_snapshot{0};
+    std::atomic<uint64>                   fault_present_call_snapshot{0};
+    std::atomic<uint64>                   rejected_submit_count{0};
+    std::atomic<uint64>                   rejected_present_count{0};
+    std::atomic<uint64>                   allocator_quarantine_count{0};
+    std::atomic<uint64>                   skipped_command_pool_reset_count{0};
+    std::atomic<uint64>                   queue_sync_complete_count{0};
+    std::atomic_bool                      shutdown_sync_completed{false};
+    std::atomic_bool                      emergency_exit_started{false};
+    // Shared access covers native calls; fault publication takes exclusive access.
+    std::shared_mutex native_queue_gate;
+    // Every host call operating on the same VkQueue must use the same mutex.
+    std::mutex m_graphics_queue_mutex;
+    std::mutex m_present_queue_mutex;
+    std::mutex m_compute_queue_mutex;
+    std::mutex m_transfer_queue_mutex;
+
+    // Deferred release and immutable samplers.
+    LockFreeQueueBase<RHIResource, false, 64> deferred_release_queue{};
+
+    static constexpr uint32 immutable_sampler_count = uint32(SF_Num) * uint32(SAM_Num) * uint32(SCF_Num);
+
+    StaticArray<VkSampler, immutable_sampler_count> immutable_samplers{};
+
+    // Internal shader ownership.
+    UniquePtr<DeviceInternalShaders> m_internal_shaders;
+};
+} // namespace Moer::Render
+#endif // VULKAN_DEVICE_H

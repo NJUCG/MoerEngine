@@ -8,7 +8,7 @@
 #include "renderer/EditorConfig.h"
 #include "rendergraph/RenderGraphResourcePool.h"
 #include "rhi/RHI.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "scene/Scene.h"
 #include "shader/ShaderResourceManager.h"
 #include "window/WindowContext.h"
@@ -33,7 +33,7 @@ Renderer::Renderer(
     main_window_surface(std::move(_main_window_surface)),
     scene(),
     cmd_list() {
-
+    cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     {
         main_presentation_surface = MakeUnique<PresentationSurface>(
             device,
@@ -155,12 +155,15 @@ void Renderer::ReleaseResources() {
     device.WaitIdle();
 
     render_scene.reset();
+    cmd_list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     cmd_list.UpdateBindlessArray(bindless_array);
     RHIExecutor::Get().Submit(
         EQueueType::Graphics,
         cmd_list.Submit().DeleteResources(),
         ERHIExecSubmitFlags::FlushGPU
     );
+    // Failure must stop teardown: GPU idle alone does not guarantee that CPU
+    // completion callbacks have released the scene and pooled resources.
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     scene.Reset();

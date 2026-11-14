@@ -10,13 +10,9 @@
         float2x2 rotation       = GetRandomRotation(ctx.screenUV);                                    \
         float    receiver_depth = GetFragmentDepth##SUFFIX(ctx);                                      \
                                                                                                       \
-        float dynamicBias = SHADOW_BIAS;                                                              \
-        if (PCSS_DYNAMIC_DEPTH_BIAS) {                                                                \
-            dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);                               \
-            if (PCSS_MAX_DEPTH_BIAS) {                                                                \
-                dynamicBias = min(dynamicBias, SHADOW_BIAS);                                          \
-            }                                                                                         \
-        }                                                                                             \
+        float dynamicBias = GetShadowDepthBias(                                                      \
+            ctx.normal, ctx.lightDir, SHADOW_BIAS, PCSS_DYNAMIC_DEPTH_BIAS != 0, PCSS_MAX_DEPTH_BIAS != 0 \
+        );                                                                                           \
                                                                                                       \
         [loop] for (int i = 0; i < PCSS_SAMPLES; ++i) {                                             \
             float2 disk_sample = mul(rotation, POISSON_DISK[i]);                                      \

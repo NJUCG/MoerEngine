@@ -7,16 +7,16 @@ configure_file(${moer_runtime_render_dir}/config.h.in ${moer_runtime_render_dir}
 file(GLOB_RECURSE render_module_headers CONFIGURE_DEPENDS "*.h" ".hpp" "*.hlsli")
 file(GLOB_RECURSE render_module_sources CONFIGURE_DEPENDS "*.cpp")
 if (APPLE)
-    file(GLOB_RECURSE metal_module_sources CONFIGURE_DEPENDS "rhi/metal/*.mm")
+    file(GLOB_RECURSE metal_module_sources CONFIGURE_DEPENDS "rhi/backends/metal/*.mm")
     list(APPEND render_module_sources ${metal_module_sources})
 endif()
 if (NOT WIN32)
-    list(FILTER render_module_headers EXCLUDE REGEX "/rhi/d3d12/")
-    list(FILTER render_module_sources EXCLUDE REGEX "/rhi/d3d12/")
+    list(FILTER render_module_headers EXCLUDE REGEX "/rhi/backends/d3d12/")
+    list(FILTER render_module_sources EXCLUDE REGEX "/rhi/backends/d3d12/")
 endif()
 if (APPLE)
-    list(FILTER render_module_headers EXCLUDE REGEX "/rhi/vulkan/")
-    list(FILTER render_module_sources EXCLUDE REGEX "/rhi/vulkan/")
+    list(FILTER render_module_headers EXCLUDE REGEX "/rhi/backends/vulkan/")
+    list(FILTER render_module_sources EXCLUDE REGEX "/rhi/backends/vulkan/")
 endif()
 file(GLOB_RECURSE render_shader_sources CONFIGURE_DEPENDS
     "${moer_shader_dir}/*.hlsl"
@@ -38,8 +38,28 @@ add_library(${target_name} SHARED
     ${render_shader_sources}
 )
 add_library(Moer::Render ALIAS ${target_name})
+if(MOER_RDG_DIAGNOSTICS)
+    target_sources(${target_name} PRIVATE "${moer_source_dir}/test/diagnostics/RdgAllocationOverrides.cpp")
+endif()
 
-# Public dependency contract for every header under rhi/vulkan. Keeping Volk,
+# Test probes live with the tests and are absent from ordinary Render builds.
+# Compile inside Render only when enabled so backend-private symbols stay private.
+if (MOER_VULKAN_TEST_SUPPORT AND NOT APPLE)
+    target_sources(${target_name} PRIVATE
+        "${moer_source_dir}/test/vulkan/VulkanSubmissionProbe.cpp"
+        "${moer_source_dir}/test/vulkan/VulkanSubmissionTestHooks.cpp"
+        "${moer_source_dir}/test/vulkan/VulkanFaultInjection.cpp"
+    )
+    target_include_directories(${target_name} PRIVATE "${moer_source_dir}/test")
+    if (WITH_CUDA)
+        target_sources(${target_name} PRIVATE "${moer_source_dir}/test/vulkan/CudaInteropProbe.cpp")
+    endif()
+endif()
+target_compile_definitions(${target_name} PUBLIC
+    MOER_VULKAN_TEST_SUPPORT=$<BOOL:${MOER_VULKAN_TEST_SUPPORT}>
+)
+
+# Public dependency contract for every header under rhi/backends/vulkan. Keeping Volk,
 # Vulkan platform declarations, and VMA includes on one interface target makes
 # the required macros available before any consumer can parse Vulkan headers.
 add_library(moer_vulkan_headers INTERFACE)

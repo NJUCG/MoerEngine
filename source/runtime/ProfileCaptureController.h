@@ -3,9 +3,9 @@
 #include "profile/ProfileDump.h"
 #include "profile/RenderProfileCapture.h"
 
+#include "misc/Types.h"
 #include <atomic>
 #include <cstddef>
-#include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -13,7 +13,7 @@
 
 namespace Moer::Render {
 
-enum class ProfileCaptureControllerState : std::uint8_t {
+enum class ProfileCaptureControllerState : uint8 {
     Idle = 0,
     Starting,
     Running,
@@ -24,12 +24,12 @@ enum class ProfileCaptureControllerState : std::uint8_t {
     Shutdown,
 };
 
-enum class ProfileCaptureRequestKind : std::uint8_t {
+enum class ProfileCaptureRequestKind : uint8 {
     Start = 0,
     Stop,
 };
 
-enum class ProfileCaptureSubmitResult : std::uint8_t {
+enum class ProfileCaptureSubmitResult : uint8 {
     Queued = 0,
     AdmissionClosed,
     QueueFull,
@@ -37,7 +37,7 @@ enum class ProfileCaptureSubmitResult : std::uint8_t {
     ResourceExhausted,
 };
 
-enum class ProfileCaptureCompletionStatus : std::uint8_t {
+enum class ProfileCaptureCompletionStatus : uint8 {
     Pending = 0,
     Started,
     StartedCpuOnly,
@@ -64,7 +64,7 @@ enum class ProfileCaptureCompletionStatus : std::uint8_t {
     ControllerDestroyed,
 };
 
-enum class ProfileCaptureTickResult : std::uint8_t {
+enum class ProfileCaptureTickResult : uint8 {
     Idle = 0,
     Progressed,
     WaitingForGpu,
@@ -72,7 +72,7 @@ enum class ProfileCaptureTickResult : std::uint8_t {
     Shutdown,
 };
 
-enum class ProfileCaptureLifecycleResult : std::uint8_t {
+enum class ProfileCaptureLifecycleResult : uint8 {
     Advanced = 0,
     AlreadyAtBoundary,
     WrongThread,
@@ -82,12 +82,12 @@ enum class ProfileCaptureLifecycleResult : std::uint8_t {
 // The two detail fields retain the raw subsystem result values for telemetry.
 // Their interpretation is selected by status and remains optional to callers.
 struct ProfileCaptureRequestCompletion {
-    std::uint64_t                  request_id{0};
-    std::uint64_t                  generation{0};
+    uint64                         request_id{0};
+    uint64                         generation{0};
     ProfileCaptureRequestKind      kind{ProfileCaptureRequestKind::Start};
     ProfileCaptureCompletionStatus status{ProfileCaptureCompletionStatus::Pending};
-    std::uint32_t                  detail{0};
-    std::uint32_t                  secondary_detail{0};
+    uint32                         detail{0};
+    uint32                         secondary_detail{0};
 };
 
 namespace ProfileCaptureControllerDetail {
@@ -134,16 +134,16 @@ struct ProfileCaptureControllerSnapshot {
     bool                          gpu_session_active{false};
     std::size_t                   queued_requests{0};
     std::size_t                   queue_capacity{0};
-    std::uint64_t                 active_generation{0};
-    std::uint64_t                 last_completed_request_id{0};
+    uint64                         active_generation{0};
+    uint64                         last_completed_request_id{0};
     ProfileCaptureCompletionStatus last_completion_status{
         ProfileCaptureCompletionStatus::Pending
     };
-    std::uint64_t requests_submitted{0};
-    std::uint64_t requests_accepted{0};
-    std::uint64_t requests_rejected{0};
-    std::uint64_t requests_completed{0};
-    std::uint64_t wrong_thread_calls{0};
+    uint64 requests_submitted{0};
+    uint64 requests_accepted{0};
+    uint64 requests_rejected{0};
+    uint64 requests_completed{0};
+    uint64 wrong_thread_calls{0};
 };
 
 // Game Thread owns all capture lifecycle transitions. RequestStart and
@@ -175,7 +175,7 @@ public:
 
     // A zero generation is never a wildcard and is rejected at admission.
     [[nodiscard]] ProfileCaptureRequestSubmission
-    RequestStop(std::uint64_t _expected_generation) noexcept;
+    RequestStop(uint64 _expected_generation) noexcept;
 
     [[nodiscard]] ProfileCaptureTickResult TickOwner() noexcept;
 
@@ -201,7 +201,7 @@ private:
     struct Request {
         ProfileCaptureRequestKind kind{ProfileCaptureRequestKind::Start};
         ProfileCaptureStartOptions start_options{};
-        std::uint64_t expected_generation{0};
+        uint64                                                           expected_generation{0};
         std::shared_ptr<ProfileCaptureControllerDetail::CompletionState> completion{};
     };
 
@@ -219,12 +219,12 @@ private:
     [[nodiscard]] bool OwnsPublishedGeneration() const noexcept;
     [[nodiscard]] bool OnOwnerThread() noexcept;
     void PublishOwnerState() noexcept;
-    void Complete(
+    void               Complete(
         const std::shared_ptr<ProfileCaptureControllerDetail::CompletionState>& _completion,
-        ProfileCaptureCompletionStatus                                           _status,
-        std::uint64_t                                                            _generation,
-        std::uint32_t                                                            _detail = 0,
-        std::uint32_t _secondary_detail = 0
+        ProfileCaptureCompletionStatus                                          _status,
+        uint64                                                                  _generation,
+        uint32                                                                  _detail           = 0,
+        uint32                                                                  _secondary_detail = 0
     ) noexcept;
     void CancelQueued(ProfileCaptureCompletionStatus _status) noexcept;
 
@@ -235,12 +235,12 @@ private:
     // Protected by request_mutex_. Assigning the id and appending an accepted
     // request share one linearization point, so accepted ids strictly follow
     // FIFO order even when producers race.
-    std::uint64_t next_request_id_{1};
+    uint64                           next_request_id_{1};
     std::deque<Request> requests_{};
     ProfileCaptureControllerSnapshot published_{};
 
     ProfileCaptureControllerState state_{ProfileCaptureControllerState::Idle};
-    std::uint64_t                  active_generation_{0};
+    uint64                         active_generation_{0};
     bool                           owns_runtime_{false};
     bool                           cpu_producer_active_{false};
     bool                           gpu_session_active_{false};

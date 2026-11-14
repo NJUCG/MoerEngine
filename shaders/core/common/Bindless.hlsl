@@ -1,6 +1,23 @@
 #ifndef FRAMEWORK_BINDLESS_COMMON_HLSL
 #define FRAMEWORK_BINDLESS_COMMON_HLSL
 
+#include "shared/ShaderConstants.h"
+
+#if VULKAN
+uint64_t MoerBindlessIndexTableAddress();
+uint LoadBindlessIndex(uint index) {
+  return vk::RawBufferLoad<uint>(MoerBindlessIndexTableAddress() + uint64_t(index) * 4, 4);
+}
+#define MOER_LOAD_BINDLESS_INDEX(index) LoadBindlessIndex(index)
+#define MOER_BINDLESS_BUFFER_BINDINGS(BufferSpace) \
+  [[vk::binding(0, BufferSpace)]] ByteAddressBuffer gbuffer__114514_bdls[];
+#else
+#define MOER_LOAD_BINDLESS_INDEX(index) g__array_114514_bdls[NonUniformResourceIndex(index)]
+#define MOER_BINDLESS_BUFFER_BINDINGS(BufferSpace) \
+  [[vk::binding(0, BufferSpace)]] StructuredBuffer<uint> g__array_114514_bdls; \
+  [[vk::binding(1, BufferSpace)]] ByteAddressBuffer gbuffer__114514_bdls[];
+#endif
+
 #define DEBUG_MODE 1
 #define NUM_STATIC_SAMPLERS 256
 #define BINDLESS_SUFFIX _114514_bdls
@@ -147,7 +164,7 @@ struct SamplerHeapHandle {
 #define INNER_GENERATE_TEXTURE_TYPE_FETCH(NativeType, TextureType)             \
   TextureType<NativeType> operator[](TextureType##Handle<NativeType> handle) { \
     uint tex_handle =                                                          \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];     \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);     \
     uint tex_idx = tex_handle >> 8;                                            \
     return ACCESS_GLOBAL_TEXTURE_HEAP(NativeType, TextureType, tex_idx);       \
   }
@@ -159,7 +176,7 @@ struct SamplerHeapHandle {
 #define INNER_GENERATE_TEXTURE_TYPE_FETCH_WITHOUT_TEMPLATE(TextureType)       \
   TextureType operator[](TextureType##HandleNative handle) {                  \
     uint tex_handle =                                                         \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];    \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);    \
     uint tex_idx = tex_handle >> 8;                                           \
     return ACCESS_GLOBAL_TEXTURE_HEAP_WITHOUT_TEMPLATE(TextureType, tex_idx); \
   }
@@ -173,7 +190,7 @@ struct SamplerHeapHandle {
                     CoordType                             uv,                              \
                     OffsetType                            offset) {                        \
     uint tex_handle =                                                                      \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];                 \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);                 \
     uint                    tex_idx     = tex_handle >> 8;                                 \
     uint                    sampler_idx = tex_handle & 0xff;                               \
     TextureType<NativeType> tex =                                                          \
@@ -190,7 +207,7 @@ struct SamplerHeapHandle {
   TextureType, CoordType, OffsetType)                                                      \
   float4 Sample(TextureType##SampleHandleNative handle, CoordType uv, OffsetType offset) { \
     uint tex_handle =                                                                      \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];                 \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);                 \
     uint        tex_idx     = tex_handle >> 8;                                             \
     uint        sampler_idx = tex_handle & 0xff;                                           \
     TextureType tex =                                                                      \
@@ -209,7 +226,7 @@ struct SamplerHeapHandle {
                          OffsetType                            offset,                           \
                          float                                 level) {                          \
     uint tex_handle =                                                                            \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];                       \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);                       \
     uint                    tex_idx     = tex_handle >> 8;                                       \
     uint                    sampler_idx = tex_handle & 0xff;                                     \
     TextureType<NativeType> tex =                                                                \
@@ -226,7 +243,7 @@ struct SamplerHeapHandle {
   TextureType, CoordType, OffsetType)                                                                        \
   float4 SampleLevel(TextureType##SampleHandleNative handle, CoordType uv, OffsetType offset, float level) { \
     uint tex_handle =                                                                                        \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];                                   \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);                                   \
     uint        tex_idx     = tex_handle >> 8;                                                               \
     uint        sampler_idx = tex_handle & 0xff;                                                             \
     TextureType tex =                                                                                        \
@@ -246,7 +263,7 @@ struct SamplerHeapHandle {
                         CoordType                             grad_x,                           \
                         CoordType                             grad_y) {                         \
     uint tex_handle =                                                                           \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];                      \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);                      \
     uint                    tex_idx     = tex_handle >> 8;                                      \
     uint                    sampler_idx = tex_handle & 0xff;                                    \
     TextureType<NativeType> tex =                                                               \
@@ -263,7 +280,7 @@ struct SamplerHeapHandle {
   TextureType, CoordType, OffsetType)                                                                                              \
   float4 SampleGrad(TextureType##SampleHandleNative handle, CoordType uv, OffsetType offset, CoordType grad_x, CoordType grad_y) { \
     uint tex_handle =                                                                                                              \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];                                                         \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);                                                         \
     uint        tex_idx     = tex_handle >> 8;                                                                                     \
     uint        sampler_idx = tex_handle & 0xff;                                                                                   \
     TextureType tex =                                                                                                              \
@@ -292,7 +309,7 @@ struct SamplerHeapHandle {
   NativeType Sample(TextureType##SampleHandle<NativeType> handle,                  \
                     CoordType                             uv) {                    \
     uint tex_handle =                                                              \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];         \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);         \
     uint                    tex_idx     = tex_handle >> 8;                         \
     uint                    sampler_idx = tex_handle & 0xff;                       \
     TextureType<NativeType> tex =                                                  \
@@ -304,7 +321,7 @@ struct SamplerHeapHandle {
 #define INNER_GENERATE_TEXTURE_CUBE_SAMPLE_WITHOUT_TEMPLATE(TextureType, CoordType)\
   float4 Sample(TextureType##SampleHandleNative handle, CoordType uv) {            \
     uint tex_handle =                                                              \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];         \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);         \
     uint        tex_idx     = tex_handle >> 8;                                     \
     uint        sampler_idx = tex_handle & 0xff;                                   \
     TextureType tex =                                                              \
@@ -319,7 +336,7 @@ struct SamplerHeapHandle {
                          CoordType                             uv,                   \
                          float                                 level) {              \
     uint tex_handle =                                                                \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];           \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);           \
     uint                    tex_idx     = tex_handle >> 8;                           \
     uint                    sampler_idx = tex_handle & 0xff;                         \
     TextureType<NativeType> tex =                                                    \
@@ -331,7 +348,7 @@ struct SamplerHeapHandle {
 #define INNER_GENERATE_TEXTURE_CUBE_SAMPLE_LEVEL_WITHOUT_TEMPLATE(TextureType, CoordType) \
   float4 SampleLevel(TextureType##SampleHandleNative handle, CoordType uv, float level) { \
     uint tex_handle =                                                                     \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];                \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);                \
     uint        tex_idx     = tex_handle >> 8;                                            \
     uint        sampler_idx = tex_handle & 0xff;                                          \
     TextureType tex =                                                                     \
@@ -347,7 +364,7 @@ struct SamplerHeapHandle {
                         CoordType                             grad_x,               \
                         CoordType                             grad_y) {             \
     uint tex_handle =                                                               \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];          \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);          \
     uint                    tex_idx     = tex_handle >> 8;                          \
     uint                    sampler_idx = tex_handle & 0xff;                        \
     TextureType<NativeType> tex =                                                   \
@@ -359,7 +376,7 @@ struct SamplerHeapHandle {
 #define INNER_GENERATE_TEXTURE_CUBE_SAMPLE_GRAD_WITHOUT_TEMPLATE(TextureType, CoordType)                \
   float4 SampleGrad(TextureType##SampleHandleNative handle, CoordType uv, CoordType grad_x, CoordType grad_y) { \
     uint tex_handle =                                                                                   \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)];                              \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex);                              \
     uint        tex_idx     = tex_handle >> 8;                                                          \
     uint        sampler_idx = tex_handle & 0xff;                                                        \
     TextureType tex =                                                                                   \
@@ -383,7 +400,7 @@ struct SamplerHeapHandle {
 #define INNER_GENERATE_BUFFER_FETCH()                                      \
   ByteAddressBuffer operator[](ByteBufferHandle handle) {                  \
     uint array_handle =                                                    \
-      g__array_114514_bdls[NonUniformResourceIndex(handle.internalIndex)]; \
+      MOER_LOAD_BINDLESS_INDEX(handle.internalIndex); \
     return ACCESS_GLOBAL_BUFFER_HEAP(array_handle);                        \
   }
 
@@ -525,8 +542,7 @@ vkResourceDescriptorHeap.Sample(HandleType(handle), uv)
     0, Space)]] RaytracingAccelerationStructure gaccelg__114514_bdls[];
 
 #define BINDLESS_BINDINGS(BufferSpace, TextureSpace, SamplerSpace, AccelSpace)    \
-  [[vk::binding(0, BufferSpace)]] StructuredBuffer<uint> g__array_114514_bdls;    \
-  [[vk::binding(1, BufferSpace)]] ByteAddressBuffer      gbuffer__114514_bdls[];  \
+  MOER_BINDLESS_BUFFER_BINDINGS(BufferSpace)                                    \
   [[vk::binding(0, SamplerSpace)]] SamplerState          gsampler__114514_bdls[]; \
   DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture1D, 0, TextureSpace)               \
   DEFINE_TEXTURE_TYPE_AND_FORMATS_SLOTS(Texture2D, 0, TextureSpace)               \

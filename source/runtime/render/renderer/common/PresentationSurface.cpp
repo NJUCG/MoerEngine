@@ -1,7 +1,8 @@
 #include "renderer/common/PresentationSurface.h"
+#include "GraphResourceBoundary.h"
 
 #include "RenderThread.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 
 #include <cassert>
 #include <exception>
@@ -177,16 +178,11 @@ EPresentationSurfaceEnsureResult PresentationSurface::EnsureCurrent(
     try {
         Quiesce();
     } catch (const std::exception& error) {
-        LOG_ERROR(
-            "[Presentation] targeted drain failed before recreate: {}",
-            error.what()
-        );
+        LOG_ERROR("[Presentation] presentation sync failed before recreate: {}", error.what());
         state_.Reject();
         return EPresentationSurfaceEnsureResult::RetryPending;
     } catch (...) {
-        LOG_ERROR(
-            "[Presentation] targeted drain failed before recreate"
-        );
+        LOG_ERROR("[Presentation] presentation sync failed before recreate");
         state_.Reject();
         return EPresentationSurfaceEnsureResult::RetryPending;
     }
@@ -230,6 +226,7 @@ EPresentationSurfaceEnsureResult PresentationSurface::EnsureCurrent(
             return EPresentationSurfaceEnsureResult::RetryPending;
         }
         committed_frame_buffer->SetName(desc_.debug_name);
+        InitializeGraphicsTexture(committed_frame_buffer, RenderGraph::TextureAccessType::TransferSource);
     }
 
     if (!state_.Commit(window_frame, actual_extent)) {
@@ -280,51 +277,33 @@ void PresentationSurface::Quiesce() {
     if (!swapchain_ && !frame_buffer_) {
         return;
     }
-    if (swapchain_) {
-        const PresentationSurfaceSnapshot& committed =
-            state_.GetCommittedSnapshot();
-        RHIExecutor::Get().DrainPresentation(
-            RHIPresentationDrainTarget{
-                swapchain_,
-                state_.GetCommittedEpoch(),
-                committed.drawable_generation,
-            }
-        );
-    } else {
-        // Defensive partial-construction fallback. A committed presentation
-        // surface always owns a swapchain; only a failed setup path can retain
-        // a framebuffer without one.
-        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    }
+    RHIExecutor::Get().Sync(swapchain_ ? ERHISyncDepth::Present : ERHISyncDepth::RHI);
 }
 
 void PresentationSurface::Release() noexcept {
     AssertRenderOwner();
-    const auto fallback_to_device_idle =
-        [this](const char* _reason) noexcept {
-            // Recreate must reject an unsafe transition, but teardown cannot
-            // let a cancelled/faulted executor escape an owner destructor.
-            // Device idle is the final lifetime-safe fallback because it
-            // serializes directly with every native queue operation.
+    const auto fallback_to_device_idle = [this](const char* _reason) noexcept {
+        // Recreate must reject an unsafe transition, but teardown cannot
+        // let a cancelled/faulted executor escape an owner destructor.
+        // Match the coarse Vulkan presentation teardown policy when the
+        // ordinary submission synchronization could not finish.
+        try {
+            LOG_ERROR(
+                "[Presentation] presentation sync failed during release; "
+                "falling back to device idle: {}",
+                _reason
+            );
+        } catch (...) {
+        }
+        try {
+            device_.WaitIdle();
+        } catch (...) {
             try {
-                LOG_ERROR(
-                    "[Presentation] targeted drain failed during release; "
-                    "falling back to device idle: {}",
-                    _reason
-                );
+                LOG_ERROR("[Presentation] device-idle fallback failed during release");
             } catch (...) {
             }
-            try {
-                device_.WaitIdle();
-            } catch (...) {
-                try {
-                    LOG_ERROR(
-                        "[Presentation] device-idle fallback failed during release"
-                    );
-                } catch (...) {
-                }
-            }
-        };
+        }
+    };
 
     if (swapchain_ || frame_buffer_) {
         try {

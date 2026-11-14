@@ -1,5 +1,7 @@
 #pragma once
 
+#include "misc/Types.h"
+
 // 定义 Raytracing 管线可由编辑器调整的运行时配置。
 
 #include "misc/Traits.h"
@@ -44,19 +46,19 @@ struct GridConfig {
 };
 
 struct ReSTIRDIInitialSampleConfig {
-    uint local_light_sample_mode                = Render::s_di_local_light_sample_mode_grid;
+    uint32 local_light_sample_mode                = Render::s_di_local_light_sample_mode_grid;
     bool enable_adaptive_local_light_sampling   = true;
     int  grid_min_local_light_count             = 64;
 };
 
 struct ReSTIRDITemporalResampleConfig {
-    uint  bias_correction  = Render::s_di_bias_correction_traced;
+    uint32 bias_correction  = Render::s_di_bias_correction_traced;
     float depth_threshold  = 10.f;
     float normal_threshold = 0.5f;
 };
 
 struct ReSTIRDISpatialResampleConfig {
-    uint  bias_correction     = Render::s_di_bias_correction_traced;
+    uint32 bias_correction     = Render::s_di_bias_correction_traced;
     float depth_threshold     = 0.2f;
     float normal_threshold    = 0.5f;
     int   num_spatial_samples = 2;
@@ -84,7 +86,7 @@ struct ReBlurAntilagParams {
 struct DenoiserConfig {
     ReBlurHitDistParams hit_dist_params{};
     ReBlurAntilagParams antilag_params{};
-    uint                denoiser_type = Render::s_denoiser_mode_relax;
+    uint32              denoiser_type = Render::s_denoiser_mode_relax;
 };
 
 struct ToneMappingConfig {
@@ -124,7 +126,7 @@ struct RaytracingConfig {
     float3 sun_direction               = float3(0.f, 0.5f, 0.16f);
     float  directional_light_intensity = 6.f;
     float  sun_angular_diameter        = 0.533f;
-    uint   max_bounce                  = 4;
+    uint32 max_bounce                  = 4;
 
     GridConfig           grid_config{};
     ReSTIRDIConfig       restir_di_cfg{};

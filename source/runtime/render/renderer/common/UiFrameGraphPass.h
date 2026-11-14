@@ -2,6 +2,7 @@
 
 #include "UIRenderer.h"
 #include "UiCombinePass.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 
 #include <atomic>
@@ -19,7 +20,7 @@ class UiFrameGraphPassTestAccess;
  */
 class RENDER_API UiFrameGraphPass {
 public:
-    enum class ERecordingState : uint8_t {
+    enum class ERecordingState : uint8 {
         Prepared,
         Recording,
         Recorded,
@@ -112,7 +113,7 @@ public:
         GraphPasses&                     passes
     );
 
-    [[nodiscard]] static bool ProcessLinear(
+    [[nodiscard]] static bool ProcessCompiled(
         CommandList&            cmd_list,
         UiCombinePass&          combine_pass,
         const PreparedFrameRef& frame,
@@ -120,17 +121,12 @@ public:
         const TextureRef&       main_output
     );
 
-    /**
-     * Records the terminal BackendTracked export used by UI paths whose draw
-     * commands live outside an explicit RenderGraph packet. Every main,
-     * detached-scene, and platform-window target is deduplicated and published
-     * only after the containing native Graphics submit is accepted.
-     */
-    [[nodiscard]] static bool RecordPresentationBoundary(
-        CommandList&                  cmd_list,
+    static void RecordCompiledDraw(
+        CommandList&                  commands,
         const UiCompositionFrameData& composition,
         const UiDrawFramePacket&      draw_frame,
-        const TextureRef&             main_output
+        const TextureRef&             main_output,
+        EUiDrawExecutionThread        execution_thread
     );
 
 private:
@@ -150,14 +146,6 @@ private:
         RenderGraph::TokenHandle   presentation_ready,
         GraphPasses&               passes
     );
-    [[nodiscard]] static bool ProcessLinearWithComposeRecorder(
-        CommandList&            cmd_list,
-        ComposeRecorder         compose_recorder,
-        const PreparedFrameRef& frame,
-        const TextureRef&       scene_color,
-        const TextureRef&       main_output
-    );
-
     static void RecordClear(
         CommandList&             cmd_list,
         const Array<TextureRef>& targets

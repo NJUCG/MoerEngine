@@ -1,6 +1,7 @@
 // 将 MoerEngine.toml 中的字段加载到强类型全局配置结构中。
-#include "config/GlobalConfig.h"
 
+#include "config/GlobalConfig.h"
+#include "misc/Types.h"
 #include <toml++/toml.hpp>
 
 namespace Moer::Config {
@@ -32,35 +33,13 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
 
     loaded_config.engine.threading.render_thread =
         toml_config.at_path("engine.threading.render_thread").value_or(false);
-    loaded_config.engine.threading.rhi_thread =
-        toml_config.at_path("engine.threading.rhi_thread").value_or(false);
-    loaded_config.engine.threading.rhi_bypass =
-        toml_config.at_path("engine.threading.rhi_bypass").value_or(true);
     loaded_config.engine.threading.profile_logging =
         toml_config.at_path("engine.threading.profile_logging").value_or(false);
-    loaded_config.engine.threading.parallel_recording =
-        toml_config.at_path("engine.threading.parallel_recording").value_or(false);
-    loaded_config.engine.threading.parallel_record_workers =
-        toml_config.at_path("engine.threading.parallel_record_workers").value_or(uint{0});
-    loaded_config.engine.threading.parallel_record_verify =
-        toml_config.at_path("engine.threading.parallel_record_verify").value_or(false);
-    loaded_config.engine.threading.parallel_record_profile =
-        toml_config.at_path("engine.threading.parallel_record_profile").value_or(false);
-    loaded_config.engine.threading.parallel_record_min_work_units_per_job =
-        toml_config.at_path("engine.threading.parallel_record_min_work_units_per_job")
-            .value_or(uint{8});
+
     loaded_config.engine.threading.submission_batch_window =
-        toml_config.at_path("engine.threading.submission_batch_window").value_or(uint{2});
-    loaded_config.engine.threading.rhi_heartbeat_enabled =
-        toml_config.at_path("engine.threading.rhi_heartbeat_enabled").value_or(false);
-    loaded_config.engine.threading.rhi_heartbeat_stall_timeout_ms =
-        toml_config.at_path("engine.threading.rhi_heartbeat_stall_timeout_ms")
-            .value_or(uint{5000});
-    loaded_config.engine.threading.rhi_heartbeat_poll_interval_ms =
-        toml_config.at_path("engine.threading.rhi_heartbeat_poll_interval_ms")
-            .value_or(uint{1000});
+        toml_config.at_path("engine.threading.submission_batch_window").value_or(uint32{2});
     loaded_config.engine.threading.max_frame_lag =
-        toml_config.at_path("engine.threading.max_frame_lag").value_or(uint{0});
+        toml_config.at_path("engine.threading.max_frame_lag").value_or(uint32{0});
 
     loaded_config.engine.profile_dump.enabled =
         toml_config.at_path("engine.profile_dump.enabled").value_or(false);
@@ -82,14 +61,10 @@ GlobalConfig GlobalConfig::LoadConfigFromTomlFile(const std::string_view& toml_p
         toml_config.at_path("engine.render.raster.enable_shadow").value_or(true);
     loaded_config.engine.render.raster.low_quality_mode =
         toml_config.at_path("engine.render.raster.low_quality_mode").value_or(false);
-    loaded_config.engine.render.raster.render_graph =
-        toml_config.at_path("engine.render.raster.render_graph").value_or(false);
     loaded_config.engine.render.raster.render_graph_debug_dump =
         toml_config.at_path("engine.render.raster.render_graph_debug_dump").value_or(false);
     loaded_config.engine.render.raster.render_graph_parallel_recording =
         toml_config.at_path("engine.render.raster.render_graph_parallel_recording").value_or(false);
-    loaded_config.engine.render.raytracing.render_graph =
-        toml_config.at_path("engine.render.raytracing.render_graph").value_or(false);
     loaded_config.engine.render.raytracing.render_graph_debug_dump =
         toml_config.at_path("engine.render.raytracing.render_graph_debug_dump").value_or(false);
     loaded_config.engine.render.raytracing.render_graph_parallel_recording =

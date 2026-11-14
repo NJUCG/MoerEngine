@@ -1,5 +1,5 @@
 #include "console/ConsolePanel.h"
-
+#include "misc/Types.h"
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -68,7 +68,7 @@ void ConsolePanel::ShowWindow(bool* open) {
     input_active = false;
     static_cast<void>(model.Pump());
     const auto& output_lines = model.GetLines();
-    const std::uint64_t newest_line_sequence =
+    const uint64 newest_line_sequence =
         output_lines.empty() ? 0 : output_lines.back().session_sequence;
     if (newest_line_sequence != 0 &&
         newest_line_sequence != observed_line_sequence && auto_scroll) {
@@ -260,8 +260,8 @@ void ConsolePanel::RefreshOutputMetrics(
         return;
     }
 
-    const std::uint64_t first_sequence = lines.front().session_sequence;
-    const std::uint64_t last_sequence  = lines.back().session_sequence;
+    const uint64 first_sequence = lines.front().session_sequence;
+    const uint64 last_sequence  = lines.back().session_sequence;
     while (!output_line_measurements.empty() &&
            output_line_measurements.front().sequence < first_sequence) {
         const float removed_width = output_line_measurements.front().width;
@@ -281,7 +281,7 @@ void ConsolePanel::RefreshOutputMetrics(
         reset_measurements();
     }
 
-    const std::uint64_t measured_through =
+    const uint64 measured_through =
         output_line_measurements.empty() ? 0 : output_line_measurements.back().sequence;
     for (const ConsoleSessionLine& line : lines) {
         if (line.session_sequence <= measured_through) {

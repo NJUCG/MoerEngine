@@ -10,13 +10,36 @@
 #error "Moer::Render must propagate VK_NO_PROTOTYPES to every consumer."
 #endif
 
+#if defined(_WIN32) && !defined(VK_USE_PLATFORM_WIN32_KHR)
+#error "Moer::VulkanHeaders must propagate VK_USE_PLATFORM_WIN32_KHR."
+#elif defined(__linux__) && !defined(VK_USE_PLATFORM_XLIB_KHR)
+#error "Moer::VulkanHeaders must propagate VK_USE_PLATFORM_XLIB_KHR."
+#endif
+
 #include "rhi/RHIWindowSurface.h"
+#include "rhi/backends/vulkan/VulkanBindlessArray.h"
+#include "rhi/backends/vulkan/VulkanCommandContext.h"
+#include "rhi/backends/vulkan/VulkanCommandProfiler.h"
+#include "rhi/backends/vulkan/VulkanCommandQueries.h"
+#include "rhi/backends/vulkan/VulkanCommandRecorder.h"
+#include "rhi/backends/vulkan/VulkanDebugCallback.h"
+#include "rhi/backends/vulkan/VulkanDescriptor.h"
+#include "rhi/backends/vulkan/VulkanDeviceFeature.h"
+#include "rhi/backends/vulkan/VulkanDeviceInitialization.h"
+#include "rhi/backends/vulkan/VulkanDeviceProperty.h"
+#include "rhi/backends/vulkan/VulkanEnumTranslator.h"
+#include "rhi/backends/vulkan/VulkanFault.h"
+#include "rhi/backends/vulkan/VulkanMemoryAllocator.h"
+#include "rhi/backends/vulkan/VulkanPipeline.h"
+#include "rhi/backends/vulkan/VulkanPlatform.h"
+#include "rhi/backends/vulkan/VulkanQueue.h"
+#include "rhi/backends/vulkan/VulkanRaytracingResource.h"
+#include "rhi/backends/vulkan/VulkanSubmission.h"
+#include "rhi/backends/vulkan/VulkanSurfaceSupport.h"
+#include "rhi/backends/vulkan/VulkanTemporaryBufferAllocator.h"
+#include "rhi/backends/vulkan/VulkanTimeline.h"
+#include "rhi/backends/vulkan/VulkanTypeDefs.h"
 #include "window/WindowFrameSnapshot.h"
-#include "rhi/vulkan/VulkanDebugCallback.h"
-#include "rhi/vulkan/VulkanFault.h"
-#include "rhi/vulkan/VulkanMemoryAllocator.h"
-#include "rhi/vulkan/VulkanPlatform.h"
-#include "rhi/vulkan/VulkanTypeDefs.h"
 
 #include "platform/Platform.h"
 
@@ -25,6 +48,36 @@
 #if PLATFORM_WINDOWS
 static_assert(std::is_base_of_v<Moer::Render::VulkanGenericPlatform, Moer::Render::VulkanPlatform>);
 #endif
+
+// Command resources own native handles and cannot be copied or relocated while
+// command lists retain pointers to their pool.
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanNativeQueue>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanNativeQueue>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandPool>);
+static_assert(!std::is_copy_assignable_v<Moer::Render::VulkanCommandPool>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandPool>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandList>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandList>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandContext>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandContext>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandRecorder>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandRecorder>);
+// Submission packets carry the ownership gate and native resource lifetimes
+// across threads. Handoff cannot copy them or fail halfway through a move.
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanPendingSubmission>);
+static_assert(std::is_nothrow_move_constructible_v<Moer::Render::VulkanPendingSubmission>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanSubmissionCompletion>);
+static_assert(std::is_nothrow_move_constructible_v<Moer::Render::VulkanSubmissionCompletion>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanTemporaryBufferAllocator>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanTemporaryBufferAllocator>);
+
+static_assert(!std::is_copy_constructible_v<Moer::Render::VkNativeQueryPool>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanCommandQueries>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanCommandQueries>);
+
+static_assert(!std::is_default_constructible_v<Moer::Render::VulkanDescriptorHeap>);
+static_assert(!std::is_copy_constructible_v<Moer::Render::VulkanDescriptorHeap>);
+static_assert(!std::is_move_constructible_v<Moer::Render::VulkanDescriptorHeap>);
 
 int main() {
     return VK_SUCCESS == 0 ? 0 : 1;

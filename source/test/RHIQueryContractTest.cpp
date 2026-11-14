@@ -1,6 +1,8 @@
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIImpl.h"
 #include "rhi/RHIQuery.h"
+#include "rhi/RHIThreadOwnership.h"
 
 #include <atomic>
 #include <chrono>
@@ -33,36 +35,36 @@ bool WaitForFlag(const std::atomic_bool& _flag, std::chrono::milliseconds _timeo
 
 class QueryFenceProbe final : public Fence {
 public:
-    uint64_t GetValue() const override {
+    Moer::uint64 GetValue() const override {
         return 0;
     }
 
-    void Wait(uint64_t) override {}
+    bool Wait(Moer::uint64 _value) override {
+        return _value == 0 && !IsRejected(_value);
+    }
 
-    void MarkSubmitted(uint64_t _value) override {
+    void MarkSubmitted(Moer::uint64 _value) override {
         submitted_value.store(_value, std::memory_order_release);
     }
 
     bool WaitSubmitted(
-        uint64_t,
-        const std::atomic_bool* = nullptr,
-        EQueueType              = EQueueType::Ignore,
-        Moer::uint32            = 0
+        Moer::uint64,
+        const std::atomic_bool* = nullptr
     ) override {
         return false;
     }
 
-    bool IsRejected(uint64_t _value) const override {
+    bool IsRejected(Moer::uint64 _value) const override {
         return rejected_value.load(std::memory_order_acquire) == _value;
     }
 
-    void Reject(uint64_t _value) noexcept override {
+    void Reject(Moer::uint64 _value) noexcept override {
         rejected_value.store(_value, std::memory_order_release);
     }
 
 private:
-    std::atomic<uint64_t> submitted_value{0};
-    std::atomic<uint64_t> rejected_value{0};
+    std::atomic<Moer::uint64> submitted_value{0};
+    std::atomic<Moer::uint64> rejected_value{0};
 };
 
 template<typename TException, typename TCallback>
@@ -93,8 +95,8 @@ TimestampQueryResult TestTimestampResult() {
 }
 
 OcclusionQueryResult TestOcclusionResult(
-    std::uint64_t _sample_count = 37,
-    bool          _visible      = true
+    Moer::uint64 _sample_count = 37,
+    bool         _visible      = true
 ) {
     return OcclusionQueryResult{
         .sample_count = _sample_count,
@@ -469,6 +471,33 @@ void FutureIsThreadSafeOneShotAndContainsCallbackExceptions() {
     }
     submit.callbacks.clear();
     submit.query_tokens.clear();
+}
+
+void RhiOwnersCannotWaitForPendingQueries() {
+    constexpr ERHIThreadRole roles[]{ERHIThreadRole::Executor, ERHIThreadRole::Translate, ERHIThreadRole::Submission, ERHIThreadRole::Completion, ERHIThreadRole::RecordWorker};
+    for (ERHIThreadRole role : roles) {
+        CommandList       list(EQueueType::Graphics);
+        const QueryToken  token  = list.BeginTimestampQuery("OwnerWaitGuard");
+        const QueryFuture future = token.GetFuture();
+        list.EndTimestampQuery(token);
+        RHIThreadRoleScope scope(role);
+        ExpectThrows<std::logic_error>([&] {
+            future.Wait();
+        },
+                                       "RHI owner blocked on a pending query");
+        ExpectThrows<std::logic_error>([&] {
+            (void)future.WaitFor(0ms);
+        },
+                                       "RHI owner timed wait accepted a pending query");
+        ExpectThrows<std::logic_error>([&] {
+            (void)future.Get();
+        },
+                                       "RHI owner Get accepted a pending query");
+        Expect(!future.TryGet().has_value(), "nonblocking read of a pending query changed its result");
+        QueryBackendAccess::ResolveTimestamp(token, TimestampQueryResult{.begin_tick = 10, .end_tick = 20, .valid_bits = 64, .tick_period_ns = 1.0, .duration_ns = 10.0});
+        future.Wait();
+        Expect(future.WaitFor(0ms) && future.Get().status == QueryStatus::Ready, "RHI owner could not read an already terminal query");
+    }
 }
 
 void ReadyAndErrorResolutionRaceHasOneWinner() {
@@ -1452,6 +1481,7 @@ int main() {
         OcclusionQueueCapabilityAndCommandOpsAreExplicit();
         MixedQueryNestingIsStrictAndOcclusionIsNotRecursive();
         FutureIsThreadSafeOneShotAndContainsCallbackExceptions();
+        RhiOwnersCannotWaitForPendingQueries();
         ReadyAndErrorResolutionRaceHasOneWinner();
         ReadyBatchPublishesEveryPeerBeforeNotification();
         BulkErrorPathsPublishEveryPeerBeforeNotification();

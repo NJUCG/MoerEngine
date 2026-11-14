@@ -1,8 +1,8 @@
 #pragma once
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <chrono>
-#include <cstdint>
 
 namespace Moer::Render {
 
@@ -40,16 +40,16 @@ struct FramePrepareProfile {
 };
 
 struct FramePrepareWorkload {
-    uint64_t scene_ready_frames          = 0;
-    uint64_t scene_dirty_frames          = 0;
-    uint64_t initial_gpu_update_frames   = 0;
-    uint64_t update_gpu_update_frames    = 0;
-    uint64_t geometry_snapshot_frames    = 0;
-    uint64_t scene_snapshot_build_frames = 0;
-    uint64_t ui_vertices                 = 0;
-    uint64_t ui_indices                  = 0;
-    uint64_t ui_commands                 = 0;
-    uint64_t ui_vertices_max             = 0;
+    uint64 scene_ready_frames          = 0;
+    uint64 scene_dirty_frames          = 0;
+    uint64 initial_gpu_update_frames   = 0;
+    uint64 update_gpu_update_frames    = 0;
+    uint64 geometry_snapshot_frames    = 0;
+    uint64 scene_snapshot_build_frames = 0;
+    uint64 ui_vertices                 = 0;
+    uint64 ui_indices                  = 0;
+    uint64 ui_commands                 = 0;
+    uint64 ui_vertices_max             = 0;
 
     void Accumulate(const FramePrepareWorkload& other) {
         scene_ready_frames += other.scene_ready_frames;
@@ -69,7 +69,7 @@ struct FramePrepareWorkload {
 // Renderer object prevents GT-only counters from sharing a cache line with RT frame state.
 struct FramePrepareProfileState {
     FramePrepareProfileClock::time_point window_start{};
-    uint64_t                             samples               = 0;
+    uint64                               samples               = 0;
     double                               total_ms              = 0.0;
     double                               total_max_ms          = 0.0;
     double                               other_ms              = 0.0;

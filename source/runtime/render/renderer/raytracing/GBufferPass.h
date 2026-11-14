@@ -86,20 +86,7 @@ public:
 
     GBufferPass(class RenderDevice& device, class ShaderManager& manager, BindlessArrayRef bindless_array);
     void Process(class CommandList& cmd_list, RTContext& rt_ctx);
-    void RecordLegacyTailBridge(
-        class CommandList& cmd_list,
-        const RTContext&   rt_ctx,
-        bool               composition_recorded,
-        bool               antialias_recorded,
-        bool               tone_mapping_recorded,
-        bool               visualize_recorded
-    ) const;
-    bool AddPasses(
-        RenderGraph&                 graph,
-        const RTGraphFrameResources& graph_resources,
-        const RTContext&             rt_ctx,
-        bool                         normal_roughness_readable
-    );
+    bool AddPasses(RenderGraph& graph, const RTGraphFrameResources& graph_resources, const RTContext& rt_ctx);
 
 private:
     PreparedCommand Prepare(const RTContext& rt_ctx) const;

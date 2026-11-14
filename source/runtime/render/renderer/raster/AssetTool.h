@@ -1,5 +1,7 @@
 #pragma once
 
+#include "misc/Types.h"
+#include "rendergraph/RenderGraphUpload.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 #include <config/ConfigManager.h>
@@ -14,29 +16,17 @@ struct TexDepthTag {};
 template<typename...>
 inline constexpr bool always_false = false;
 
-enum TexType {
-    TEX_TYPE_2D,
-    TEX_TYPE_CUBE,
-    TEX_TYPE_DEPTH,
-    NUMBITS = 3
-};
-
 struct TexConfig {
 
     EPixelFormat       format;
     ETextureUsageFlags usage;
-    TexType            type = TexType::TEX_TYPE_2D;
-    ETextureDimension  dim  = ETextureDimension::TEX_2D;
     Sampler            sampler{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_REPEAT};
-    Extent3D           size       = {0, 0, 1};
-    uint               mip_cnt    = 1;
-    uint               array_size = 1;
+    uint32             mip_cnt    = 1;
 
     std::string asset_path_relative;
     void*       alias_ptr          = nullptr;
     bool        is_asset           = false;
     bool        b_create_mip_views = false;
-    bool        b_downsampled      = false;
     bool        b_output_size      = false;
 
     //为Depth设计，共用一张纹理
@@ -61,39 +51,18 @@ struct TexConfig {
         return cfg;
     }
 
-    static TexConfig Color(EPixelFormat pf) {
-        TexConfig cfg;
-        cfg.format = pf;
-        cfg.type   = TexType::TEX_TYPE_2D;
-        cfg.dim    = ETextureDimension::TEX_2D;
-        return cfg;
-    }
-
     static TexConfig Depth(EPixelFormat pf) {
-        TexConfig cfg;
-        cfg.format = pf;
-        cfg.type   = TexType::TEX_TYPE_DEPTH;
-        cfg.dim    = ETextureDimension::TEX_2D;
-        return cfg;
-    }
-
-    static TexConfig CubeMap(EPixelFormat pf) {
-        TexConfig cfg;
-        cfg.format = pf;
-        cfg.size   = {0, 0, 6};
-        cfg.type   = TexType::TEX_TYPE_CUBE;
-        cfg.dim    = ETextureDimension::TEX_CUBE;
-        return cfg;
+        return Default(pf);
     }
 
     //设定Mip层级数量
-    TexConfig& Mips(uint m) {
+    TexConfig& Mips(uint32 m) {
         mip_cnt = m;
         return *this;
     }
 
     //只为我们需要显式访问不同Mip的纹理开启
-    TexConfig& IndivisualMips() {
+    TexConfig& IndividualMips() {
         b_create_mip_views = true;
         return *this;
     }
@@ -108,23 +77,8 @@ struct TexConfig {
         return *this;
     }
 
-    TexConfig& DownSampled(bool b = true) {
-        b_downsampled = b;
-        return *this;
-    }
-
     TexConfig& OutputSize(bool b = true) {
         b_output_size = b;
-        return *this;
-    }
-
-    TexConfig& Size(Extent2D s) {
-        size = Extent3D(s, 1);
-        return *this;
-    }
-
-    TexConfig& Size(Extent3D s) {
-        size = s;
         return *this;
     }
 
@@ -228,7 +182,7 @@ public:
         RenderDevice&    device,
         std::string_view name,
         const uint2&     size,
-        TexConfig&       cfg,
+        const TexConfig& cfg,
         bool             is_verbose = false // 如果需要debug，请将此设置为true，以打印资源创建日志
     ) {
         if (cfg.is_asset) {
@@ -239,22 +193,12 @@ public:
             target.tex = static_cast<T_Holder*>(cfg.alias_ptr)->tex;
         } else {
             if constexpr (std::is_same_v<IntentTag, TexDepthTag>) {
-                cfg.type = TexType::TEX_TYPE_DEPTH;
-                cfg.dim  = ETextureDimension::TEX_2D;
-
                 target.tex =
                     device.CreateDepthBuffer(name, Extent2D(size.x, size.y), cfg.format, 1, cfg.usage);
             } else if constexpr (std::is_same_v<IntentTag, TexCubeTag>) {
-                cfg.type = TexType::TEX_TYPE_CUBE;
-                cfg.dim  = ETextureDimension::TEX_CUBE;
-                cfg.size = {0, 0, 6};
-
                 target.tex =
                     device.CreateCubeMap(name, Extent2D(size.x, size.y), cfg.format, cfg.usage, cfg.mip_cnt);
             } else if constexpr (std::is_same_v<IntentTag, Tex2DTag>) {
-                cfg.type = TexType::TEX_TYPE_2D;
-                cfg.dim  = ETextureDimension::TEX_2D;
-
                 target.tex =
                     device.CreateTexture(name, Extent2D(size.x, size.y), cfg.format, cfg.usage, cfg.mip_cnt);
             } else {
@@ -270,7 +214,6 @@ public:
     template<typename T>
         requires requires(T t) {
             t.hdl;
-            t.mip_handles;
             t.tex;
         }
     static void
@@ -279,34 +222,22 @@ public:
         target.hdl = bindless_array->AllocateTexture(target.tex->GetView(), cfg.sampler);
 
         // Mip Handles
-        if (cfg.b_create_mip_views) {
-            target.mip_handles.resize(cfg.mip_cnt);
-            for (uint mip = 0; mip < cfg.mip_cnt; ++mip) {
-                target.mip_handles[mip] = bindless_array->AllocateTexture(
-                    target.tex->GetView(static_cast<uint8>(mip), 1), cfg.sampler
-                );
+        if constexpr (requires { target.mip_handles; }) {
+            if (cfg.b_create_mip_views) {
+                target.mip_handles.resize(cfg.mip_cnt);
+                for (uint32 mip = 0; mip < cfg.mip_cnt; ++mip) {
+                    target.mip_handles[mip] = bindless_array->AllocateTexture(
+                        target.tex->GetView(static_cast<uint8>(mip), 1), cfg.sampler
+                    );
+                }
             }
         }
     }
 
+    // Callers choose the release boundary; resize paths retain fixed-size asset textures.
     template<typename T>
         requires requires(T t) {
             t.hdl;
-            t.tex;
-        } && (!requires(T t) { t.mip_handles; })
-    static void
-    AllocateRasterResourceHandle(BindlessArrayRef& bindless_array, T& target, const TexConfig& cfg) {
-        //Main Handle
-        target.hdl = bindless_array->AllocateTexture(target.tex->GetView(), cfg.sampler);
-    }
-
-    //方案：tex和handle的生命周期绑定
-    //TODO:理论上外部资源纹理分辨率固定，不需要释放显存，但如何管理好呢？
-    // ↑ —— 已解决，直接在外部管理：SizeChanged的时候不执行这个函数（wk看到这个注释就可以把这两行删掉了）
-    template<typename T>
-        requires requires(T t) {
-            t.hdl;
-            t.mip_handles;
             t.tex;
         }
     static void FreeRasterResourceHandle(BindlessArrayRef& bindless_array, T& target) {
@@ -320,30 +251,16 @@ public:
         }
 
         // Mip Handles
-        for (uint& hdl : target.mip_handles) {
-            if (hdl != 0) {
-                bindless_array->UnbindTexture(hdl);
-                hdl = 0;
-            } else {
-                LOG_WARNING("Trying to free a mip texture handle that is already zeroed.");
+        if constexpr (requires { target.mip_handles; }) {
+            for (uint32& hdl : target.mip_handles) {
+                if (hdl != 0) {
+                    bindless_array->UnbindTexture(hdl);
+                    hdl = 0;
+                } else {
+                    LOG_WARNING("Trying to free a mip texture handle that is already zeroed.");
+                }
             }
-        }
-        target.mip_handles.clear();
-    }
-
-    template<typename T>
-        requires requires(T t) {
-            t.hdl;
-            t.tex;
-        } && (!requires(T t) { t.mip_handles; })
-    static void FreeRasterResourceHandle(BindlessArrayRef& bindless_array, T& target) {
-        //Main Handle
-        if (target.hdl != 0) {
-            bindless_array->UnbindTexture(target.hdl);
-            target.hdl = 0;
-            target.tex = nullptr;
-        } else {
-            LOG_WARNING("Trying to free a texture handle that is already zeroed.");
+            target.mip_handles.clear();
         }
     }
 
@@ -356,7 +273,12 @@ private:
         int                height,
         const std::string& debug_name
     ) {
-        cmd_list.CopyFrom(std::span<Moer::byte>((Moer::byte*)data, width * height * 4), target, debug_name);
+        RecordNewGraphicsTextureUpload(
+            cmd_list,
+            std::span<const Moer::byte>((const Moer::byte*)data, width * height * 4),
+            target,
+            debug_name
+        );
         cmd_list.AddCallback([data]() {
             stbi_image_free(data);
         });

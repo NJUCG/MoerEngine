@@ -113,6 +113,10 @@ if (TARGET CUDA::cudart AND TARGET LibTorch AND TARGET TensorRT)
     if (WIN32)
         set(LIBTORCH_LIB_DIR "${LIBTORCH_DIR}\\lib")
         set(TENSORRT_LIB_DIR "${TENSORRT_DIR}\\lib")
+        # TensorRT 10.15+ moved its Windows DLLs from lib/ to bin/.
+        if (EXISTS "${TENSORRT_DIR}/bin/nvinfer_10.dll")
+            set(TENSORRT_LIB_DIR "${TENSORRT_DIR}\\bin")
+        endif()
 
         file(TO_NATIVE_PATH "${LIBTORCH_LIB_DIR}" LIBTORCH_LIB_DIR)
         file(TO_NATIVE_PATH "${TENSORRT_LIB_DIR}" TENSORRT_LIB_DIR)

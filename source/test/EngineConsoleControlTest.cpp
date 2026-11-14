@@ -36,20 +36,8 @@ double SnapshotFloat(std::string_view name) {
 int main() {
     EngineConsoleStartupConfig startup_config{
         .render_thread                          = true,
-        .rhi_thread                             = true,
-        .rhi_bypass                             = false,
-        .parallel_recording                     = true,
-        .parallel_record_workers                = 3,
-        .parallel_record_verify                 = true,
-        .parallel_record_profile                = false,
-        .parallel_record_min_work_units_per_job = 96,
         .configured_submission_batch_window     = 5,
-        .rhi_heartbeat_enabled                  = true,
-        .rhi_heartbeat_stall_timeout_ms         = 7000,
-        .rhi_heartbeat_poll_interval_ms         = 750,
-        .raster_rdg_enabled                     = true,
         .raster_rdg_parallel_recording          = true,
-        .raytracing_rdg_enabled                 = true,
         .raytracing_rdg_debug_dump              = true,
     };
 
@@ -58,7 +46,7 @@ int main() {
         EngineConsoleControl control(startup_config);
         Expect(
             CVar::SetValueFromString(
-                "RHI.CommandRecording.Parallel.Workers", "7", CVar::ESetSource::Profile
+                "Engine.Threading.MaxFrameLag", "7", CVar::ESetSource::Profile
             ).Succeeded() &&
                 CVar::SetValueFromString(
                     "Render.Raster.RDG.ParallelRecording", "false", CVar::ESetSource::CommandLine
@@ -67,7 +55,7 @@ int main() {
         );
         const EngineConsoleStartupConfig effective = control.CaptureStartupConfig();
         Expect(
-            effective.parallel_record_workers == 7 && !effective.raster_rdg_parallel_recording,
+            effective.max_frame_lag == 7 && !effective.raster_rdg_parallel_recording,
             "startup cvar overrides were not captured into the typed snapshot"
         );
         control.PublishPolicyClampedSubmissionBatchWindow(4);
@@ -81,8 +69,7 @@ int main() {
             "policy-clamped startup topology was not exposed as read-only metadata"
         );
         Expect(
-            CVar::Find("RHI.CommandRecording.Parallel")->value == "true" &&
-                CVar::Find("RHI.CommandRecording.Parallel.Workers")->value == "7" &&
+                CVar::Find("Engine.Threading.MaxFrameLag")->value == "7" &&
                 CVar::Find("Render.Raster.RDG.ParallelRecording")->value == "false" &&
                 CVar::Find("Render.Raytracing.RDG.DebugDump")->value == "true",
             "startup topology cvars do not reflect the typed snapshot"

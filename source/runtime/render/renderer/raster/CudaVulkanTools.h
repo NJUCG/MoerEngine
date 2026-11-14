@@ -5,6 +5,8 @@
  */
 #pragma once
 
+#include "misc/Types.h"
+
 #if !defined(WITH_CUDA)
 #error "This header requires WITH_CUDA=1"
 #endif
@@ -13,11 +15,14 @@
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "platform/Platform.h"
-#include "rhi/RHIExecutor.h"
-#include "rhi/vulkan/VulkanDevice.h"
-#include "rhi/vulkan/VulkanQueue.h"
+#include "rhi/executor/RHIExecutor.h"
+#include "rhi/backends/vulkan/VulkanDevice.h"
+#include "rhi/backends/vulkan/VulkanTimeline.h"
 #include <cuda_runtime.h>
 #include <cusolverDn.h>
+#include <initializer_list>
+#include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 #include "RasterResource.h"
@@ -35,11 +40,12 @@ public:
                 "CUDA error at {}:{} code={}. error name={}. error description={}. \"{}\"",
                 file,
                 line,
-                static_cast<uint>(result),
+                static_cast<uint32>(result),
                 cudaGetErrorName(result),
                 cudaGetErrorString(result),
                 func
             );
+            throw std::runtime_error(std::string(func) + ": " + cudaGetErrorString(result));
         }
     }
 
@@ -53,6 +59,7 @@ public:
             LOG_ERROR(
                 "CUDA error at {}:{}. Error code={}. \"{}\"", file, line, static_cast<int32>(result), func
             );
+            throw std::runtime_error(std::string(func) + ": cuSOLVER error " + std::to_string(result));
         }
     }
 
@@ -64,38 +71,8 @@ public:
         return *dynamic_cast<VulkanTexture*>(texture.Get());
     }
 
-    static VulkanFence& getVulkanFence(FenceRef fence) {
-        return *dynamic_cast<VulkanFence*>(fence.Get());
-    }
-
-    static VkCommandQueue& getVulkanQueue(CommandQueue& queue) {
-        return *dynamic_cast<VkCommandQueue*>(&queue);
-    }
-
-    static VkDeviceMemory getVkDeviceMemory(VulkanDevice& vulkan_device, VulkanTexture& vulkan_texture) {
-        VmaAllocationInfo info;
-        vmaGetAllocationInfo(vulkan_device.GetVmaAllocator(), vulkan_texture.GetAllocation(), &info);
-        return info.deviceMemory;
-    }
-
-    static VkSemaphore createSemaphoreWithoutRHI(VulkanDevice& vulkan_device) {
-        VkSemaphore semaphore;
-
-        VkSemaphoreCreateInfo create_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-
-        VkExportSemaphoreCreateInfoKHR vulkanExportSemaphoreCreateInfo = {};
-        vulkanExportSemaphoreCreateInfo.sType       = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO_KHR;
-        vulkanExportSemaphoreCreateInfo.pNext       = nullptr;
-        vulkanExportSemaphoreCreateInfo.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-        create_info.pNext = &vulkanExportSemaphoreCreateInfo;
-
-        VkResult result = vkCreateSemaphore(vulkan_device.GetDevice(), &create_info, nullptr, &semaphore);
-        if (result != VK_SUCCESS) {
-            LOG_WARNING("CudaPass: vkCreateSemaphore Failed. VkResult = {}", static_cast<int32>(result));
-        }
-
-        return semaphore;
+    static VulkanTimeline& getVulkanTimeline(FenceRef fence) {
+        return *dynamic_cast<VulkanTimeline*>(fence.Get());
     }
 
     static void CloseWin32Handle(HANDLE& handle) {
@@ -139,9 +116,9 @@ struct CudaTexture {
 
     // non-cuda objects
     TextureRef moer_texture;
-    uint       mip_levels;
-    uint       width;
-    uint       height;
+    uint32     mip_levels;
+    uint32     width;
+    uint32     height;
 
     // 如果是cudaChannelFormatKindFloat，则必须使用float读取
     // 如果是cudaChannelFormatKindUnsigned，则必须使用uchar读取
@@ -149,14 +126,14 @@ struct CudaTexture {
     size_t             element_type_count; // float4 的 4
 
     // cuda objects
-    cudaExternalMemory_t             cudaExtMemImageBuffer;
-    cudaMipmappedArray_t             cudaMipmappedImageArray;
+    cudaExternalMemory_t             cudaExtMemImageBuffer{};
+    cudaMipmappedArray_t             cudaMipmappedImageArray{};
     std::vector<cudaSurfaceObject_t> surfaceObjectList;
-    cudaSurfaceObject_t*             d_surfaceObjectList;
-    cudaTextureObject_t              textureObjMipMapInput;
+    cudaSurfaceObject_t*             d_surfaceObjectList{};
+    cudaTextureObject_t              textureObjMipMapInput{};
 
     // win32 objects
-    HANDLE win32_handle;
+    HANDLE win32_handle{};
 
     cudaTextureObject_t GetTextureObject() {
         return textureObjMipMapInput;
@@ -174,157 +151,167 @@ struct CudaTexture {
         return element_type_count;
     }
 
-    CudaTexture(RasterContext& context, TextureRef texture) :
+    CudaTexture(RasterContext& context, TextureRef texture) : CudaTexture(context.device, texture) {}
+
+    CudaTexture(RenderDevice& device, TextureRef texture) :
         moer_texture(texture),
         mip_levels(texture.Get()->GetNumMips()),
         width(texture->GetWidth()),
         height(texture->GetHeight()) {
 
-        if (mip_levels == 0 || width == 0 || height == 0) {
-            LOG_WARNING("CudaTexture failed to initialize, texture name: {}.", texture->GetName());
-            return;
-        }
-
-        VulkanDevice&  vulkan_device  = CudaVulkanTools::getVulkanDevice(context.device);
-        VulkanTexture& vulkan_texture = CudaVulkanTools::getVulkanTexture(texture);
-
-        win32_handle = getMemoryWin32Handle(vulkan_device, vulkan_texture);
-
-        auto format_desc   = getCudaFormatDescriptor(moer_texture->GetFormat());
-        element_type       = format_desc.element_type;
-        element_type_count = format_desc.element_type_count;
-
-        {
-            uint64 total_size = [&]() {
-                VkMemoryRequirements vkMemoryRequirements = {};
-                vkGetImageMemoryRequirements(
-                    vulkan_device.GetDevice(), vulkan_texture.GetHandle(), &vkMemoryRequirements
-                );
-                return vkMemoryRequirements.size;
-            }();
-
-            cudaExternalMemoryHandleDesc desc;
-            memset(&desc, 0, sizeof(desc));
-
-            desc.type                = cudaExternalMemoryHandleTypeOpaqueWin32;
-            desc.handle.win32.handle = win32_handle;
-            desc.size                = total_size;
-
-            checkCudaErrors(cudaImportExternalMemory(&cudaExtMemImageBuffer, &desc));
-        }
-        {
-            cudaExternalMemoryMipmappedArrayDesc desc;
-            memset(&desc, 0, sizeof(desc));
-
-            cudaExtent extent = make_cudaExtent(width, height, 0);
-
-            desc.offset     = 0;
-            desc.formatDesc = format_desc.desc;
-            desc.extent     = extent;
-            desc.flags      = 0;
-            desc.numLevels  = mip_levels;
-
-            checkCudaErrors(cudaExternalMemoryGetMappedMipmappedArray(
-                &cudaMipmappedImageArray, cudaExtMemImageBuffer, &desc
-            ));
-        }
-        { // surface
-            for (uint mipLevelIdx = 0; mipLevelIdx < mip_levels; mipLevelIdx++) {
-                cudaArray_t      cudaMipLevelArray;
-                cudaResourceDesc resourceDesc;
-
-                checkCudaErrors(
-                    cudaGetMipmappedArrayLevel(&cudaMipLevelArray, cudaMipmappedImageArray, mipLevelIdx)
-                );
-
-                memset(&resourceDesc, 0, sizeof(resourceDesc));
-                resourceDesc.resType         = cudaResourceTypeArray;
-                resourceDesc.res.array.array = cudaMipLevelArray;
-
-                cudaSurfaceObject_t surfaceObject;
-                checkCudaErrors(cudaCreateSurfaceObject(&surfaceObject, &resourceDesc));
-
-                surfaceObjectList.push_back(surfaceObject);
+        try {
+            if (mip_levels == 0 || width == 0 || height == 0) {
+                throw std::invalid_argument("CUDA image extent and mip count must be nonzero");
             }
-        }
-        { // texture
-            cudaResourceDesc resDescr;
-            memset(&resDescr, 0, sizeof(cudaResourceDesc));
 
-            resDescr.resType           = cudaResourceTypeMipmappedArray;
-            resDescr.res.mipmap.mipmap = cudaMipmappedImageArray;
+            VulkanDevice&  vulkan_device  = CudaVulkanTools::getVulkanDevice(device);
+            VulkanTexture& vulkan_texture = CudaVulkanTools::getVulkanTexture(texture);
 
-            cudaTextureDesc texDescr;
-            memset(&texDescr, 0, sizeof(cudaTextureDesc));
+            win32_handle = getMemoryWin32Handle(vulkan_device, vulkan_texture);
 
-            texDescr.normalizedCoords = true;
-            texDescr.filterMode       = cudaFilterModeLinear;
-            texDescr.mipmapFilterMode = cudaFilterModeLinear;
+            auto format_desc   = getCudaFormatDescriptor(moer_texture->GetFormat());
+            element_type       = format_desc.element_type;
+            element_type_count = format_desc.element_type_count;
 
-            texDescr.addressMode[0] = cudaAddressModeWrap;
-            texDescr.addressMode[1] = cudaAddressModeWrap;
+            {
+                VmaAllocationInfo2 allocation{};
+                vmaGetAllocationInfo2(
+                    vulkan_device.GetVmaAllocator(), vulkan_texture.GetAllocation(), &allocation
+                );
+                cudaExternalMemoryHandleDesc desc;
+                memset(&desc, 0, sizeof(desc));
 
-            texDescr.maxMipmapLevelClamp = float(mip_levels - 1);
+                desc.type                = cudaExternalMemoryHandleTypeOpaqueWin32;
+                desc.handle.win32.handle = win32_handle;
+                // The exported handle names the entire VkDeviceMemory block.
+                desc.size  = allocation.blockSize;
+                desc.flags = allocation.dedicatedMemory ? cudaExternalMemoryDedicated : 0;
 
-            texDescr.readMode = format_desc.read_mode;
+                checkCudaErrors(cudaImportExternalMemory(&cudaExtMemImageBuffer, &desc));
+                CudaVulkanTools::CloseWin32Handle(win32_handle);
+            }
+            {
+                cudaExternalMemoryMipmappedArrayDesc desc;
+                memset(&desc, 0, sizeof(desc));
 
-            checkCudaErrors(cudaCreateTextureObject(&textureObjMipMapInput, &resDescr, &texDescr, NULL));
-        }
-        { // surface
+                cudaExtent extent = make_cudaExtent(width, height, 0);
 
-            assert(surfaceObjectList.size() == mip_levels);
+                VmaAllocationInfo allocation{};
+                vmaGetAllocationInfo(
+                    vulkan_device.GetVmaAllocator(), vulkan_texture.GetAllocation(), &allocation
+                );
+                desc.offset     = allocation.offset;
+                desc.formatDesc = format_desc.desc;
+                desc.extent     = extent;
+                desc.flags      = cudaArraySurfaceLoadStore;
+                if ((texture->GetUsage() & ETextureUsageFlags::COLOR_ATTACHMENT) !=
+                    ETextureUsageFlags::UNDEFINED) {
+                    desc.flags |= cudaArrayColorAttachment;
+                }
+                desc.numLevels = mip_levels;
 
-            checkCudaErrors(cudaMalloc(
-                (void**)&d_surfaceObjectList, surfaceObjectList.size() * sizeof(cudaSurfaceObject_t)
-            ));
+                checkCudaErrors(cudaExternalMemoryGetMappedMipmappedArray(
+                    &cudaMipmappedImageArray, cudaExtMemImageBuffer, &desc
+                ));
+            }
+            { // surface
+                for (uint32 mipLevelIdx = 0; mipLevelIdx < mip_levels; mipLevelIdx++) {
+                    cudaArray_t      cudaMipLevelArray;
+                    cudaResourceDesc resourceDesc;
 
-            checkCudaErrors(cudaMemcpy(
-                d_surfaceObjectList,
-                surfaceObjectList.data(),
-                surfaceObjectList.size() * sizeof(cudaSurfaceObject_t),
-                cudaMemcpyHostToDevice
-            ));
+                    checkCudaErrors(
+                        cudaGetMipmappedArrayLevel(&cudaMipLevelArray, cudaMipmappedImageArray, mipLevelIdx)
+                    );
+
+                    memset(&resourceDesc, 0, sizeof(resourceDesc));
+                    resourceDesc.resType         = cudaResourceTypeArray;
+                    resourceDesc.res.array.array = cudaMipLevelArray;
+
+                    cudaSurfaceObject_t surfaceObject;
+                    checkCudaErrors(cudaCreateSurfaceObject(&surfaceObject, &resourceDesc));
+
+                    surfaceObjectList.push_back(surfaceObject);
+                }
+            }
+            { // texture
+                cudaResourceDesc resDescr;
+                memset(&resDescr, 0, sizeof(cudaResourceDesc));
+
+                resDescr.resType           = cudaResourceTypeMipmappedArray;
+                resDescr.res.mipmap.mipmap = cudaMipmappedImageArray;
+
+                cudaTextureDesc texDescr;
+                memset(&texDescr, 0, sizeof(cudaTextureDesc));
+
+                texDescr.normalizedCoords = true;
+                texDescr.filterMode       = cudaFilterModeLinear;
+                texDescr.mipmapFilterMode = cudaFilterModeLinear;
+
+                texDescr.addressMode[0] = cudaAddressModeWrap;
+                texDescr.addressMode[1] = cudaAddressModeWrap;
+
+                texDescr.maxMipmapLevelClamp = float(mip_levels - 1);
+
+                texDescr.readMode = format_desc.read_mode;
+
+                checkCudaErrors(cudaCreateTextureObject(&textureObjMipMapInput, &resDescr, &texDescr, NULL));
+            }
+            { // surface
+
+                assert(surfaceObjectList.size() == mip_levels);
+
+                checkCudaErrors(cudaMalloc(
+                    (void**)&d_surfaceObjectList, surfaceObjectList.size() * sizeof(cudaSurfaceObject_t)
+                ));
+
+                checkCudaErrors(cudaMemcpy(
+                    d_surfaceObjectList,
+                    surfaceObjectList.data(),
+                    surfaceObjectList.size() * sizeof(cudaSurfaceObject_t),
+                    cudaMemcpyHostToDevice
+                ));
+            }
+        } catch (...) {
+            Reset();
+            throw;
         }
     }
     ~CudaTexture() {
-        // destroy cuda objects
-        for (int i = 0; i < mip_levels; i++) {
-            checkCudaErrors(cudaDestroySurfaceObject(surfaceObjectList[i]));
-        }
-
-        checkCudaErrors(cudaFree(d_surfaceObjectList));
-        checkCudaErrors(cudaFreeMipmappedArray(cudaMipmappedImageArray));
-        checkCudaErrors(cudaDestroyTextureObject(textureObjMipMapInput));
-
-        // destroy non-cuda objects
-
-        // destroy win32 handles
-        CudaVulkanTools::CloseWin32Handle(win32_handle);
+        Reset();
     }
 
     CudaTexture(const CudaTexture&)            = delete;
     CudaTexture& operator=(const CudaTexture&) = delete;
 
 private:
+    void Reset() noexcept {
+        // Objects must die before their mapped array and imported memory.
+        if (textureObjMipMapInput)
+            cudaDestroyTextureObject(textureObjMipMapInput);
+        for (auto surface : surfaceObjectList)
+            cudaDestroySurfaceObject(surface);
+        if (d_surfaceObjectList)
+            cudaFree(d_surfaceObjectList);
+        if (cudaMipmappedImageArray)
+            cudaFreeMipmappedArray(cudaMipmappedImageArray);
+        if (cudaExtMemImageBuffer)
+            cudaDestroyExternalMemory(cudaExtMemImageBuffer);
+        CudaVulkanTools::CloseWin32Handle(win32_handle);
+        textureObjMipMapInput = 0;
+        surfaceObjectList.clear();
+        d_surfaceObjectList     = nullptr;
+        cudaMipmappedImageArray = nullptr;
+        cudaExtMemImageBuffer   = nullptr;
+    }
+
     static HANDLE getMemoryWin32Handle(VulkanDevice& vulkan_device, VulkanTexture& vulkan_texture) {
-        HANDLE handle;
+        HANDLE handle{};
 
-        VkDeviceMemory vk_device_memory = CudaVulkanTools::getVkDeviceMemory(vulkan_device, vulkan_texture);
-
-        VkMemoryGetWin32HandleInfoKHR info;
-        info.sType      = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
-        info.pNext      = NULL;
-        info.memory     = vk_device_memory;
-        info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-        // vkGetMemoryWin32HandleKHR(vulkan_device.GetDevice(), &info, &handle);
         auto result = vmaGetMemoryWin32Handle(
             vulkan_device.GetVmaAllocator(), vulkan_texture.GetAllocation(), NULL, &handle
         );
         if (result != VK_SUCCESS) {
-            LOG_WARNING(
-                "CudaPass: vmaGetMemoryWin32Handle Failed. VkResult = {}", static_cast<int32>(result)
-            );
+            throw std::runtime_error("Vulkan external image memory export failed");
         }
 
         return handle;
@@ -414,181 +401,177 @@ private:
     }
 }; // namespace Moer::Render::Raster
 
-struct CudaSemaphore {
+// A synchronous interop boundary between two compiled graphics graphs.
+// Public images enter and leave in Sampled; CUDA owns them in GENERAL while
+// its stream runs. RHI owns every Vulkan submit, including semaphore waits.
+struct CudaInteropBoundary {
+    cudaStream_t stream_to_run{};
 
-    // non-cuda objects
+    CudaInteropBoundary(RasterContext& context, std::initializer_list<TextureRef> resources) :
+        CudaInteropBoundary(context.device, resources) {}
 
-    VkSemaphore before_semaphore;
-    VkSemaphore after_semaphore;
-
-    // PFN
-    PFN_vkGetSemaphoreWin32HandleKHR pfnGetSemaphoreWin32HandleKHR = nullptr;
-
-    // cuda objects
-
-    // semaphore
-    cudaExternalSemaphore_t cuda_before_semaphore;
-    cudaExternalSemaphore_t cuda_after_semaphore;
-    cudaStream_t            stream_to_run;
-
-    // win32 objects
-    HANDLE win32_handle_before_semaphore;
-    HANDLE win32_handle_after_semaphore;
-
-    // others
-    VulkanDevice&             vulkan_device;
-    VkNativeQueue&            vk_native_queue;
-    std::function<void(void)> pfn_sync_vk;
-
-    CudaSemaphore(RasterContext& context) :
-        vulkan_device(CudaVulkanTools::getVulkanDevice(context.device)),
-        vk_native_queue(CudaVulkanTools::getVulkanQueue(context.gfx_queue).GetVkNativeQueue()) {
-
-        pfn_sync_vk = [&]() {
-            RHIExecutor::Get().Submit(
-                EQueueType::Graphics,
-                context.cmd_list.Submit(),
-                ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-        };
-
-        LoadVulkanWin32PFN();
-
-        before_semaphore = CudaVulkanTools::createSemaphoreWithoutRHI(vulkan_device);
-        after_semaphore  = CudaVulkanTools::createSemaphoreWithoutRHI(vulkan_device);
-
-        {
-            VkSemaphoreGetWin32HandleInfoKHR info = {};
-
-            info.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR;
-            info.pNext      = NULL;
-            info.semaphore  = before_semaphore;
-            info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-            VkResult result = pfnGetSemaphoreWin32HandleKHR(
-                vulkan_device.GetDevice(), &info, &win32_handle_before_semaphore
-            );
-            if (result != VK_SUCCESS || win32_handle_before_semaphore == INVALID_HANDLE_VALUE ||
-                win32_handle_before_semaphore == nullptr) {
-                LOG_WARNING(
-                    "CudaPass: vkGetSemaphoreWin32HandleKHR Failed. VkResult = {}", static_cast<int32>(result)
-                );
+    CudaInteropBoundary(RenderDevice& device, std::initializer_list<TextureRef> resources) :
+        vulkan_device(CudaVulkanTools::getVulkanDevice(device)),
+        before(device.CreateFence()),
+        after(device.CreateFence()),
+        acquired(device.CreateFence()) {
+        std::unordered_set<Texture*> unique;
+        for (const auto& texture : resources) {
+            if (!texture) {
+                throw std::invalid_argument("CUDA interop requires physical textures");
             }
-
-            cudaExternalSemaphoreHandleDesc desc = {};
-
-            desc.type                = cudaExternalSemaphoreHandleTypeOpaqueWin32;
-            desc.handle.win32.handle = win32_handle_before_semaphore;
-            desc.flags               = 0;
-
-            checkCudaErrors(cudaImportExternalSemaphore(&cuda_before_semaphore, &desc));
-        }
-        {
-            VkSemaphoreGetWin32HandleInfoKHR info = {};
-
-            info.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR;
-            info.pNext      = NULL;
-            info.semaphore  = after_semaphore;
-            info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-
-            VkResult result = pfnGetSemaphoreWin32HandleKHR(
-                vulkan_device.GetDevice(), &info, &win32_handle_after_semaphore
-            );
-            if (result != VK_SUCCESS || win32_handle_after_semaphore == INVALID_HANDLE_VALUE ||
-                win32_handle_after_semaphore == nullptr) {
-                LOG_WARNING(
-                    "CudaPass: vkGetSemaphoreWin32HandleKHR Failed. VkResult = {}", static_cast<int32>(result)
-                );
+            if (unique.emplace(texture.Get()).second) {
+                textures.push_back(texture);
             }
-
-            cudaExternalSemaphoreHandleDesc desc = {};
-
-            desc.type                = cudaExternalSemaphoreHandleTypeOpaqueWin32;
-            desc.handle.win32.handle = win32_handle_after_semaphore;
-            desc.flags               = 0;
-
-            checkCudaErrors(cudaImportExternalSemaphore(&cuda_after_semaphore, &desc));
         }
-        {
-            checkCudaErrors(cudaStreamCreate(&stream_to_run));
+        if (textures.empty()) {
+            throw std::invalid_argument("CUDA interop requires a nonempty resource set");
+        }
+        try {
+            ImportTimeline(before, cuda_before);
+            ImportTimeline(after, cuda_after);
+            Require(cudaStreamCreate(&stream_to_run));
+        } catch (...) {
+            if (cuda_before) {
+                cudaDestroyExternalSemaphore(cuda_before);
+            }
+            if (cuda_after) {
+                cudaDestroyExternalSemaphore(cuda_after);
+            }
+            throw;
         }
     }
-    ~CudaSemaphore() {
-        // destroy cuda objects
-        checkCudaErrors(cudaDestroyExternalSemaphore(cuda_before_semaphore));
-        checkCudaErrors(cudaDestroyExternalSemaphore(cuda_after_semaphore));
 
-        // destroy non-cuda objects
-        vkDestroySemaphore(vulkan_device.GetDevice(), before_semaphore, nullptr);
-        vkDestroySemaphore(vulkan_device.GetDevice(), after_semaphore, nullptr);
-
-        // destroy win32 handles
-        CudaVulkanTools::CloseWin32Handle(win32_handle_before_semaphore);
-        CudaVulkanTools::CloseWin32Handle(win32_handle_after_semaphore);
-    }
-
-    CudaSemaphore(const CudaSemaphore&)            = delete;
-    CudaSemaphore& operator=(const CudaSemaphore&) = delete;
-
-    void Signal() {
-        // TODO: 这里默认为 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT，有优化空间
-        vk_native_queue.Signal(before_semaphore);
-        pfn_sync_vk();
-
-        cudaVkSemaphoreWait(cuda_before_semaphore);
-    }
-
-    void Wait() {
-        cudaVkSemaphoreSignal(cuda_after_semaphore);
-        {
-            auto result = cudaGetLastError();
-            if (result != cudaSuccess) {
-                printf("CUDA kernel error: %s\n", cudaGetErrorString(result));
-            }
-            // cudaStreamSynchronize(cuda_res.stream_to_run); // +50fps
+    ~CudaInteropBoundary() {
+        // AcquireFromCuda() normally drains the boundary. Also drain on exceptional exit
+        // before imported textures or CUDA engine buffers can be destroyed.
+        if (stream_to_run) {
+            cudaStreamSynchronize(stream_to_run);
         }
+        if (cuda_before) {
+            cudaDestroyExternalSemaphore(cuda_before);
+        }
+        if (cuda_after) {
+            cudaDestroyExternalSemaphore(cuda_after);
+        }
+        if (stream_to_run) {
+            cudaStreamDestroy(stream_to_run);
+        }
+    }
 
-        // TODO: 这里默认为 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT，有优化空间
-        vk_native_queue.Wait(after_semaphore);
-        pfn_sync_vk();
+    CudaInteropBoundary(const CudaInteropBoundary&)            = delete;
+    CudaInteropBoundary& operator=(const CudaInteropBoundary&) = delete;
+
+    void ReleaseToCuda() {
+        ++value;
+        CommandList commands(EQueueType::Graphics);
+        RecordTransfer(commands, true);
+        commands.Signal(before, value);
+        RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (!before->WaitSubmitted(value)) {
+            throw std::runtime_error("CUDA release submission was rejected");
+        }
+        cudaExternalSemaphoreWaitParams wait{};
+        wait.params.fence.value = value;
+        Require(
+            cudaWaitExternalSemaphoresAsync(&cuda_before, &wait, 1, stream_to_run), "wait for Vulkan release"
+        );
+    }
+
+    void AcquireFromCuda() {
+        cudaExternalSemaphoreSignalParams signal{};
+        signal.params.fence.value = value;
+        Require(
+            cudaSignalExternalSemaphoresAsync(&cuda_after, &signal, 1, stream_to_run), "signal Vulkan acquire"
+        );
+        // A failed CUDA operation must not publish a Vulkan wait on a signal
+        // that will never execute. This also bounds reuse of TensorRT buffers.
+        Require(cudaStreamSynchronize(stream_to_run), "complete CUDA work before Vulkan acquire");
+        auto& external_timeline = CudaVulkanTools::getVulkanTimeline(after);
+        external_timeline.MarkSubmitted(value);
+        external_timeline.RecordGpuCompletion(value);
+
+        CommandList commands(EQueueType::Graphics);
+        RecordTransfer(commands, false);
+        commands.Signal(acquired, value);
+        RHIExecutor::Get().Submit(
+            EQueueType::Graphics, commands.Submit().Wait(after.Get(), value), ERHIExecSubmitFlags::FlushGPU
+        );
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (!acquired->WaitSubmitted(value) || !acquired->Wait(value)) {
+            throw std::runtime_error("CUDA acquire submission did not complete");
+        }
     }
 
 private:
-    void LoadVulkanWin32PFN() {
-        pfnGetSemaphoreWin32HandleKHR = (PFN_vkGetSemaphoreWin32HandleKHR)vkGetDeviceProcAddr(
-            vulkan_device.GetDevice(), "vkGetSemaphoreWin32HandleKHR"
-        );
+    VulkanDevice&           vulkan_device;
+    FenceRef                before;
+    FenceRef                after;
+    FenceRef                acquired;
+    std::vector<TextureRef> textures;
+    cudaExternalSemaphore_t cuda_before{};
+    cudaExternalSemaphore_t cuda_after{};
+    uint64                  value{};
 
-        if (!pfnGetSemaphoreWin32HandleKHR) {
-            LOG_WARNING("CudaPass: Failed to load vkGetSemaphoreWin32HandleKHR");
+    static void Require(cudaError_t result, const char* operation = "initialize CUDA interop") {
+        if (result != cudaSuccess) {
+            throw std::runtime_error(std::string(operation) + ": " + cudaGetErrorString(result));
         }
     }
 
-    void cudaVkSemaphoreSignal(cudaExternalSemaphore_t& extSemaphore) {
-        cudaExternalSemaphoreSignalParams extSemaphoreSignalParams;
-        memset(&extSemaphoreSignalParams, 0, sizeof(extSemaphoreSignalParams));
-
-        extSemaphoreSignalParams.params.fence.value = 0;
-        extSemaphoreSignalParams.flags              = 0;
-        checkCudaErrors(
-            cudaSignalExternalSemaphoresAsync(&extSemaphore, &extSemaphoreSignalParams, 1, stream_to_run)
+    void ImportTimeline(const FenceRef& fence, cudaExternalSemaphore_t& imported) {
+        const auto get_handle = reinterpret_cast<PFN_vkGetSemaphoreWin32HandleKHR>(
+            vkGetDeviceProcAddr(vulkan_device.GetDevice(), "vkGetSemaphoreWin32HandleKHR")
         );
+        if (!get_handle) {
+            throw std::runtime_error("Vulkan external timeline export is unavailable");
+        }
+        VkSemaphoreGetWin32HandleInfoKHR info{VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR};
+        info.semaphore  = CudaVulkanTools::getVulkanTimeline(fence).GetSemaphore();
+        info.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        HANDLE handle{};
+        if (get_handle(vulkan_device.GetDevice(), &info, &handle) != VK_SUCCESS) {
+            throw std::runtime_error("Vulkan timeline export failed");
+        }
+        cudaExternalSemaphoreHandleDesc desc{};
+        desc.type                = cudaExternalSemaphoreHandleTypeTimelineSemaphoreWin32;
+        desc.handle.win32.handle = handle;
+        const auto result        = cudaImportExternalSemaphore(&imported, &desc);
+        CudaVulkanTools::CloseWin32Handle(handle);
+        Require(result);
     }
 
-    void cudaVkSemaphoreWait(cudaExternalSemaphore_t& extSemaphore) {
-        cudaExternalSemaphoreWaitParams extSemaphoreWaitParams;
-
-        memset(&extSemaphoreWaitParams, 0, sizeof(extSemaphoreWaitParams));
-
-        extSemaphoreWaitParams.params.fence.value = 0;
-        extSemaphoreWaitParams.flags              = 0;
-
-        assert(extSemaphore != nullptr);
-
-        checkCudaErrors(
-            cudaWaitExternalSemaphoresAsync(&extSemaphore, &extSemaphoreWaitParams, 1, stream_to_run)
+    void RecordTransfer(CommandList& commands, bool release) const {
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        const auto sampled = BarrierState::Texture(
+            ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+            // Export all preceding Vulkan writes, including writes made
+            // available by the graph's transition back to Sampled.
+            release ? ERHIAccessFlags::MEMORY_READ | ERHIAccessFlags::MEMORY_WRITE :
+                      ERHIAccessFlags::SHADER_READ,
+            ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         );
+        const auto external = BarrierState::Texture(
+            ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+            ERHIAccessFlags::MEMORY_READ | ERHIAccessFlags::MEMORY_WRITE,
+            ETextureLayout::TEXTURE_LAYOUT_COMMON
+        );
+        std::vector<BarrierCreateInfo> barriers;
+        for (const auto& texture : textures) {
+            TextureView view(texture);
+            view.num_mips  = texture->GetNumMips();
+            view.num_array = texture->GetNumArray();
+            auto barrier   = BarrierCreateInfo::Transition(
+                view, release ? sampled : external, release ? external : sampled, texture->GetAspectFlags()
+            );
+            barrier.queue_transfer = release ?
+                                         BarrierQueueTransfer::ReleaseToExternal(EQueueType::Graphics) :
+                                         BarrierQueueTransfer::AcquireFromExternal(EQueueType::Graphics);
+            barriers.push_back(barrier);
+        }
+        commands.Barriers(barriers);
+        commands.AddCallback([owners = textures, incoming = before, outgoing = after] {});
     }
 };
 

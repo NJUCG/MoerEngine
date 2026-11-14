@@ -50,7 +50,7 @@ if(WITH_PROFILE)
         "${MINHOOK_ROOT}/src"
         "${MINHOOK_ROOT}/src/hde"   
         "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/core/include"
-        "${moer_source_dir}/runtime/render/rhi/vulkan"
+        "${moer_source_dir}/runtime/render/rhi/backends/vulkan"
         "${moer_source_dir}/runtime/render"
         "${moer_root_dir}/3rdparty/VulkanSDK/include"
         "${moer_root_dir}/3rdparty/imgui"

@@ -1,12 +1,15 @@
+#include "rendergraph/RenderGraphResourcePool.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
-#include "rendergraph/RenderGraphResourcePool.h"
 
 #include <algorithm>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -35,7 +38,7 @@ public:
     explicit FakeTexture(const RGTransientTextureDesc& desc) :
         Texture(MakeInfo(desc)) {}
 
-    Moer::uint GetMipByteSize(Moer::uint) const override {
+    Moer::uint32 GetMipByteSize(Moer::uint32) const override {
         return 4;
     }
 
@@ -50,9 +53,9 @@ private:
         info.usage        = desc.usage;
         info.format       = desc.format;
         info.extent       = {static_cast<int>(desc.extent.x), static_cast<int>(desc.extent.y)};
-        info.depth        = static_cast<uint16_t>(desc.extent.z);
-        info.array_size   = static_cast<uint16_t>(desc.PhysicalLayerCount());
-        info.num_mips     = static_cast<uint8_t>(desc.mip_count);
+        info.depth        = static_cast<Moer::uint16>(desc.extent.z);
+        info.array_size   = static_cast<Moer::uint16>(desc.PhysicalLayerCount());
+        info.num_mips     = static_cast<Moer::uint8>(desc.mip_count);
         info.aspect_flags = desc.aspect_flags;
         return info;
     }
@@ -79,10 +82,10 @@ private:
 };
 
 struct FactoryProbe {
-    uint32_t textures = 0;
-    uint32_t buffers  = 0;
+    Moer::uint32 textures = 0;
+    Moer::uint32 buffers  = 0;
 
-    RenderGraphResourcePool MakePool(uint32_t retire_after_idle_frames = 3) {
+    RenderGraphResourcePool MakePool(Moer::uint32 retire_after_idle_frames = 3) {
         return RenderGraphResourcePool(
             retire_after_idle_frames,
             [this](std::string_view, const RGTransientTextureDesc& desc) {
@@ -244,23 +247,24 @@ void TestActiveTransientLifetimeIsCompletionOwned(TestSuite& suite) {
         "WriteScratch",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(
-                transient,
-                RenderGraph::BufferState::TransferDestination
-            ).SideEffect();
+                       transient,
+                       RenderGraph::BufferAccessType::TransferDestination
+            )
+                .SideEffect();
         },
         [&](CommandList&) {
             recorded_identity = graph.GetPhysicalBuffer(transient).Get();
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
     const auto& compiled_resource =
-        graph.GetCompiledPlan().resources[transient.resource.index];
+        graph.GetCompiledPlan().resources[transient.handle.resource_id];
     suite.Check(
         compiled_resource.transient_slot !=
-                RenderGraph::PassHandle::InvalidIndex &&
+                RenderGraph::InvalidIndex &&
             compiled_resource.first_use == 0 &&
             compiled_resource.last_use == 0,
         test,
@@ -268,7 +272,6 @@ void TestActiveTransientLifetimeIsCompletionOwned(TestSuite& suite) {
     );
 
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
@@ -324,20 +327,20 @@ void TestRejectedProducerRetiresThroughOrdinaryCallbacks(TestSuite& suite) {
         "FailScratch",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(
-                transient,
-                RenderGraph::BufferState::TransferDestination
-            ).SideEffect();
+                       transient,
+                       RenderGraph::BufferAccessType::TransferDestination
+            )
+                .SideEffect();
         },
         [](CommandList&) {
             throw std::runtime_error("injected record failure");
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
@@ -380,7 +383,7 @@ void TestUnusedTransientDoesNotAllocate(TestSuite& suite) {
     );
     graph.SetInitialState(
         imported,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
@@ -388,16 +391,17 @@ void TestUnusedTransientDoesNotAllocate(TestSuite& suite) {
         "SideEffectOnly",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(
-                imported,
-                RenderGraph::BufferState::TransferDestination
-            ).SideEffect();
+                       imported,
+                       RenderGraph::BufferAccessType::TransferDestination
+            )
+                .SideEffect();
         },
         [](CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         imported,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -405,7 +409,6 @@ void TestUnusedTransientDoesNotAllocate(TestSuite& suite) {
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
@@ -438,34 +441,40 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
     RenderGraph graph("TransientBufferAlias");
     const auto first  = graph.CreateTransientBuffer("First", kBufferDesc);
     const auto second = graph.CreateTransientBuffer("Second", kBufferDesc);
-    const auto first_pass = graph.AddRecordPass(
+    const auto  first_pass = graph.AddRecordPass(
         "WriteFirst",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(
-                first,
-                RenderGraph::BufferState::TransferDestination
-            ).SideEffect();
+                       first,
+                       RenderGraph::BufferAccessType::TransferDestination
+            )
+                .SideEffect();
         },
         [&](CommandList&) {
             first_identity = graph.GetPhysicalBuffer(first).Get();
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const auto second_pass = graph.AddRecordPass(
         "WriteSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(
-                second,
-                RenderGraph::BufferState::TransferDestination
-            ).SideEffect();
+                       second,
+                       RenderGraph::BufferAccessType::TransferDestination
+            )
+                // This fixture requires two independent completion owners.
+                .SideEffect().TranslateSerialControl();
         },
         [&](CommandList&) {
             second_identity = graph.GetPhysicalBuffer(second).Get();
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
-    const bool compiled = graph.Compile();
+    suite.Check(graph.Compile() && !graph.GetCompiledPlan().dependency_reasons &&
+                    !graph.GetCompiledPlan().alias_boundaries.empty(),
+                test, "transient alias validation must succeed without captured reasons");
+    const bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test, graph.GetCompileError());
     if (!compiled) {
         return;
@@ -473,11 +482,11 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
 
     const auto& plan = graph.GetCompiledPlan();
     const auto first_slot =
-        plan.resources[first.resource.index].transient_slot;
+        plan.resources[first.handle.resource_id].transient_slot;
     const auto second_slot =
-        plan.resources[second.resource.index].transient_slot;
+        plan.resources[second.handle.resource_id].transient_slot;
     suite.Check(
-        first_slot != RenderGraph::PassHandle::InvalidIndex &&
+        first_slot != RenderGraph::InvalidIndex &&
             first_slot == second_slot && plan.alias_boundaries.size() == 1,
         test,
         "compiler did not color non-overlapping descriptor-exact buffers into one slot"
@@ -486,8 +495,8 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
     if (!plan.alias_boundaries.empty()) {
         const auto& alias = plan.alias_boundaries.front();
         suite.Check(
-                alias.predecessor_resource == first.resource &&
-                alias.successor_resource == second.resource &&
+                alias.predecessor_resource == first.handle &&
+                alias.successor_resource == second.handle &&
                 alias.primary_src_pass == first_pass &&
                 alias.source_frontier ==
                     std::vector<RenderGraph::PassHandle>{first_pass} &&
@@ -503,13 +512,9 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
                     barrier.src_pass == first_pass &&
                     barrier.dst_pass == second_pass &&
                     barrier.before_state ==
-                        RenderGraph::ResourceState::Buffer(
-                            RenderGraph::BufferState::TransferDestination
-                        ) &&
+                        RenderGraph::ResourceState{RenderGraph::BufferAccessType::TransferDestination} &&
                     barrier.after_state ==
-                        RenderGraph::ResourceState::Buffer(
-                            RenderGraph::BufferState::TransferDestination
-                        ) &&
+                        RenderGraph::ResourceState{RenderGraph::BufferAccessType::TransferDestination} &&
                     barrier.memory_dependency &&
                     barrier.execution_dependency &&
                     !barrier.discard_previous_contents &&
@@ -526,10 +531,10 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
         [&](const RenderGraph::CompiledEdge& edge) {
             return edge.src == first_pass && edge.dst == second_pass &&
                    std::any_of(
-                       edge.reasons.begin(),
-                       edge.reasons.end(),
-                       [](const RenderGraph::CompiledEdgeReason& reason) {
-                           return reason.kind ==
+                       plan.GetDependencyReasons(edge.src, edge.dst).begin(),
+                       plan.GetDependencyReasons(edge.src, edge.dst).end(),
+                       [](const RenderGraph::CompiledDependencyReason& entry) {
+                           return entry.reason.kind ==
                                   RenderGraph::EdgeReasonKind::TransientAlias;
                        }
                    );
@@ -542,7 +547,6 @@ void TestNonOverlappingBuffersAliasUntilEveryCompletion(TestSuite& suite) {
     );
 
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         false,
         [&](Moer::Array<RHIRecordingSource>&& sources) {
@@ -597,31 +601,37 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
             "WriteFirst",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
-                    first,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                           first,
+                           RenderGraph::BufferAccessType::TransferDestination
+                )
+                    .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.AddRecordPass(
             "WriteSecond",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
-                    second,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                           second,
+                           RenderGraph::BufferAccessType::TransferDestination
+                )
+                    .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.AddRecordPass(
             "ReadFirst",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Read(
-                    first,
-                    RenderGraph::BufferState::TransferSource
-                ).SideEffect();
+                           first,
+                           RenderGraph::BufferAccessType::TransferSource
+                )
+                    .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
 
         const bool compiled = graph.Compile();
@@ -629,8 +639,8 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
         if (compiled) {
             const auto& plan = graph.GetCompiledPlan();
             suite.Check(
-                plan.resources[first.resource.index].transient_slot !=
-                    plan.resources[second.resource.index].transient_slot &&
+                plan.resources[first.handle.resource_id].transient_slot !=
+                    plan.resources[second.handle.resource_id].transient_slot &&
                     plan.alias_boundaries.empty(),
                 overlap_test,
                 "overlapping lifetimes were assigned one physical slot"
@@ -664,21 +674,25 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
             "WriteFirst",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
-                    first,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                           first,
+                           RenderGraph::BufferAccessType::TransferDestination
+                )
+                    .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.AddRecordPass(
             "WriteSecond",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
-                    second,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                           second,
+                           RenderGraph::BufferAccessType::TransferDestination
+                )
+                    .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
 
         const bool compiled = graph.Compile();
@@ -686,8 +700,8 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
         if (compiled) {
             const auto& plan = graph.GetCompiledPlan();
             suite.Check(
-                plan.resources[first.resource.index].transient_slot !=
-                    plan.resources[second.resource.index].transient_slot &&
+                plan.resources[first.handle.resource_id].transient_slot !=
+                    plan.resources[second.handle.resource_id].transient_slot &&
                     plan.alias_boundaries.empty(),
                 descriptor_test,
                 "descriptor-incompatible resources shared a transient slot"
@@ -706,25 +720,29 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
             "WriteExported",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
-                    exported,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                           exported,
+                           RenderGraph::BufferAccessType::TransferDestination
+                )
+                    .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.AddRecordPass(
             "WriteLater",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
-                    later,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                           later,
+                           RenderGraph::BufferAccessType::TransferDestination
+                )
+                    .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.Export(
             exported,
-            RenderGraph::BufferState::TransferSource,
+            RenderGraph::BufferAccessType::TransferSource,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -734,8 +752,8 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
         if (compiled) {
             const auto& plan = graph.GetCompiledPlan();
             suite.Check(
-                plan.resources[exported.resource.index].transient_slot !=
-                    plan.resources[later.resource.index].transient_slot &&
+                plan.resources[exported.handle.resource_id].transient_slot !=
+                    plan.resources[later.handle.resource_id].transient_slot &&
                     plan.alias_boundaries.empty(),
                 export_test,
                 "an exported resource was reused by a later transient"
@@ -755,28 +773,33 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
             "WriteReferenced",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
-                    referenced,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                           referenced,
+                           RenderGraph::BufferAccessType::TransferDestination
+                )
+                    .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.AddRecordPass(
             "ReferenceOnly",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Reference(referenced).SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         graph.AddRecordPass(
             "WriteLater",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
-                    later,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                           later,
+                           RenderGraph::BufferAccessType::TransferDestination
+                )
+                    .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
 
         const bool compiled = graph.Compile();
@@ -784,8 +807,8 @@ void TestUnsafeAliasCasesRemainDistinct(TestSuite& suite) {
         if (compiled) {
             const auto& plan = graph.GetCompiledPlan();
             suite.Check(
-                plan.resources[referenced.resource.index].transient_slot !=
-                    plan.resources[later.resource.index].transient_slot &&
+                plan.resources[referenced.handle.resource_id].transient_slot !=
+                    plan.resources[later.handle.resource_id].transient_slot &&
                     plan.alias_boundaries.empty(),
                 reference_test,
                 "opaque Reference lifetime was reused by a later transient"
@@ -807,21 +830,25 @@ void TestNonOverlappingTexturesAlias(TestSuite& suite) {
         "WriteFirst",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(
-                first,
-                RenderGraph::TextureState::TransferDestination
-            ).SideEffect();
+                       first,
+                       RenderGraph::TextureAccessType::TransferDestination
+            )
+                .SideEffect();
         },
-        [](CommandList&) {}
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.AddRecordPass(
         "WriteSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(
-                second,
-                RenderGraph::TextureState::TransferDestination
-            ).SideEffect();
+                       second,
+                       RenderGraph::TextureAccessType::TransferDestination
+            )
+                .SideEffect();
         },
-        [](CommandList&) {}
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     const bool compiled = graph.Compile();
@@ -831,8 +858,8 @@ void TestNonOverlappingTexturesAlias(TestSuite& suite) {
     }
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
-        plan.resources[first.resource.index].transient_slot ==
-                plan.resources[second.resource.index].transient_slot &&
+        plan.resources[first.handle.resource_id].transient_slot ==
+                plan.resources[second.handle.resource_id].transient_slot &&
             plan.alias_boundaries.size() == 1,
         test,
         "compiler did not alias compatible whole textures"
@@ -860,63 +887,67 @@ void TestAliasBarrierCoversCompleteReaderFrontier(TestSuite& suite) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     first,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
-        [](CommandList&) {}
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     const auto ray_reader = graph.AddRecordPass(
         "RayReadFirst",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::RayTracing
-                   )
+                       RenderGraph::GpuWorkType::RayTracing
+            )
                 .Read(
                     first,
-                    RenderGraph::BufferState::ShaderResource
+                    RenderGraph::BufferAccessType::ShaderRead
                 )
                 .SideEffect();
         },
-        [](CommandList&) {}
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     const auto graphics_reader = graph.AddRecordPass(
         "GraphicsReadFirst",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Graphics
-                   )
+                       RenderGraph::GpuWorkType::Graphics
+            )
                 .Read(
                     first,
-                    RenderGraph::BufferState::ShaderResource
+                    RenderGraph::BufferAccessType::ShaderRead
                 )
                 .SideEffect();
         },
-        [](CommandList&) {}
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     const auto successor = graph.AddRecordPass(
         "WriteSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     second,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
-        [](CommandList&) {}
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    const bool compiled = graph.Compile();
+    const bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test, graph.GetCompileError());
     if (!compiled) {
         return;
@@ -965,10 +996,10 @@ void TestAliasBarrierCoversCompleteReaderFrontier(TestSuite& suite) {
             [&](const RenderGraph::CompiledEdge& edge) {
                 return edge.src == source && edge.dst == successor &&
                        std::any_of(
-                           edge.reasons.begin(),
-                           edge.reasons.end(),
-                           [](const RenderGraph::CompiledEdgeReason& reason) {
-                               return reason.kind ==
+                           plan.GetDependencyReasons(edge.src, edge.dst).begin(),
+                           plan.GetDependencyReasons(edge.src, edge.dst).end(),
+                           [](const RenderGraph::CompiledDependencyReason& entry) {
+                               return entry.reason.kind ==
                                       RenderGraph::EdgeReasonKind::TransientAlias;
                            }
                        );
@@ -1011,12 +1042,12 @@ void TestAliasBarrierCoversCompleteReaderFrontier(TestSuite& suite) {
         "lowering dropped the alias barrier"
     );
     if (lowered_alias != before.end()) {
-        const uint32_t stages =
-            static_cast<uint32_t>(lowered_alias->source.stages);
-        const uint32_t ray_stage = static_cast<uint32_t>(
+        const Moer::uint32 stages =
+            static_cast<Moer::uint32>(lowered_alias->source.stages);
+        const Moer::uint32 ray_stage = static_cast<Moer::uint32>(
             ERHIPipelineStageFlags::PS_RAY_TRACING_SHADER
         );
-        const uint32_t graphics_stage = static_cast<uint32_t>(
+        const Moer::uint32 graphics_stage = static_cast<Moer::uint32>(
             ERHIPipelineStageFlags::PS_ALL_GRAPHICS
         );
         suite.Check(
@@ -1030,82 +1061,247 @@ void TestAliasBarrierCoversCompleteReaderFrontier(TestSuite& suite) {
 }
 
 void TestAliasChainUsesOneSlot(TestSuite& suite) {
-    constexpr std::string_view test = "three-resource alias chain uses one slot";
+    constexpr std::string_view test = "alias chain preserves semantic dependencies and final levels";
     RenderGraph graph("TransientAliasChain");
     const auto first  = graph.CreateTransientBuffer("First", kBufferDesc);
     const auto second = graph.CreateTransientBuffer("Second", kBufferDesc);
     const auto third  = graph.CreateTransientBuffer("Third", kBufferDesc);
-    const auto add_write = [&](std::string_view name, RenderGraph::BufferHandle buffer) {
-        graph.AddRecordPass(
+    const auto add_write = [&](std::string_view name, RenderGraph::BufferHandle buffer,
+                               RenderGraph::PassHandle dependency = {}) {
+        return graph.AddRecordPass(
             name,
             [=](RenderGraph::PassBuilder& builder) {
-                builder.Write(
-                    buffer,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(buffer, RenderGraph::BufferAccessType::TransferDestination)
+                    .SideEffect();
+                if (dependency.IsValid()) {
+                    builder.DependsOn(dependency);
+                }
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
     };
-    add_write("WriteFirst", first);
-    add_write("WriteSecond", second);
-    add_write("WriteThird", third);
+    const auto add_read = [&](std::string_view name, RenderGraph::BufferHandle buffer) {
+        return graph.AddRecordPass(
+            name,
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(buffer, RenderGraph::BufferAccessType::TransferSource);
+            },
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
+        );
+    };
+    const auto write_first = add_write("WriteFirst", first);
+    const auto read_first = add_read("ReadFirst", first);
+    const auto write_second = add_write("WriteSecond", second, read_first);
+    const auto late_branch = graph.AddRecordPass(
+        "LateBranch",
+        [=](RenderGraph::PassBuilder& builder) { builder.DependsOn(write_first).SideEffect(); },
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    const auto read_second = add_read("ReadSecond", second);
+    const auto write_third = add_write("WriteThird", third);
 
-    const bool compiled = graph.Compile();
+    const bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test, graph.GetCompileError());
     if (!compiled) {
         return;
     }
     const auto& plan = graph.GetCompiledPlan();
-    const uint32_t slot = plan.resources[first.resource.index].transient_slot;
+    const auto dependency_levels = plan.BuildDependencyLevels();
+    const Moer::uint32 slot = plan.resources[first.handle.resource_id].transient_slot;
     suite.Check(
-        slot != RenderGraph::PassHandle::InvalidIndex &&
-            plan.resources[second.resource.index].transient_slot == slot &&
-            plan.resources[third.resource.index].transient_slot == slot &&
+        slot != RenderGraph::InvalidIndex &&
+            plan.resources[second.handle.resource_id].transient_slot == slot &&
+            plan.resources[third.handle.resource_id].transient_slot == slot &&
             plan.alias_boundaries.size() == 2,
         test,
         "compiler did not build the expected adjacent alias chain"
     );
+
+    const auto has_reason = [&](RenderGraph::PassHandle src, RenderGraph::PassHandle dst,
+                                RenderGraph::EdgeReasonKind kind) {
+        return std::any_of(plan.edges.begin(), plan.edges.end(), [&](const auto& edge) {
+            return edge.src == src && edge.dst == dst &&
+                   std::any_of(plan.GetDependencyReasons(edge.src, edge.dst).begin(), plan.GetDependencyReasons(edge.src, edge.dst).end(), [&](const auto& entry) {
+                       return entry.reason.kind == kind;
+                   });
+        });
+    };
+    // The late branch changes canonical edge order before alias planning. The
+    // first alias augments an existing edge; the next alias adds a new edge.
+    suite.Check(
+        has_reason(read_first, write_second, RenderGraph::EdgeReasonKind::Explicit) &&
+            has_reason(read_first, write_second, RenderGraph::EdgeReasonKind::TransientAlias) &&
+            has_reason(read_second, write_third, RenderGraph::EdgeReasonKind::TransientAlias) &&
+            has_reason(write_first, late_branch, RenderGraph::EdgeReasonKind::Explicit) &&
+            !has_reason(write_first, late_branch, RenderGraph::EdgeReasonKind::TransientAlias),
+        test,
+        "alias insertion must preserve semantic reasons and attach each alias reason to its own edge"
+    );
+
+    const std::vector<std::vector<RenderGraph::PassHandle>> expected_levels{
+        {write_first}, {read_first, late_branch}, {write_second}, {read_second}, {write_third}
+    };
+    suite.Check(dependency_levels.size() == expected_levels.size(), test,
+                "the alias-only successor must follow the complete preceding chain");
+    for (Moer::uint32 level = 0; level < expected_levels.size(); ++level) {
+        if (level < dependency_levels.size()) {
+            suite.Check(dependency_levels[level].passes == expected_levels[level], test,
+                        "final dependency levels must include both semantic and alias edges");
+        }
+
+    }
+
+    const std::string dump = graph.Dump();
+    const bool recompiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
+    suite.Check(recompiled, test, graph.GetCompileError());
+    suite.Check(recompiled && graph.Dump() == dump, test,
+                "recompilation must rebuild the same execution, alias and dependency plan");
 }
 
-void TestMainThreadReferenceRetainsCompletionLifetime(TestSuite& suite) {
+void TestAliasFollowsReverseDeclarationDependency(TestSuite& suite) {
+    constexpr std::string_view test = "alias reuse follows compiled order across a reverse dependency";
+    RenderGraph graph("ReverseDependencyAlias");
+    const auto first = graph.CreateTransientBuffer("First", kBufferDesc);
+    const auto second = graph.CreateTransientBuffer("Second", kBufferDesc);
+    std::optional<RenderGraph::PassBuilder> first_builder;
+    const auto write_first = graph.AddRecordPass(
+        "WriteFirst",
+        [&](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(first, RenderGraph::BufferAccessType::TransferDestination);
+            first_builder.emplace(builder);
+        },
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    const auto write_second = graph.AddRecordPass(
+        "WriteSecond",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(second, RenderGraph::BufferAccessType::TransferDestination);
+        },
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    first_builder->DependsOn(write_second);
+
+    const bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
+    suite.Check(compiled, test, graph.GetCompileError());
+    if (!compiled) {
+        return;
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    const auto& first_resource = plan.resources[first.handle.resource_id];
+    const auto& second_resource = plan.resources[second.handle.resource_id];
+    suite.Check(
+        plan.execution_order == std::vector<RenderGraph::PassHandle>{write_second, write_first} &&
+            second_resource.first_use == 0 && second_resource.last_use == 0 &&
+            first_resource.first_use == 1 && first_resource.last_use == 1 &&
+            first_resource.transient_slot != RenderGraph::InvalidIndex &&
+            first_resource.transient_slot == second_resource.transient_slot,
+        test,
+        "lifetimes and shared allocation must follow execution positions, not declaration indices"
+    );
+    suite.Check(
+        plan.alias_boundaries.size() == 1 &&
+            plan.alias_boundaries.front().predecessor_resource == second.handle &&
+            plan.alias_boundaries.front().successor_resource == first.handle &&
+            plan.alias_boundaries.front().source_frontier ==
+                std::vector<RenderGraph::PassHandle>{write_second} &&
+            plan.alias_boundaries.front().dst_pass == write_first,
+        test,
+        "the later declared resource must retire before its earlier declared successor reuses the slot"
+    );
+    const auto has_reason = [&](RenderGraph::EdgeReasonKind kind) {
+        return plan.edges.size() == 1 && plan.edges.front().src == write_second &&
+               plan.edges.front().dst == write_first &&
+               std::any_of(plan.GetDependencyReasons(write_second, write_first).begin(), plan.GetDependencyReasons(write_second, write_first).end(),
+                           [&](const auto& entry) { return entry.reason.kind == kind; });
+    };
+    suite.Check(has_reason(RenderGraph::EdgeReasonKind::Explicit) &&
+                    has_reason(RenderGraph::EdgeReasonKind::TransientAlias),
+                test, "alias planning must augment the existing reverse explicit edge");
+
+    const std::string dump = graph.Dump();
+    const bool recompiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
+    suite.Check(recompiled && graph.Dump() == dump, test,
+                "recompilation must preserve the reverse execution and alias plan");
+    if (!recompiled) {
+        return;
+    }
+
+    FactoryProbe probe{};
+    auto pool = probe.MakePool();
+    RenderGraphTransientAllocator allocator(pool);
+    std::string error;
+    const bool prepared = allocator.Prepare(graph, error);
+    suite.Check(prepared, test, error);
+    if (!prepared) {
+        return;
+    }
+    suite.Check(probe.buffers == 1 && graph.GetPhysicalBuffer(first).Get() ==
+                    graph.GetPhysicalBuffer(second).Get(),
+                test, "reverse dependency aliases must share one physical allocation");
+    RenderGraphLowering::LoweredPlan lowered;
+    const bool lowered_ok = RenderGraphLowering::Lower(graph, lowered, error);
+    suite.Check(lowered_ok, test, error);
+    if (lowered_ok) {
+        const auto before = lowered.Before(write_first);
+        suite.Check(std::any_of(before.begin(), before.end(), [&](const auto& instruction) {
+            return instruction.transient_alias && instruction.src_pass == write_second &&
+                   instruction.dst_pass == write_first &&
+                   plan.barriers[instruction.barrier_index].sources.size() == 1 &&
+                   plan.barriers[instruction.barrier_index].sources.front().pass == write_second;
+        }), test, "lowering must place the alias barrier before its successor in compiled order");
+    }
+    allocator.ReleaseNonExported(graph);
+}
+
+void TestRecordReferenceRetainsCompletionLifetime(TestSuite& suite) {
     constexpr std::string_view test =
-        "main-thread reference retains completion lifetime";
+        "recorded reference retains completion lifetime";
     FactoryProbe probe{};
     auto         pool = probe.MakePool();
     RenderGraphTransientAllocator allocator(pool);
-    RenderGraph graph("MainThreadReferenceLifetime");
+    RenderGraph graph("RecordReferenceLifetime");
     const auto transient =
         graph.CreateTransientBuffer("Referenced", kBufferDesc);
-    graph.AddPass(
+    graph.AddRecordPass(
         "WriteReferenced",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(
-                transient,
-                RenderGraph::BufferState::TransferDestination
-            ).SideEffect();
+                       transient,
+                       RenderGraph::BufferAccessType::TransferDestination
+            )
+                .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "ReferenceOnly",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Reference(transient).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     const bool compiled = graph.Compile();
     suite.Check(compiled, test, graph.GetCompileError());
-    CommandList main_commands(EQueueType::Graphics);
+    Moer::Array<Moer::Render::RHIRecordingSource> sources;
     const bool executed = compiled && graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         false,
-        {},
+        [&](Moer::Array<Moer::Render::RHIRecordingSource>&& batch) { sources = std::move(batch); },
         RenderGraph::ActiveRecordingOptions{
             .enabled                  = true,
-            .main_thread_command_list = &main_commands,
+
             .transient_allocator      = &allocator,
         }
     );
@@ -1115,10 +1311,10 @@ void TestMainThreadReferenceRetainsCompletionLifetime(TestSuite& suite) {
             pool.BufferCount() == 1 &&
             pool.AvailableBufferCount() == 0,
         test,
-        "reference-only MainThread pass did not transfer ownership to Completion"
+        "reference-only recorded pass did not transfer ownership to Completion"
     );
     if (executed) {
-        CmdSubmit submit = main_commands.Submit();
+        CmdSubmit submit = sources.front().command_list->Submit();
         InvokeCallbacks(submit.callbacks);
         suite.Check(
             pool.AvailableBufferCount() == 0,
@@ -1126,6 +1322,7 @@ void TestMainThreadReferenceRetainsCompletionLifetime(TestSuite& suite) {
             "ordinary callbacks released a reference before the success tail"
         );
         InvokeCallbacks(submit.success_callbacks);
+        submit.lifetime.reset();
         suite.Check(
             pool.AvailableBufferCount() == 1,
             test,
@@ -1146,7 +1343,8 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Reference(transient).SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         const bool compiled = graph.Compile();
         suite.Check(
@@ -1168,15 +1366,17 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
             "WriteScratch",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
-                    transient,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                           transient,
+                           RenderGraph::BufferAccessType::TransferDestination
+                )
+                    .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         const bool compiled = graph.Compile();
         suite.Check(compiled, disabled_test, graph.GetCompileError());
-        const bool executed = compiled && graph.ExecuteFrontendRecordingPlan({});
+        const bool executed = compiled && graph.ExecuteFrontendRecordingPlan();
         suite.Check(
             !executed &&
                 graph.GetCompileError().find("active recording") !=
@@ -1188,31 +1388,36 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
     }
 
     constexpr std::string_view serial_test =
-        "allocation-backed transient rejects serial execute";
+        "allocation-backed transient requires active allocation";
     {
         bool callback_ran = false;
         RenderGraph graph("SerialTransientExecute");
         const auto transient =
             graph.CreateTransientBuffer("Scratch", kBufferDesc);
-        graph.AddPass(
+        graph.AddRecordPass(
             "WriteScratch",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.Write(
-                    transient,
-                    RenderGraph::BufferState::TransferDestination
-                ).SideEffect();
+                           transient,
+                           RenderGraph::BufferAccessType::TransferDestination
+                )
+                    .SideEffect();
             },
-            [&] { callback_ran = true; }
+            [&](Moer::Render::CommandList&) {
+                callback_ran = true;
+            },
+            RenderGraph::PassRecordPolicy::Serial
         );
         const bool compiled = graph.Compile();
         suite.Check(compiled, serial_test, graph.GetCompileError());
-        const bool executed = compiled && graph.Execute();
+        CommandList merged(EQueueType::Graphics);
+        const bool executed = compiled && graph.RecordAndMergeFrontendCommands(merged, false);
         suite.Check(
             !executed && !callback_ran &&
                 graph.GetCompileError().find("active ExecuteFrontendRecordingPlan") !=
                     std::string::npos,
             serial_test,
-            "serial Execute ran an allocation-backed transient callback"
+            "merged recording ran an allocation-backed transient callback"
         );
     }
 
@@ -1230,20 +1435,20 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Compute
-                       )
+                           RenderGraph::GpuWorkType::Compute
+                )
                     .Write(
                         transient,
-                        RenderGraph::BufferState::UnorderedAccess
+                        RenderGraph::BufferAccessType::Storage
                     )
                     .SideEffect();
             },
-            [](CommandList&) {}
+            [](CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         const bool compiled = graph.Compile();
         suite.Check(compiled, rollback_test, graph.GetCompileError());
         const bool executed = compiled && graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             false,
             {},
@@ -1279,7 +1484,8 @@ int main() {
     TestNonOverlappingTexturesAlias(suite);
     TestAliasBarrierCoversCompleteReaderFrontier(suite);
     TestAliasChainUsesOneSlot(suite);
-    TestMainThreadReferenceRetainsCompletionLifetime(suite);
+    TestAliasFollowsReverseDeclarationDependency(suite);
+    TestRecordReferenceRetainsCompletionLifetime(suite);
     TestTransientExecutionContractsAndRollback(suite);
 
     if (suite.FailureCount() != 0) {

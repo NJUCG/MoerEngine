@@ -1,11 +1,13 @@
 #ifndef MOER_LOCK_FREE_H
 #define MOER_LOCK_FREE_H
+
 #include "API_Macro.h"
 #include "log/LogSystem.h"
 #include "misc/Alignment.h"
 #include "misc/MMemory.h"
 #include "misc/MacroUtils.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include <atomic>
 #include <functional>
 #include <stdalign.h>
@@ -13,13 +15,13 @@
 
 #include "platform/Platform.h"
 
-static const uint64_t ptr_mask   = ((1ull << 32) - 1) << 32;
-static const uint64_t tag_mask   = 0xffff0000;
-static const uint16_t stat_mask  = 3;
-static const uint16_t stat_sheft = 2;
-static const uint32_t tag_index  = 2;
+static const Moer::uint64 ptr_mask   = ((1ull << 32) - 1) << 32;
+static const Moer::uint64 tag_mask   = 0xffff0000;
+static const Moer::uint16 stat_mask  = 3;
+static const Moer::uint16 stat_sheft = 2;
+static const Moer::uint32 tag_index  = 2;
 struct alignas(8) ABADoublePtr {
-    static constexpr uint64_t max_ptr_bit_count = 32;
+    static constexpr Moer::uint64 max_ptr_bit_count = 32;
     /**
  * @brief 0xffffffff00000000 for state
  *        0x00000000ffffffff for ptr
@@ -27,66 +29,66 @@ struct alignas(8) ABADoublePtr {
  *        0xf000000000000000 for reserved
  *        0x000fffff00000000 for counter 
  */
-    static constexpr uint64_t s_tag_offset          = 52;
-    static constexpr uint64_t s_tag_offset_in_state = 20;
+    static constexpr Moer::uint64 s_tag_offset          = 52;
+    static constexpr Moer::uint64 s_tag_offset_in_state = 20;
 
-    static constexpr uint64_t s_state_mask = ~((1ull << max_ptr_bit_count) - 1);
+    static constexpr Moer::uint64 s_state_mask = ~((1ull << max_ptr_bit_count) - 1);
 
-    static constexpr uint64_t s_ptr_mask = (1ull << max_ptr_bit_count) - 1;
+    static constexpr Moer::uint64 s_ptr_mask = (1ull << max_ptr_bit_count) - 1;
 
-    static constexpr uint64_t s_tag_mask = 0xffull << s_tag_offset;
+    static constexpr Moer::uint64 s_tag_mask = 0xffull << s_tag_offset;
 
-    static constexpr uint64_t s_tag_mask_in_state = 0xffull << s_tag_offset_in_state;
+    static constexpr Moer::uint64 s_tag_mask_in_state = 0xffull << s_tag_offset_in_state;
 
-    static constexpr uint64_t s_counter_mask_in_state = 0xfffffull;
+    static constexpr Moer::uint64 s_counter_mask_in_state = 0xfffffull;
 
-    ABADoublePtr(uint64_t _value) : value{_value} {}
+    ABADoublePtr(Moer::uint64 _value) : value{_value} {}
     ABADoublePtr(const ABADoublePtr& other) : value{other.value.load()} {}
     ABADoublePtr() : value{0} {}
 
-    uint64_t GetState() {
+    Moer::uint64 GetState() {
         return (value & s_state_mask) >> max_ptr_bit_count;
     }
-    uint32_t GetValue() {
+    Moer::uint32 GetValue() {
         return value & s_ptr_mask;
     }
-    uint64_t GetTag() {
+    Moer::uint64 GetTag() {
         return (value & s_tag_mask) >> s_tag_offset;
     }
-    static uint64_t GetTagFromState(uint64_t _state) {
+    static Moer::uint64 GetTagFromState(Moer::uint64 _state) {
         return (_state & s_tag_mask_in_state) >> s_tag_offset_in_state;
     }
-    void SetAll(uint32_t _ptr, uint64_t _state) {
+    void SetAll(Moer::uint32 _ptr, Moer::uint64 _state) {
         value = _ptr | (_state << max_ptr_bit_count);
     }
-    void SetValue(uint32_t _ptr) {
+    void SetValue(Moer::uint32 _ptr) {
         SetAll(_ptr, GetState());
     }
-    void SetTag(uint64_t _tag) {
+    void SetTag(Moer::uint64 _tag) {
         SetState((_tag << s_tag_offset_in_state) | GetState());
     }
-    static uint64_t SetTagInState(uint64_t _state, uint64_t _tag) {
+    static Moer::uint64 SetTagInState(Moer::uint64 _state, Moer::uint64 _tag) {
         return ((_tag << s_tag_offset_in_state) & s_tag_mask_in_state) | (_state & (~s_tag_mask_in_state));
     }
-    void SetState(uint64_t _state) {
+    void SetState(Moer::uint64 _state) {
         SetAll(GetValue(), _state);
     }
-    void AdvanceCounter(uint64_t _increment) {
-        uint64_t state = GetState();
+    void AdvanceCounter(Moer::uint64 _increment) {
+        Moer::uint64 state = GetState();
         //avoid overflow
         SetState(((state + _increment) & s_counter_mask_in_state) | (state & (~s_counter_mask_in_state)));
     }
-    static uint64_t AdvanceStateCounter(uint64_t _state, uint64_t _increment) {
+    static Moer::uint64 AdvanceStateCounter(Moer::uint64 _state, Moer::uint64 _increment) {
         return ((_state + _increment) & s_counter_mask_in_state) | (_state & (~s_counter_mask_in_state));
     }
 
-    uint64_t AtomicLoad(std::memory_order _order) {
+    Moer::uint64 AtomicLoad(std::memory_order _order) {
         return value.load(_order);
     }
-    bool AtomicCompareExchangeWeak(uint64_t _expected, uint64_t _desired, std::memory_order _order) {
+    bool AtomicCompareExchangeWeak(Moer::uint64 _expected, Moer::uint64 _desired, std::memory_order _order) {
         return value.compare_exchange_weak(_expected, _desired, _order);
     }
-    bool AtomicCompareExchangeStrong(uint64_t _expected, uint64_t _desired, std::memory_order _order) {
+    bool AtomicCompareExchangeStrong(Moer::uint64 _expected, Moer::uint64 _desired, std::memory_order _order) {
         return value.compare_exchange_strong(_expected, _desired, _order);
     }
 
@@ -95,14 +97,14 @@ struct alignas(8) ABADoublePtr {
         const ABADoublePtr& _desired,
         std::memory_order   _order
     ) {
-        return value.compare_exchange_weak((uint64_t&)_expected.value, _desired.value, _order);
+        return value.compare_exchange_weak((Moer::uint64&)_expected.value, _desired.value, _order);
     }
     bool AtomicCompareExchangeStrong(
         const ABADoublePtr& _expected,
         const ABADoublePtr& _desired,
         std::memory_order   _order
     ) {
-        return value.compare_exchange_strong((uint64_t&)_expected.value, _desired.value, _order);
+        return value.compare_exchange_strong((Moer::uint64&)_expected.value, _desired.value, _order);
     }
 
     bool operator==(ABADoublePtr& other) {
@@ -116,10 +118,10 @@ struct alignas(8) ABADoublePtr {
         this->value = other.value.load();
         return *this;
     }
-    std::atomic<uint64_t> value;
+    std::atomic<Moer::uint64> value;
 };
 
-static_assert(sizeof(ABADoublePtr) == sizeof(uint64_t) && "size of ABADoublePtr is not equal to uint64_t");
+static_assert(sizeof(ABADoublePtr) == sizeof(Moer::uint64) && "size of ABADoublePtr is not equal to uint64_t");
 
 /**
  * @brief lock-free Fixed size allocator without pre-thread cache
@@ -129,41 +131,41 @@ static_assert(sizeof(ABADoublePtr) == sizeof(uint64_t) && "size of ABADoublePtr 
  * @tparam MAX_ITEM_COUNT 
  * @tparam ITEM_PER_BLOCK 
  */
-template<class T, uint32_t MAX_ITEM_COUNT, uint32_t ITEM_PER_BLOCK>
+template<class T, Moer::uint32 MAX_ITEM_COUNT, Moer::uint32 ITEM_PER_BLOCK>
 class CORE_API LockFreeIndexedAllocator {
-    constexpr static uint32_t s_max_block_count = (MAX_ITEM_COUNT + ITEM_PER_BLOCK - 1) / ITEM_PER_BLOCK;
+    constexpr static Moer::uint32 s_max_block_count = (MAX_ITEM_COUNT + ITEM_PER_BLOCK - 1) / ITEM_PER_BLOCK;
 
 public:
     LockFreeIndexedAllocator() {
         index_counter++;
-        for (uint32_t i = 0; i < s_max_block_count; i++) {
+        for (Moer::uint32 i = 0; i < s_max_block_count; i++) {
             m_blocks[i] = 0;
         }
     }
-    FORCEINLINE uint32_t Allocate(uint32_t count = 1) {
-        uint32_t index = index_counter.fetch_add(count);
+    FORCEINLINE Moer::uint32 Allocate(Moer::uint32 count = 1) {
+        Moer::uint32 index = index_counter.fetch_add(count);
         if (index + count > MAX_ITEM_COUNT) {
             assert(false && "index out of range, no more space to allocate");
         }
-        for (uint32_t i = 0; i < count; i++) {
+        for (Moer::uint32 i = 0; i < count; i++) {
             void* newed_address = GetPayLoad(index + i);
             new (newed_address) T();
         }
         return index;
     }
-    FORCEINLINE void Free(uint32_t index, uint32_t count = 1) {
+    FORCEINLINE void Free(Moer::uint32 index, Moer::uint32 count = 1) {
         assert(index < index_counter.load() && index < MAX_ITEM_COUNT && "index out of range");
-        for (uint32_t i = 0; i < count; i++) {
+        for (Moer::uint32 i = 0; i < count; i++) {
             GetPayLoad(index + i)->~T();
         }
     }
 
     //get without allocate new item
-    FORCEINLINE T* Get(uint32_t index) {
+    FORCEINLINE T* Get(Moer::uint32 index) {
         if (!index)
             return nullptr;
-        uint32_t block_index = index / ITEM_PER_BLOCK;
-        uint32_t item_index  = index % ITEM_PER_BLOCK;
+        Moer::uint32 block_index = index / ITEM_PER_BLOCK;
+        Moer::uint32 item_index  = index % ITEM_PER_BLOCK;
         assert(
             index < index_counter.load() && index < MAX_ITEM_COUNT && block_index < s_max_block_count &&
             m_blocks[block_index] && "index out of range"
@@ -172,9 +174,9 @@ public:
     }
 
 private:
-    void* GetPayLoad(uint32_t index) {
-        uint32_t block_index = index / ITEM_PER_BLOCK;
-        uint32_t item_index  = index % ITEM_PER_BLOCK;
+    void* GetPayLoad(Moer::uint32 index) {
+        Moer::uint32 block_index = index / ITEM_PER_BLOCK;
+        Moer::uint32 item_index  = index % ITEM_PER_BLOCK;
         assert(
             index < index_counter.load() && index < MAX_ITEM_COUNT && block_index < s_max_block_count &&
             "index out of range"
@@ -193,18 +195,18 @@ private:
             }
         }
         T*       target_address = (T*)(m_blocks[block_index].load()) + item_index;
-        uint32_t size           = sizeof(T);
+        Moer::uint32 size           = sizeof(T);
 
         return (T*)(m_blocks[block_index].load()) + item_index;
     }
-    std::atomic_uint64_t index_counter{0};
+    std::atomic<Moer::uint64> index_counter{0};
     //per-block contains ITEM_PER_BLOCK Ts
     std::atomic<uintptr_t> m_blocks[s_max_block_count];
 };
 #define MAX_LOCK_FREE_NODE_COUNT     ((1ull << 31) - 1)
 #define MAX_LOCK_FREE_NODE_BIT_COUNT (32)
 
-enum class LockFreeNodeState : uint32_t {
+enum class LockFreeNodeState : Moer::uint32 {
     Free    = 0,
     SetFree = 1,
     Used    = 2,
@@ -216,17 +218,17 @@ struct CORE_API LockFreeNode {
     ABADoublePtr
         next_double; //double index for queue, because we need to change both head&head-next or tail&tail-next
     // };
-    uint64_t    data = 0;
-    uint32_t    next_single; //single index for stack, because we only need to change head
-    inline void SetData(uint64_t _data) {
+    Moer::uint64 data = 0;
+    Moer::uint32 next_single; //single index for stack, because we only need to change head
+    inline void  SetData(Moer::uint64 _data) {
         { data = _data; }
     }
 };
 struct LockFreeNodeStrategy {
-    using TNodeIndex = int32_t;
+    using TNodeIndex = Moer::int32;
     using TNode      = LockFreeNode;
 
-    static constexpr uint32_t s_node_per_block = (1 << 18) / sizeof(LockFreeNode); //16KB
+    static constexpr Moer::uint32 s_node_per_block = (1 << 18) / sizeof(LockFreeNode); //16KB
 
     using TAllocator = LockFreeIndexedAllocator<LockFreeNode, MAX_LOCK_FREE_NODE_COUNT, s_node_per_block>;
 
@@ -262,7 +264,7 @@ struct InlineValue<T, true> {
  * 
  * @tparam Padding, avoid cacheline contention
  */
-template<uint32_t Padding>
+template<Moer::uint32 Padding>
 class LockFreeNodeStack {
     using TNodeIndex = LockFreeNodeStrategy::TNodeIndex;
     using TNode      = LockFreeNodeStrategy::TNode;
@@ -283,7 +285,7 @@ public:
         } while (!m_head.AtomicCompareExchangeWeak(local_head, new_head, std::memory_order_acq_rel));
     }
 
-    bool PushIf(std::function<TNodeIndex(uint64_t)> _allocate_if_true) {
+    bool PushIf(std::function<TNodeIndex(Moer::uint64)> _allocate_if_true) {
         ABADoublePtr local_head;
         ABADoublePtr new_head;
         do {
@@ -346,7 +348,7 @@ public:
     //     return local_head.GetValue();
     // }
 
-    TNodeIndex PopAllAndChangeTag(std::function<uint64_t(uint64_t)> func_change_state) {
+    TNodeIndex PopAllAndChangeTag(std::function<Moer::uint64(Moer::uint64)> func_change_state) {
         ABADoublePtr local_head;
         ABADoublePtr new_head;
         TNodeIndex   index = 0;
@@ -362,7 +364,7 @@ public:
         return index;
     }
 
-    FORCEINLINE uint64_t GetState() const {
+    FORCEINLINE Moer::uint64 GetState() const {
         ABADoublePtr local_head = m_head;
         return local_head.GetState();
     }
@@ -371,11 +373,11 @@ private:
     alignas(Padding) ABADoublePtr m_head{0};
 };
 
-template<class T, bool InlineType, uint32_t Padding>
+template<class T, bool InlineType, Moer::uint32 Padding>
 class LockFreeStackBase {
     using TNodeIndex                 = LockFreeNodeStrategy::TNodeIndex;
     using TNode                      = LockFreeNodeStrategy::TNode;
-    static constexpr bool use_inline = InlineType && sizeof(T) < sizeof(uint64_t);
+    static constexpr bool use_inline = InlineType && sizeof(T) < sizeof(Moer::uint64);
 
 public:
     using TValue        = InlineValue<T, use_inline>::TValue;
@@ -392,15 +394,15 @@ public:
         node->SetData(uint64(_payload));
         node_list.Push(index);
     }
-    bool PushIf(TValue _payload, std::function<bool(uint64_t)> push_if_true) {
+    bool PushIf(TValue _payload, std::function<bool(Moer::uint64)> push_if_true) {
         TNodeIndex index = 0;
 
-        auto allocate_node_if_true = [&index, _payload, &push_if_true](uint64_t state) {
+        auto allocate_node_if_true = [&index, _payload, &push_if_true](Moer::uint64 state) {
             if (push_if_true(state)) {
                 if (index == 0) {
                     index              = LockFreeNodeStrategy::AllocateNodeIndex();
                     LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
-                    node->SetData(uint64_t(_payload));
+                    node->SetData(Moer::uint64(_payload));
                 }
                 return index;
             }
@@ -441,7 +443,7 @@ public:
     }
 
     void
-    PopAllAndChangeTag(Moer::Array<TValue>& _target, std::function<uint64_t(uint64_t)> func_change_state) {
+    PopAllAndChangeTag(Moer::Array<TValue>& _target, std::function<Moer::uint64(Moer::uint64)> func_change_state) {
         TNodeIndex index = node_list.PopAllAndChangeTag(func_change_state);
         while (index != 0) {
             LockFreeNode* node = LockFreeNodeStrategy::GetNode(index);
@@ -465,7 +467,7 @@ public:
         return data;
     }
 
-    uint64_t GetState() const {
+    Moer::uint64 GetState() const {
         return node_list.GetState();
     }
 
@@ -473,11 +475,11 @@ private:
     LockFreeNodeStack<Padding> node_list;
 };
 
-template<class T, bool InlineType = false, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
+template<class T, bool InlineType = false, Moer::uint32 Padding = PLATFORM_CACHELINE_SIZE>
 class LockFreeQueueBase {
     using TNodeIndex                 = LockFreeNodeStrategy::TNodeIndex;
     using TNode                      = LockFreeNodeStrategy::TNode;
-    static constexpr bool use_inline = InlineType && sizeof(T) < sizeof(uint64_t);
+    static constexpr bool use_inline = InlineType && sizeof(T) < sizeof(Moer::uint64);
 
 public:
     using TValue                       = InlineValue<T, use_inline>::TValue;
@@ -499,7 +501,7 @@ public:
         //use fetch and add
         TNodeIndex index = LockFreeNodeStrategy::AllocateNodeIndex();
 
-        LockFreeNodeStrategy::GetNode(index)->SetData(uint64_t(_payload));
+        LockFreeNodeStrategy::GetNode(index)->SetData(Moer::uint64(_payload));
 
         ABADoublePtr local_tail;
         ABADoublePtr new_tail;
@@ -621,7 +623,7 @@ private:
     alignas(Padding) ABADoublePtr m_tail;
 };
 
-template<class T, bool InlineType = false, uint32_t Padding = PLATFORM_CACHELINE_SIZE>
+template<class T, bool InlineType = false, Moer::uint32 Padding = PLATFORM_CACHELINE_SIZE>
 class ClosableLockFreeMpScStack : public LockFreeStackBase<T, InlineType, Padding> {
     using TValue = LockFreeStackBase<T, InlineType, Padding>::TValue;
 
@@ -633,7 +635,7 @@ public:
 
     // }
     bool TryPush(TValue _payload) {
-        return LockFreeStackBase<T, InlineType, Padding>::PushIf(_payload, [](uint64_t State) {
+        return LockFreeStackBase<T, InlineType, Padding>::PushIf(_payload, [](Moer::uint64 State) {
             return (ABADoublePtr::GetTagFromState(State) & 1) == 0;
         });
     }
@@ -641,7 +643,7 @@ public:
         return ABADoublePtr::GetTagFromState(LockFreeStackBase<T, InlineType, Padding>::GetState()) & 1;
     }
     void ComsumeAllAndClose(Moer::Array<TValue>& target) {
-        LockFreeStackBase<T, InlineType, Padding>::PopAllAndChangeTag(target, [](uint64_t State) {
+        LockFreeStackBase<T, InlineType, Padding>::PopAllAndChangeTag(target, [](Moer::uint64 State) {
             return ABADoublePtr::SetTagInState(State, 1);
         });
     }
@@ -650,10 +652,10 @@ private:
     std::mutex test_mutex;
 };
 
-template<typename T, uint32_t TaskPriorityCount>
+template<typename T, Moer::uint32 TaskPriorityCount>
 class TaskFIFOQueue {
 
-    static int32_t GetFirstOne(uint32_t target) {
+    static Moer::int32 GetFirstOne(Moer::uint32 target) {
         int index = -1;
         for (int i = 0; i < 31; i++) {
             if (target == 0)
@@ -671,20 +673,20 @@ class TaskFIFOQueue {
 
 public:
     TaskFIFOQueue() : state{0} {};
-    int32_t Push(T* task, uint32_t index) {
+    Moer::int32 Push(T* task, Moer::uint32 index) {
         ABADoublePtr local_state;
         ABADoublePtr new_state;
-        int32_t      possible_thread = -1;
+        Moer::int32  possible_thread = -1;
         m_queue[index].Push(task);
         do {
             local_state       = state;
-            uint32_t possible = local_state.GetValue();
+            Moer::uint32 possible = local_state.GetValue();
             possible_thread   = GetFirstOne(possible);
 
             new_state = local_state;
             new_state.AdvanceCounter(1);
             if (possible_thread >= 0) {
-                uint32_t thread_mask = ~(uint32_t(1u << (32 - possible_thread - 1)));
+                Moer::uint32 thread_mask = ~(Moer::uint32(1u << (32 - possible_thread - 1)));
 
                 new_state.SetValue(local_state.GetValue() & thread_mask);
             } else {
@@ -694,14 +696,14 @@ public:
         return possible_thread;
     }
 
-    T* Pop(int32_t index, bool allowHang = true) {
+    T* Pop(Moer::int32 index, bool allowHang = true) {
         ABADoublePtr local_state;
         ABADoublePtr new_state;
 
         T* result = nullptr;
         do {
             local_state = state;
-            for (int32_t i = 0; i < TaskPriorityCount; i++) {
+            for (Moer::int32 i = 0; i < TaskPriorityCount; i++) {
                 result = m_queue[i].Pop();
                 if (result != nullptr) {
                     do {

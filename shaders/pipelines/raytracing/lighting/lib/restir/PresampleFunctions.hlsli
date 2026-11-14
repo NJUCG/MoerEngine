@@ -100,8 +100,7 @@ void SampleEnvMap(inout RandomState _rng, Texture2D<float> _pdf_tex,
   rw_ris_buffer[ris_idx] = uint2(packed_uv, asuint(inv_pdf));
 }
 
-void SampleLocalLightsForGrid(inout RandomState _rng,
-                              inout RandomState _coherent_rng, uint _light_slot,
+void SampleLocalLightsForGrid(inout RandomState _rng, uint _light_slot,
                               DI::LightBufferRegion _local_light_region,
                               DI::RISBufferSegmentParams _ris_params,
                               Grid::Params _grid_params) {
@@ -111,7 +110,6 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
     return;
   }
 
-  uint light_in_ceil = _light_slot % _grid_params.common_params.lights_per_cell;
   uint cell_idx = _light_slot / _grid_params.common_params.lights_per_cell;
 
   float3 cell_center;
@@ -147,7 +145,8 @@ void SampleLocalLightsForGrid(inout RandomState _rng,
     uint rnd_light_idx = 0;
     float inv_pdf = 0.f;
 
-    float rnd = _rng.GetFloat();
+    // Preserve this draw so the following samples keep their existing sequence.
+    _rng.GetFloat();
 
     ctx.SelectNext(_rng, cur_light_info, rnd_light_idx, inv_pdf);
 

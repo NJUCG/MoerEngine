@@ -1,8 +1,8 @@
 #include "profile_capture_ui/ProfileCaptureUI.h"
-
 #include "Engine.h"
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
+#include "misc/Types.h"
 
 #include <array>
 #include <exception>
@@ -250,7 +250,7 @@ ProfileCaptureUI::ProfileCaptureUI(Engine& engine) :
                     );
                 },
             .request_stop =
-                [&engine](std::uint64_t generation) {
+                [&engine](uint64 generation) {
                     return engine.RequestProfileCaptureStop(generation);
                 },
             .get_snapshot =

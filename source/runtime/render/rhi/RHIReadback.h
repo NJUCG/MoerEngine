@@ -6,9 +6,9 @@
 #include "misc/Traits.h"
 #include "rhi/RHICompletion.h"
 
+#include "misc/Types.h"
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -20,7 +20,7 @@
 
 namespace Moer::Render {
 
-enum class ReadbackStatus : std::uint8_t {
+enum class ReadbackStatus : uint8 {
     Pending = 0,
     Ready   = 1,
     Error   = 2,
@@ -30,7 +30,7 @@ enum class ReadbackStatus : std::uint8_t {
 // storage alive even after the originating ReadbackFuture is released.
 struct ReadbackResult {
     ReadbackStatus                    status{ReadbackStatus::Pending};
-    std::uint64_t                     readback_id{0};
+    uint64                             readback_id{0};
     std::string                       name{};
     std::shared_ptr<const Array<byte>> data{};
     std::string                       error_reason{};
@@ -128,7 +128,7 @@ public:
 
 private:
     ReadbackFuture(
-        std::uint64_t                         _readback_id,
+        uint64                                _readback_id,
         std::shared_ptr<const std::string>    _name,
         std::shared_ptr<ReadbackPayloadState> _state,
         GpuCompletionFuture                   _completion
@@ -138,7 +138,7 @@ private:
         const GpuCompletionResult& _completion_result
     ) const;
 
-    std::uint64_t                         readback_id_{0};
+    uint64                                readback_id_{0};
     std::shared_ptr<const std::string>    name_{};
     std::shared_ptr<ReadbackPayloadState> state_{};
     GpuCompletionFuture                   completion_{};
@@ -154,20 +154,20 @@ public:
     ReadbackToken() = default;
 
     [[nodiscard]] bool Valid() const noexcept;
-    [[nodiscard]] std::uint64_t Id() const noexcept;
+    [[nodiscard]] uint64             Id() const noexcept;
     [[nodiscard]] std::size_t ByteSize() const noexcept;
     [[nodiscard]] const std::string& Name() const noexcept;
     [[nodiscard]] ReadbackFuture GetFuture() const noexcept;
 
 private:
     ReadbackToken(
-        std::uint64_t        _readback_id,
-        std::size_t          _byte_size,
-        std::string_view     _name,
-        GpuCompletionFuture  _completion
+        uint64              _readback_id,
+        std::size_t         _byte_size,
+        std::string_view    _name,
+        GpuCompletionFuture _completion
     );
 
-    std::uint64_t                              readback_id_{0};
+    uint64                                     readback_id_{0};
     std::shared_ptr<const std::string>         name_{};
     std::shared_ptr<ReadbackPayloadState>      state_{};
     std::shared_ptr<ReadbackProducerLease>     producer_lease_{};
@@ -181,10 +181,10 @@ private:
 class RENDER_API ReadbackBackendAccess final {
 public:
     [[nodiscard]] static ReadbackToken Create(
-        std::uint64_t        _readback_id,
-        std::size_t          _byte_size,
-        std::string_view     _name,
-        GpuCompletionFuture  _completion
+        uint64              _readback_id,
+        std::size_t         _byte_size,
+        std::string_view    _name,
+        GpuCompletionFuture _completion
     );
 
     using PayloadWriter = void (*)(void*, std::span<byte>);

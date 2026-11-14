@@ -1,5 +1,5 @@
 #include "ProfileCaptureController.h"
-
+#include "misc/Types.h"
 #include "profile/ProfileDumpTemplates.h"
 #include "profile/ProfileScope.h"
 
@@ -16,11 +16,11 @@ struct CompletionState {
 
     // Written once while request_mutex_ owns the submission linearization
     // point, before either the queued request or rejected ticket is published.
-    std::uint64_t                   request_id{0};
+    uint64                                      request_id{0};
     const ProfileCaptureRequestKind kind{ProfileCaptureRequestKind::Start};
-    std::atomic_uint64_t            generation{0};
-    std::atomic_uint32_t            detail{0};
-    std::atomic_uint32_t            secondary_detail{0};
+    std::atomic<uint64>                         generation{0};
+    std::atomic<uint32>                         detail{0};
+    std::atomic<uint32>                         secondary_detail{0};
     std::atomic_flag                completion_claimed = ATOMIC_FLAG_INIT;
     std::atomic<ProfileCaptureCompletionStatus> status{
         ProfileCaptureCompletionStatus::Pending
@@ -31,14 +31,14 @@ struct CompletionState {
 
 namespace {
 
-template <typename Enum>
-[[nodiscard]] constexpr std::uint32_t Raw(Enum _value) noexcept {
-    return static_cast<std::uint32_t>(_value);
+template<typename Enum>
+[[nodiscard]] constexpr uint32 Raw(Enum _value) noexcept {
+    return static_cast<uint32>(_value);
 }
 
 [[nodiscard]] bool RegistrationUsable(
     const ProfileDump::SchemaRegistration& _registration,
-    std::uint64_t                           _generation
+    uint64                                 _generation
 ) noexcept {
     return (_registration.status == ProfileDump::SchemaStatus::Registered ||
             _registration.status == ProfileDump::SchemaStatus::AlreadyRegistered) &&
@@ -73,11 +73,11 @@ RuntimeHasDroppedRecords(const ProfileDump::RuntimeStats& _stats) noexcept {
 }
 
 [[nodiscard]] ProfileCaptureCompletionStatus AccountRuntimeFinalization(
-    ProfileCaptureCompletionStatus  _status,
+    ProfileCaptureCompletionStatus   _status,
     ProfileDump::FlushResult         _flush_result,
     ProfileDump::ShutdownResult      _shutdown_result,
     const ProfileDump::RuntimeStats& _pre_shutdown_stats,
-    std::uint64_t                    _generation
+    uint64                           _generation
 ) noexcept {
     const ProfileDump::RuntimeStats post_shutdown_stats =
         ProfileDump::GetRuntimeStats();
@@ -177,7 +177,7 @@ ProfileCaptureController::~ProfileCaptureController() noexcept {
     // retire only the exact generation acquired by this controller; never
     // mutate a facade or ProfileDump runtime that has since been rebound.
     if (owns_runtime_ && active_generation_ != 0) {
-        const std::uint64_t owned_generation = active_generation_;
+        const uint64 owned_generation = active_generation_;
         if (gpu_session_active_ && capture_ != nullptr) {
             const RenderProfileCaptureStats stats = capture_->GetStats();
             if (stats.generation == owned_generation) {
@@ -212,7 +212,7 @@ ProfileCaptureRequestSubmission ProfileCaptureController::RequestStart(
 }
 
 ProfileCaptureRequestSubmission
-ProfileCaptureController::RequestStop(std::uint64_t _expected_generation) noexcept {
+ProfileCaptureController::RequestStop(uint64 _expected_generation) noexcept {
     Request request{};
     request.kind                = ProfileCaptureRequestKind::Stop;
     request.expected_generation = _expected_generation;
@@ -409,8 +409,8 @@ void ProfileCaptureController::ProcessStart(Request&& _request) noexcept {
 
     ProfileCaptureCompletionStatus failure_status =
         ProfileCaptureCompletionStatus::CpuSchemaFailed;
-    std::uint32_t failure_detail = std::numeric_limits<std::uint32_t>::max();
-    const std::uint64_t started_generation = active_generation_;
+    uint32       failure_detail     = std::numeric_limits<uint32>::max();
+    const uint64 started_generation = active_generation_;
 
     try {
         const ProfileDump::SchemaRegistration cpu_scope =
@@ -540,7 +540,7 @@ bool ProfileCaptureController::ProcessStop(Request&& _request) noexcept {
             }
         }
 
-        const std::uint64_t lost_generation = active_generation_;
+        const uint64 lost_generation        = active_generation_;
         owns_runtime_                       = false;
         cpu_producer_active_                = false;
         gpu_session_active_                 = false;
@@ -598,7 +598,7 @@ ProfileCaptureTickResult ProfileCaptureController::PollGpuStop() noexcept {
 void ProfileCaptureController::FinalizeDynamicRuntime(
     RenderProfileSessionFinishResult _gpu_result
 ) noexcept {
-    const std::uint64_t generation = active_generation_;
+    const uint64 generation        = active_generation_;
     state_                         = ProfileCaptureControllerState::FinalizingRuntime;
     gpu_session_active_            = false;
     PublishOwnerState();
@@ -737,7 +737,7 @@ ProfileCaptureController::FinalizeRuntimeAfterWorkers() noexcept {
         return ProfileCaptureLifecycleResult::InvalidState;
     }
 
-    const std::uint64_t generation = active_generation_;
+    const uint64 generation        = active_generation_;
     state_                         = ProfileCaptureControllerState::FinalizingRuntime;
     PublishOwnerState();
 
@@ -806,7 +806,7 @@ ProfileCaptureController::AbandonRuntimeAfterWorkerShutdownFailure() noexcept {
     // the exceptional leak explicit. In particular, owns_runtime_ must be
     // cleared so the destructor cannot race a still-running worker by trying
     // the normal generation-guarded emergency finalization.
-    const std::uint64_t generation = active_generation_;
+    const uint64 generation        = active_generation_;
     owns_runtime_                  = false;
     cpu_producer_active_           = false;
     gpu_session_active_            = false;
@@ -887,10 +887,10 @@ void ProfileCaptureController::PublishOwnerState() noexcept {
 
 void ProfileCaptureController::Complete(
     const std::shared_ptr<ProfileCaptureControllerDetail::CompletionState>& _completion,
-    ProfileCaptureCompletionStatus                                           _status,
-    std::uint64_t                                                            _generation,
-    std::uint32_t                                                            _detail,
-    std::uint32_t _secondary_detail
+    ProfileCaptureCompletionStatus                                          _status,
+    uint64                                                                  _generation,
+    uint32                                                                  _detail,
+    uint32                                                                  _secondary_detail
 ) noexcept {
     if (!_completion ||
         _completion->completion_claimed.test_and_set(std::memory_order_acq_rel)) {

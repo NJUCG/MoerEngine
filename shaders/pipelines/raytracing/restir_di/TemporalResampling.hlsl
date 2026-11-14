@@ -21,7 +21,6 @@ main(uint2 dtid
       resample_params.restir_di_params.temporal_resample_params
           .enable_permutation_sample;
   use_permutation_sampling = false;
-  Moer::LightSample light_sample;
 
   Moer::DI::Reservoir res = Moer::DI::Reservoir::EmptyReservoir();
   int2 temporal_pixel_pos = -1;
@@ -36,9 +35,7 @@ main(uint2 dtid
         TextureHandle(resample_params.bindless_handles.motion);
     Texture2D<float3> motion_tex = motion_handle.GetTexture2D<float3>();
     float3 motion = motion_tex[pixel_pos].xyz;
-    motion =
-        Moer::MotionToPixelSpace(resample_params.main_view,
-                                 resample_params.prev_view, pixel_pos, motion);
+    motion = Moer::MotionToPixelSpace(pixel_pos, motion);
     Moer::DI::TemporalResampleParams t_params;
     t_params.screen_motion = motion;
     t_params.src_buffer_idx = resample_params.restir_di_params.buffer_indices

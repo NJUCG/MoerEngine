@@ -2,8 +2,8 @@
 
 #include "EngineConsoleControl.h"
 
+#include "misc/Types.h"
 #include <cstddef>
-#include <cstdint>
 #include <deque>
 #include <memory>
 #include <string>
@@ -12,13 +12,13 @@
 
 namespace Moer {
 
-enum class EConsoleSessionSource : std::uint8_t {
+enum class EConsoleSessionSource : uint8 {
     Session,
     Log,
     Command,
 };
 
-enum class EConsoleSessionLevel : std::uint8_t {
+enum class EConsoleSessionLevel : uint8 {
     Trace,
     Debug,
     Info,
@@ -28,8 +28,8 @@ enum class EConsoleSessionLevel : std::uint8_t {
 };
 
 struct ConsoleSessionLine {
-    std::uint64_t         session_sequence = 0;
-    std::uint64_t         source_sequence  = 0;
+    uint64                session_sequence = 0;
+    uint64                source_sequence  = 0;
     EConsoleSessionSource source           = EConsoleSessionSource::Session;
     EConsoleSessionLevel  level            = EConsoleSessionLevel::Info;
     std::string           text;
@@ -48,8 +48,8 @@ struct ConsoleSessionLimits {
 struct ConsoleSessionPumpResult {
     std::size_t   log_lines             = 0;
     std::size_t   command_lines         = 0;
-    std::uint64_t dropped_log_lines     = 0;
-    std::uint64_t dropped_command_lines = 0;
+    uint64        dropped_log_lines     = 0;
+    uint64        dropped_command_lines = 0;
 };
 
 // Editor-owned, Game-Thread session state. The Core log and command channels
@@ -85,7 +85,7 @@ private:
     void Append(
         EConsoleSessionSource source,
         EConsoleSessionLevel  level,
-        std::uint64_t         source_sequence,
+        uint64                source_sequence,
         std::string           text
     );
     static std::string_view Trim(std::string_view text) noexcept;
@@ -96,9 +96,9 @@ private:
     std::deque<std::string>                history;
     std::size_t                            displayed_text_bytes  = 0;
     std::size_t                            displayed_visual_rows = 0;
-    std::uint64_t                          next_session_sequence = 1;
-    std::uint64_t                          next_log_sequence     = 1;
-    std::uint64_t                          next_command_sequence = 1;
+    uint64                                 next_session_sequence = 1;
+    uint64                                 next_log_sequence     = 1;
+    uint64                                 next_command_sequence = 1;
 };
 
 } // namespace Moer

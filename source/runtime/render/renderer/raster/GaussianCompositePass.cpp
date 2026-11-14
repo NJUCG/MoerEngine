@@ -1,6 +1,9 @@
 #include "GaussianCompositePass.h"
 #include "PixelFormat.h"
 #include "RasterTool.h"
+#include "RasterGraphResourceAccess.h"
+#include "rendergraph/RenderGraphUpload.h"
+#include <cmath>
 #include "rhi/RHI.h"
 #include "shaderheaders/shared/gaussian/GaussianRasterParameters.h"
 namespace Moer::Render::Raster {
@@ -88,6 +91,7 @@ GaussianCompositePass::RecordParameters GaussianCompositePass::Prepare(
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS |
                 ETextureUsageFlags::TRANSFER_SRC
         );
+        InitializeGraphicsTexture(state.output.tex);
         state.output.hdl = state.bindless->AllocateTexture(
             state.output.tex->GetView(), Sampler{SF_LINEAR, SAM_CLAMP_TO_EDGE}
         );
@@ -104,13 +108,24 @@ GaussianCompositePass::RecordParameters GaussianCompositePass::Prepare(
     };
 }
 void GaussianCompositePass::Record(CommandList& commands, const RecordParameters& parameters) {
+    RenderGraph graph("Gaussian composite", RenderGraph::QueueTopology::FromRHI());
+    AddToGraph(graph, parameters,
+        ImportRasterTexture(graph, "GaussianComposite.input", parameters.input.tex.Get()),
+        ImportRasterTexture(graph, "GaussianComposite.color", parameters.color.Get()),
+        ImportRasterTexture(graph, "GaussianComposite.transmittance", parameters.transmittance.Get()),
+        ImportRasterBuffer(graph, "GaussianComposite.status", parameters.status.Get()),
+        ImportRasterBuffer(graph, "GaussianComposite.ranges", parameters.ranges.Get()),
+        ImportRasterTexture(graph, "GaussianComposite.output", parameters.output.tex.Get()));
+    RecordGraphicsUploadGraph(graph, commands);
+}
+
+void GaussianCompositePass::RecordCompositeCommands(CommandList& commands, const RecordParameters& parameters) {
     QueryToken token;
     if (!m_impl->timing.Valid()) {
         token          = commands.BeginTimestampQuery("Gaussian composite");
         m_impl->timing = token.GetFuture();
     }
     commands.PushScopeWithTimeScope("Gaussian composite");
-    commands.UpdateBindlessArray(m_impl->bindless);
     GaussianCompositeParams param{};
     const auto              size = parameters.output.GetSize();
     param.viewport               = uint4(size.x, size.y, (size.x + 15) / 16, uint(parameters.debug_view));
@@ -143,15 +158,33 @@ RenderGraph::PassHandle GaussianCompositePass::AddToGraph(
     RenderGraph::BufferHandle  ranges,
     RenderGraph::TextureHandle output
 ) {
+    const auto table = graph.ImportToken("Raster.bindless", m_impl->bindless.Get());
+    graph.AddRecordPass(
+        "GaussianComposite.Publish",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(table).TranslateSerialControl();
+        },
+        [bindless = m_impl->bindless](CommandList& commands) {
+            commands.UpdateBindlessArray(bindless);
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
     return graph.AddRecordPass(
         "GaussianComposite",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(input).Read(color).Read(transmittance).Read(status).Read(ranges).Write(output);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                .Read(table)
+                .Read(input, RenderGraph::TextureAccessType::Sampled)
+                .Read(color, RenderGraph::TextureAccessType::Sampled)
+                .Read(transmittance, RenderGraph::TextureAccessType::Sampled)
+                .Read(status, RenderGraph::BufferAccessType::ShaderRead)
+                .Read(ranges, RenderGraph::BufferAccessType::ShaderRead)
+                .Write(output, RenderGraph::TextureAccessType::Storage);
         },
         [this, parameters](CommandList& commands) {
-            Record(commands, parameters);
+            RecordCompositeCommands(commands, parameters);
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
 }
 void GaussianCompositePass::RecordDebug(
@@ -179,23 +212,6 @@ void GaussianCompositePass::RecordDebug(
             ColorAttachment(output)
         );
     commands.AddCallback([parameters, output]() {});
-}
-
-void GaussianCompositePass::RecordDebug(
-    CommandList&                             commands,
-    RecordParameters                         parameters,
-    TextureRef                               output,
-    ShadowDepthPass&                         shadows,
-    const ShadowDepthPass::RecordParameters* shadow_parameters
-) {
-    if (parameters.debug_view == EGaussianDebugView::ShadowDepth && shadow_parameters) {
-        auto atlas = shadows.RecordGaussianDepthDebug(commands, *shadow_parameters);
-        if (atlas) {
-            parameters.color                 = atlas;
-            parameters.is_shadow_depth_valid = true;
-        }
-    }
-    RecordDebug(commands, parameters, output);
 }
 
 } // namespace Moer::Render::Raster

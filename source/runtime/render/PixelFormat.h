@@ -6,8 +6,8 @@
 #define PIXELFORMAT_H
 #include "RenderAPI.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include <cassert>
-#include <cstdint>
 /**
  * Engine-owned pixel format identifiers.
  *
@@ -16,7 +16,7 @@
  * values. Comments containing large Vulkan values below are reference values
  * only; they are not the value of the engine enum entry.
  */
-enum EPixelFormat : uint8_t {
+enum EPixelFormat : Moer::uint8 {
     PF_UNDEFINED                  = 0,
     PF_R4G4_UNORM_PACK8           = 1,
     PF_R4G4B4A4_UNORM_PACK16      = 2,
@@ -270,7 +270,7 @@ enum EPixelFormat : uint8_t {
 
 namespace Moer::Render {
 
-enum class EPixelFormatAspect : uint8_t {
+enum class EPixelFormatAspect : uint8 {
     Undefined,
     Color,
     Depth,
@@ -278,7 +278,7 @@ enum class EPixelFormatAspect : uint8_t {
     DepthStencil,
 };
 
-enum class EPixelFormatCompression : uint8_t {
+enum class EPixelFormatCompression : uint8 {
     None,
     BC,
     ETC2_EAC,

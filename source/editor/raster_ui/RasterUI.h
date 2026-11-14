@@ -1,5 +1,7 @@
 #pragma once
 
+#include "misc/Types.h"
+
 // 在编辑器中提供 Raster 渲染器设置和诊断输出选择。
 
 #include "CooperativeOpsUI.h"
@@ -26,7 +28,7 @@ public:
     void RegisterFrameBufferNames(const Array<std::string>& frame_buffer_names);
 
 private:
-    uint GetDefaultSelectedFrameBufferIndex() const;
+    uint32 GetDefaultSelectedFrameBufferIndex() const;
 
 private:
     Array<std::string> m_frame_buffer_names;

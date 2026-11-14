@@ -1,4 +1,5 @@
 #include "scene/light/Light.h"
+#include "misc/Types.h"
 
 #include "log/LogSystem.h"
 #include "misc/STL.h"
@@ -35,7 +36,7 @@ void LightComponent::WriteToStream(OutputStream& _stream) const {
         // do nothing
 
     } else {
-        LOG_WARNING("Unknown light type: {}", static_cast<uint8_t>(GetType()));
+        LOG_WARNING("Unknown light type: {}", static_cast<uint8>(GetType()));
     }
 }
 
@@ -79,7 +80,7 @@ CountableRef<LightComponent> LightComponent::ReadFromStream(InputStream& _stream
         return MoerNew(AmbientLightComponent)(color);
 
     } else {
-        LOG_ERROR("Unknown light type: {}. Code Error!", static_cast<uint8_t>(type));
+        LOG_ERROR("Unknown light type: {}. Code Error!", static_cast<uint8>(type));
         return nullptr;
     }
 }

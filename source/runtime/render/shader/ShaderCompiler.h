@@ -1,12 +1,14 @@
 #ifndef MOERENGINE_SHADER_COMPILER_H
 #define MOERENGINE_SHADER_COMPILER_H
+
 #include "ShaderCommon.h"
+#include "misc/Types.h"
 #include "shader/ShaderCommon.h"
 
 struct ShaderCompiledFile {
-    uint64_t last_write_time;
-    uint64_t source_hash;
-    uint64_t compiled_hash;
+    Moer::uint64 last_write_time;
+    Moer::uint64 source_hash;
+    Moer::uint64 compiled_hash;
 
     std::string path;
     std::string content;

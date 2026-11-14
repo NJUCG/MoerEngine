@@ -1,13 +1,15 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
+#include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
-#include <limits>
 
 namespace Moer::Render {
 
@@ -22,18 +24,10 @@ namespace Moer::Render {
  */
 class RENDER_API RenderGraphLowering {
 public:
-    static constexpr uint32_t InvalidBarrierIndex = std::numeric_limits<uint32_t>::max();
-    static constexpr uint32_t InvalidAccessIndex  = std::numeric_limits<uint32_t>::max();
+    static constexpr uint32 InvalidBarrierIndex = RenderGraph::InvalidIndex;
 
-    enum class InstructionKind : uint8_t {
+    enum class InstructionKind : uint8 {
         Barrier,
-        /**
-         * Adopts the explicit input state of a pass whose same-state access did
-         * not require a compiler barrier. Materializers may emit a no-op
-         * explicit barrier; its purpose is persistent tracker state adoption
-         * across independently submitted CommandLists.
-         */
-        StateSeed,
         /** Source-family half emitted after the designated producer batch. */
         QueueRelease,
         /** Destination-family half emitted before the consuming pass. */
@@ -66,11 +60,9 @@ public:
 
     struct LoweredInstruction {
         InstructionKind instruction_kind = InstructionKind::Barrier;
-        /** Index in RenderGraph::CompiledPlan::barriers, or InvalidBarrierIndex for a seed. */
-        uint32_t correlation_id = 0;
-        uint32_t barrier_index  = InvalidBarrierIndex;
-        /** Index in CompiledPlan::accesses for StateSeed, otherwise InvalidAccessIndex. */
-        uint32_t access_index   = InvalidAccessIndex;
+        /** Index in RenderGraph::CompiledPlan::barriers. */
+        uint32 correlation_id = 0;
+        uint32 barrier_index  = InvalidBarrierIndex;
 
         RenderGraph::ResourceHandle resource{};
         RenderGraph::ResourceKind   resource_kind = RenderGraph::ResourceKind::Token;
@@ -80,7 +72,6 @@ public:
 
         RenderGraph::PassHandle src_pass{};
         RenderGraph::PassHandle dst_pass{};
-        std::vector<RenderGraph::PassHandle> source_frontier{};
 
         Scope source{};
         Scope destination{};
@@ -104,22 +95,23 @@ public:
     };
 
     struct QueueSyncInstruction {
-        uint32_t                correlation_id = 0;
+        uint32                    correlation_id = 0;
         RenderGraph::PassHandle signal_pass{};
         RenderGraph::PassHandle wait_pass{};
         RenderGraph::QueueBinding signal_queue{};
         RenderGraph::QueueBinding wait_queue{};
-        uint32_t signal_batch = RenderGraph::PassHandle::InvalidIndex;
-        uint32_t wait_batch   = RenderGraph::PassHandle::InvalidIndex;
+        uint32                    signal_batch = RenderGraph::InvalidIndex;
+        uint32                    wait_batch   = RenderGraph::InvalidIndex;
         /** Added by lowering to join a fan-in frontier at one release owner. */
         bool synthetic_ownership_join = false;
-        std::vector<uint32_t> ownership_join_barriers{};
+        std::vector<uint32> ownership_join_barriers{};
         /** Ownership transfers whose release->acquire ordering uses this sync. */
-        std::vector<uint32_t> ownership_transfer_barriers{};
+        std::vector<uint32> ownership_transfer_barriers{};
     };
 
     struct PassInstructions {
         RenderGraph::PassHandle              pass{};
+        std::vector<RHIResourceAccess>       accesses{};
         std::vector<PhysicalBinding>         keepalive{};
         std::vector<LoweredInstruction>      before{};
         std::vector<LoweredInstruction>      after{};
@@ -150,6 +142,11 @@ public:
         /** Pointer-free deterministic diagnostic representation. */
         [[nodiscard]] std::string Dump() const;
     };
+
+    /** Validates and materializes an instruction. Success with no output means
+     *  a read-only boundary needs no GPU command; its proof remains in the plan. */
+    [[nodiscard]] static bool MaterializeInstruction(
+        const LoweredInstruction& instruction, std::optional<BarrierCreateInfo>& output, std::string& error);
 
     /**
      * Produces a complete plan or no plan. On failure output is cleared and

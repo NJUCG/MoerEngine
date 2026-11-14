@@ -1,17 +1,17 @@
 #pragma once
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <limits>
 
 namespace Moer::Render {
 
-enum class BindlessUpdateSlotState : std::uint8_t {
+enum class BindlessUpdateSlotState : uint8 {
     Stale,
     Original,
     ClaimedByCommand,
 };
 
-enum class BindlessUpdateFinalizationAction : std::uint8_t {
+enum class BindlessUpdateFinalizationAction : uint8 {
     Ignore,
     Retire,
     Restore,
@@ -22,13 +22,13 @@ enum class BindlessUpdateFinalizationAction : std::uint8_t {
 // lifecycle unit so an old command can never act on only half of a reused
 // binding.
 constexpr BindlessUpdateSlotState ClassifyBindlessUpdateSlot(
-    std::uint64_t _current_array_generation,
-    std::uint64_t _current_typed_generation,
-    std::uint64_t _array_claim_token,
-    std::uint64_t _typed_claim_token,
-    std::uint64_t _command_array_generation,
-    std::uint64_t _command_typed_generation,
-    std::uint64_t _command_token
+    uint64 _current_array_generation,
+    uint64 _current_typed_generation,
+    uint64 _array_claim_token,
+    uint64 _typed_claim_token,
+    uint64 _command_array_generation,
+    uint64 _command_typed_generation,
+    uint64 _command_token
 ) {
     if (_command_token == 0) {
         return BindlessUpdateSlotState::Stale;
@@ -40,8 +40,8 @@ constexpr BindlessUpdateSlotState ClassifyBindlessUpdateSlot(
         return BindlessUpdateSlotState::Original;
     }
 
-    if (_command_array_generation != std::numeric_limits<std::uint64_t>::max() &&
-        _command_typed_generation != std::numeric_limits<std::uint64_t>::max() &&
+    if (_command_array_generation != std::numeric_limits<uint64>::max() &&
+        _command_typed_generation != std::numeric_limits<uint64>::max() &&
         _current_array_generation == _command_array_generation + 1 &&
         _current_typed_generation == _command_typed_generation + 1 &&
         _array_claim_token == _command_token && _typed_claim_token == _command_token) {
@@ -68,13 +68,13 @@ constexpr BindlessUpdateFinalizationAction GetBindlessUpdateFinalizationAction(
 }
 
 constexpr bool RollbackBindlessUpdateSlotClaim(
-    std::uint64_t& _current_array_generation,
-    std::uint64_t& _current_typed_generation,
-    std::uint64_t& _array_claim_token,
-    std::uint64_t& _typed_claim_token,
-    std::uint64_t  _command_array_generation,
-    std::uint64_t  _command_typed_generation,
-    std::uint64_t  _command_token
+    uint64& _current_array_generation,
+    uint64& _current_typed_generation,
+    uint64& _array_claim_token,
+    uint64& _typed_claim_token,
+    uint64  _command_array_generation,
+    uint64  _command_typed_generation,
+    uint64  _command_token
 ) {
     if (ClassifyBindlessUpdateSlot(
             _current_array_generation,

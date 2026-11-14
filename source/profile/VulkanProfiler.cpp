@@ -1,143 +1,86 @@
 #include "VulkanProfiler.h"
+#include "MinHook.h"
 #include "Profile.h"
 #include "ProfileUtils.h"
-#include "MinHook.h"
+#include "misc/Types.h"
 
-struct VkTmpBufferAllocator;
+namespace Moer::Render {
+class VulkanDevice;
+class VulkanBuffer;
+enum class EVkInternalBufferUsage;
+} // namespace Moer::Render
 
-// ----------------- VkTmp pointer -----------------
-typedef uint64_t(*PFN_VkTmpAllocate_1)(
-    VkTmpBufferAllocator* _this,
-    uint64_t _size, 
-    std::string_view _name
-);
+using TemporaryBufferUsage       = Moer::Render::EVkInternalBufferUsage;
+using PFN_CreateTemporaryBuffer                        = Moer::Render::VulkanBuffer* (*)(Moer::Render::VulkanDevice&, Moer::uint64, std::string_view, TemporaryBufferUsage);
+using PFN_DestroyTemporaryBuffer = void (*)(Moer::Render::VulkanBuffer*);
+PFN_CreateTemporaryBuffer  orig_CreateTemporaryBuffer  = nullptr;
+PFN_DestroyTemporaryBuffer orig_DestroyTemporaryBuffer = nullptr;
 
-typedef uint64_t(*PFN_VkTmpAllocate_2)(
-    VkTmpBufferAllocator* _this,
-    uint64_t _size,
-    EVkInternalBufferUsage _usage
-);
+namespace {
 
-typedef void(*PFN_VkTmpDeAllocate)(
-    VkTmpBufferAllocator* _this,
-    uint64_t _handle
-);
+// Keep the helper frame so the stack-capture skip stays consistent.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+void RecordTemporaryBufferAllocation(
+    Moer::Render::VulkanBuffer* _buffer,
+    Moer::uint64                _size,
+    std::string_view            _name,
+    Moer::uint32                _usage
+) {
+    auto* ring = g_rings[static_cast<size_t>(MemorySource::VulkanTmp)];
+    if (!ring || !_buffer) {
+        return;
+    }
+    static thread_local moodycamel::ProducerToken token(*ring);
+    EventRecord                                   rec{};
+    rec.ts_us              = now_us();
+    rec.source             = MemorySource::VulkanTmp;
+    rec.action             = MemoryAction::Alloc;
+    rec.size               = _size;
+    rec.ptr                = _buffer;
+    rec.usage              = _usage;
+    const size_t copy_size = std::min(_name.size(), sizeof(rec.name) - 1);
+    if (copy_size != 0) {
+        memcpy(rec.name, _name.data(), copy_size);
+    }
+    rec.name[copy_size] = '\0';
+    rec.sequence        = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
+    capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 2);
+    ring->enqueue(token, rec);
+}
 
-PFN_VkTmpAllocate_1 orig_VkTmpAllocate_1 = nullptr;
-PFN_VkTmpAllocate_2 orig_VkTmpAllocate_2 = nullptr;
-PFN_VkTmpDeAllocate orig_VkTmpDeAllocate = nullptr;
+} // namespace
 
+Moer::Render::VulkanBuffer* CreateTemporaryBufferHook(
+    Moer::Render::VulkanDevice& _device,
+    Moer::uint64                _size,
+    std::string_view            _name,
+    TemporaryBufferUsage        _usage
+) {
+    auto* buffer = orig_CreateTemporaryBuffer(_device, _size, _name, _usage);
+    RecordTemporaryBufferAllocation(buffer, _size, _name, static_cast<Moer::uint32>(_usage));
+    return buffer;
+}
 
-uint64_t VkTmpAllocate_Hook_1(
-    VkTmpBufferAllocator* _this,
-    uint64_t _size, 
-    std::string_view _name
-)
-{
-    uint64_t handle = orig_VkTmpAllocate_1(_this, _size, _name);
-
-    // if (!g_in_hook)
-    // {
-    //     g_in_hook = true;
-    auto* ring = g_rings[(int)MemorySource::VulkanTmp];
-    if(ring)
-    {
-        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::VulkanTmp]);
-
-        void* p = reinterpret_cast<void*>(handle);// not a address pointer
-        EventRecord rec;
-        rec.ts_us = now_us();
-        rec.source = MemorySource::VulkanTmp;
-        rec.action = MemoryAction::Alloc;
-        rec.size = _size;
-        rec.ptr = p;
-        rec.frame_count = 0;
-        rec.usage = 0xFFFFFFFF;
-        
-        size_t copy_len = (_name.size() < 31) ? _name.size() : 31;
-        memcpy(rec.name, _name.data(), copy_len);
-        rec.name[copy_len] = '\0';
+void DestroyTemporaryBufferHook(Moer::Render::VulkanBuffer* _buffer) {
+    auto* ring = g_rings[static_cast<size_t>(MemorySource::VulkanTmp)];
+    if (ring && _buffer) {
+        static thread_local moodycamel::ProducerToken token(*ring);
+        EventRecord                                   rec{};
+        rec.ts_us    = now_us();
+        rec.source   = MemorySource::VulkanTmp;
+        rec.action   = MemoryAction::Free;
+        rec.ptr      = _buffer;
         rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
-
         capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 1);
-
         ring->enqueue(token, rec);
     }
-        
-
-    //     g_in_hook = false;
-    // }
-
-    return handle;
+    orig_DestroyTemporaryBuffer(_buffer);
 }
 
-uint64_t VkTmpAllocate_Hook_2(
-    VkTmpBufferAllocator* _this,
-    uint64_t _size,
-    EVkInternalBufferUsage _usage)
-{
-    uint64_t handle = orig_VkTmpAllocate_2(_this, _size, _usage);
-
-    // if (!g_in_hook)
-    // {
-    //     g_in_hook = true;
-    auto* ring = g_rings[(int)MemorySource::VulkanTmp];
-    if(ring)
-    {
-        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::VulkanTmp]);
-
-        void* p = reinterpret_cast<void*>(handle);// not a address pointer
-        EventRecord rec;
-        rec.ts_us = now_us();
-        rec.source = MemorySource::VulkanTmp;
-        rec.action = MemoryAction::Alloc;
-        rec.size = _size;
-        rec.ptr = p; // not a address pointer
-        rec.frame_count = 0;
-        rec.usage = (uint32_t)_usage;
-        rec.name[0] = '\0';
-        rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
-        
-        capture_frames_fast(rec.frames, MAX_FRAMES, rec.frame_count, 1);
-
-        ring->enqueue(token, rec);
-    }
-    //     g_in_hook = false;
-    // }
-
-    return handle;
-}
-
-
-void VkTmpDeAllocate_Hook(
-    VkTmpBufferAllocator* _this,
-    uint64_t _handle)
-{
-    // if (!g_in_hook)
-    // {
-    //     g_in_hook = true;
-    auto* ring = g_rings[(int)MemorySource::VulkanTmp];
-    if(ring)
-    {
-        static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::VulkanTmp]);
-
-        void* p = reinterpret_cast<void*>(_handle);
-
-        EventRecord rec;
-        rec.ts_us = now_us();
-        rec.source = MemorySource::VulkanTmp;
-        rec.action = MemoryAction::Free;
-        rec.size = 0;
-        rec.ptr = p;
-        rec.frame_count = 0;
-        rec.sequence = g_global_sequence.fetch_add(1, std::memory_order_relaxed);
-
-        ring->enqueue(token, rec);
-    }  
-    //     g_in_hook = false;
-    // }
-    orig_VkTmpDeAllocate(_this, _handle);
-}
 //---------------Vk--------------
 
 typedef VkResult (VKAPI_PTR* PFN_vkAllocateMemory)(
@@ -173,7 +116,7 @@ VkResult VKAPI_PTR Detour_vkAllocateMemory(
 
         //g_in_hook = true;
 
-        uint64_t size = pAllocateInfo->allocationSize;
+        Moer::uint64 size = pAllocateInfo->allocationSize;
         void* p = reinterpret_cast<void*>(*pMemory);
 
         EventRecord rec;
@@ -213,7 +156,7 @@ void VKAPI_PTR Detour_vkFreeMemory(
         static thread_local moodycamel::ProducerToken token(*g_rings[(size_t)MemorySource::Vulkan]);
 
         void* p = reinterpret_cast<void*>(memory);
-        uint64_t size = 0;
+        Moer::uint64 size = 0;
 
         EventRecord rec;
         rec.ts_us = now_us();
@@ -365,33 +308,33 @@ static QueueState& GetOrCreateQueueState(VkQueue queue) {
     return qs;
 }
 
-typedef VkResult(VKAPI_PTR* PFN_vkQueueSubmit)(VkQueue, uint32_t, const VkSubmitInfo*, VkFence);
+typedef VkResult(VKAPI_PTR* PFN_vkQueueSubmit)(VkQueue, Moer::uint32, const VkSubmitInfo*, VkFence);
 PFN_vkQueueSubmit orig_vkQueueSubmit = nullptr;
 
 VkResult VKAPI_PTR Detour_vkQueueSubmit(
-    VkQueue queue,
-    uint32_t submitCount,
+    VkQueue             queue,
+    Moer::uint32        submitCount,
     const VkSubmitInfo* pSubmits,
-    VkFence fence)
-{
+    VkFence             fence
+) {
     VkResult result = orig_vkQueueSubmit(queue, submitCount, pSubmits, fence);
 
     return result;
 }
 
-typedef VkResult (VKAPI_PTR *PFN_vkQueueSubmit2)(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2* pSubmits, VkFence fence);
+typedef VkResult(VKAPI_PTR* PFN_vkQueueSubmit2)(VkQueue queue, Moer::uint32 submitCount, const VkSubmitInfo2* pSubmits, VkFence fence);
 PFN_vkQueueSubmit2 orig_vkQueueSubmit2 = nullptr;
 
 //vulkan规定vkQueueSubmit2必须手动互斥，参见VulkanQueue.h:43.说明在同一Queue中hook不需要加锁
 VkResult VKAPI_PTR Detour_vkQueueSubmit2(
     VkQueue              queue,
-    uint32_t             submitCount,
+    Moer::uint32         submitCount,
     const VkSubmitInfo2* pSubmits,
-    VkFence              fence)
-{
+    VkFence              fence
+) {
     QueueState& qs = GetOrCreateQueueState(queue);
 
-    uint64_t completed = 0;
+    Moer::uint64 completed = 0;
     if (fn_vkGetSemaphoreCounterValue)
     {
         fn_vkGetSemaphoreCounterValue(g_vk_device, qs.timeline_sem, &completed);
@@ -409,23 +352,23 @@ VkResult VKAPI_PTR Detour_vkQueueSubmit2(
         for (auto& snap : rec.cb_snapshots) {
             if (!snap.pool_valid || snap.pass_count == 0) continue;
 
-            uint64_t timestamps[MAX_GPU_PASSES * 2] = {};
-            VkResult qr = fn_vkGetQueryPoolResults(
+            Moer::uint64 timestamps[MAX_GPU_PASSES * 2] = {};
+            VkResult     qr                             = fn_vkGetQueryPoolResults(
                 g_vk_device,
                 snap.pool,
                 0,
                 snap.pass_count * 2,
-                sizeof(uint64_t) * snap.pass_count * 2,
+                sizeof(Moer::uint64) * snap.pass_count * 2,
                 timestamps,
-                sizeof(uint64_t),
+                sizeof(Moer::uint64),
                 VK_QUERY_RESULT_64_BIT
             );
 
             //读取失败也无所谓
             if (qr == VK_SUCCESS) {
                 for (int i = 0; i < snap.pass_count; i++) {
-                    uint64_t begin = timestamps[i * 2];
-                    uint64_t end   = timestamps[i * 2 + 1];
+                    Moer::uint64 begin = timestamps[i * 2];
+                    Moer::uint64 end   = timestamps[i * 2 + 1];
                     if (end > begin) {
                         snap.passes[i].gpu_render_ms =
                             (float)((end - begin) * g_timestamp_period * 1e-6f);
@@ -447,9 +390,9 @@ VkResult VKAPI_PTR Detour_vkQueueSubmit2(
     SubmitRecord record;
     record.signal_value = 0;
 
-    for (uint32_t s = 0; s < submitCount; s++) {
+    for (Moer::uint32 s = 0; s < submitCount; s++) {
         const VkSubmitInfo2& si = pSubmits[s];
-        for (uint32_t c = 0; c < si.commandBufferInfoCount; c++) {
+        for (Moer::uint32 c = 0; c < si.commandBufferInfoCount; c++) {
             VkCommandBuffer cb_handle = si.pCommandBufferInfos[c].commandBuffer;
 
             std::unique_lock lock(g_cb_states_mtx);
@@ -516,7 +459,7 @@ VkResult VKAPI_PTR Detour_vkQueueSubmit2(
     }
 */
     //直接创建空submit只做signal
-    uint64_t this_value = ++qs.timeline_value;
+    Moer::uint64 this_value = ++qs.timeline_value;
     record.signal_value = this_value;
 
     VkResult result = VK_SUCCESS;
@@ -817,47 +760,42 @@ PFN_vkVoidFunction VKAPI_PTR Detour_vkGetInstanceProcAddr(
 }
 
 //目前没有启用
-typedef void(__thiscall* PFN_OnFinishPresent)(void* _this, uint64_t _image_idx);
+typedef void(__thiscall* PFN_OnFinishPresent)(void* _this, Moer::uint64 _image_idx);
 PFN_OnFinishPresent orig_OnFinishPresent = nullptr;
 
 void SetupVulkanHooks(HMODULE vklib) {
     MH_STATUS status;
-    //Editor---------------------------------
-    void* allocAddr_1 = GetProcAddressFromPdb("?Allocate@VkTmpBufferAllocator@Render@Moer@@QEAA_K_KV?$basic_string_view@DU?$char_traits@D@std@@@std@@@Z");
-    //void* allocAddr_1 = (void*)GetProcAddress(hCore, "?Allocate@VkTmpBufferAllocator@Render@Moer@@QEAA_K_KV?$basic_string_view@DU?$char_traits@D@std@@@std@@@Z");
-    if (allocAddr_1) {
+    // Resolve the exact creation symbol used by this hook's ABI.
+    void* create_buffer = GetProcAddressFromPdb(
+        "?CreateTemporaryBuffer@Render@Moer@@YAPEAVVulkanBuffer@12@AEAVVulkanDevice@12@_KV?$basic_string_"
+        "view@DU?$char_traits@D@std@@@std@@W4EVkInternalBufferUsage@12@@Z"
+    );
+    if (create_buffer) {
         status = MH_CreateHook(
-            allocAddr_1,
-            &VkTmpAllocate_Hook_1,
-            (LPVOID*)&orig_VkTmpAllocate_1
+            create_buffer,
+            reinterpret_cast<void*>(&CreateTemporaryBufferHook),
+            reinterpret_cast<void**>(&orig_CreateTemporaryBuffer)
         );
-        status = MH_EnableHook(allocAddr_1);
-        printf("[Profiler] EnableHook VkTmpBufferAllocator::Allocate(uint64 _size, std::string_view _name) %s\n", MH_StatusToString(status));
+        if (status == MH_OK) {
+            status = MH_EnableHook(create_buffer);
+        }
+        printf("[Profiler] EnableHook CreateTemporaryBuffer(name, usage): %s\n", MH_StatusToString(status));
     }
 
-    void* allocAddr_2 = GetProcAddressFromPdb("?Allocate@VkTmpBufferAllocator@Render@Moer@@QEAA_K_KW4EVkInternalBufferUsage@23@@Z", "VkTmpBufferAllocator::Allocate");
-    //void* allocAddr_2 =(void*)GetProcAddress(hCore, "?Allocate@VkTmpBufferAllocator@Render@Moer@@QEAA_K_KW4EVkInternalBufferUsage@23@@Z");
-    if (allocAddr_2) {
+    void* destroy_buffer = GetProcAddressFromPdb(
+        "?DestroyTemporaryBuffer@Render@Moer@@YAXPEAVVulkanBuffer@12@@Z",
+        "Moer::Render::DestroyTemporaryBuffer"
+    );
+    if (destroy_buffer) {
         status = MH_CreateHook(
-            allocAddr_2,
-            &VkTmpAllocate_Hook_2,
-            (LPVOID*)&orig_VkTmpAllocate_2
+            destroy_buffer,
+            reinterpret_cast<void*>(&DestroyTemporaryBufferHook),
+            reinterpret_cast<void**>(&orig_DestroyTemporaryBuffer)
         );
-        status = MH_EnableHook(allocAddr_2);
-        printf("[Profiler] EnableHook VkTmpBufferAllocator::Allocate(uint64 _size, EVkInternalBufferUsage _usage) %s\n", MH_StatusToString(status));
-    }
-
-    void* freeAddr = GetProcAddressFromPdb("?DeAllocate@VkTmpBufferAllocator@Render@Moer@@QEAAX_K@Z","VkTmpBufferAllocator::DeAllocate");
-   // void* freeAddr =(void*)GetProcAddress(hCore, "?DeAllocate@VkTmpBufferAllocator@Render@Moer@@QEAAX_K@Z");
-    if(freeAddr)
-    {
-        status = MH_CreateHook(
-            freeAddr,
-            &VkTmpDeAllocate_Hook,
-            (LPVOID*)&orig_VkTmpDeAllocate
-        );
-        status = MH_EnableHook(freeAddr);
-        printf("[Profiler] EnableHook DeAllocate(uint64 _handle) %s\n", MH_StatusToString(status));
+        if (status == MH_OK) {
+            status = MH_EnableHook(destroy_buffer);
+        }
+        printf("[Profiler] EnableHook DestroyTemporaryBuffer: %s\n", MH_StatusToString(status));
     }
 
     // void* pOnFinishPresent = GetProcAddressFromPdb(

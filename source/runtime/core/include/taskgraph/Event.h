@@ -1,7 +1,9 @@
 #ifndef MOER_TASKGRAPH_EVENT_H
 #define MOER_TASKGRAPH_EVENT_H
+
 #include "API_Macro.h"
 #include "misc/LockFree.h"
+#include "misc/Types.h"
 #include <condition_variable>
 #include <mutex>
 class Event {
@@ -18,7 +20,7 @@ private:
     std::condition_variable m_cond;
     Event() : Event(true) {}
     Event(bool autoReset);
-    std::atomic<uint32_t> m_signal;
+    std::atomic<Moer::uint32> m_signal;
     bool                  m_autoReset;
     //void* _event;
 };

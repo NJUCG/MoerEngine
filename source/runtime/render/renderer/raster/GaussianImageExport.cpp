@@ -1,4 +1,6 @@
 #include "GaussianImageExport.h"
+#include "RasterGraphResourceAccess.h"
+#include "rendergraph/RenderGraphUpload.h"
 #include "rhi/RHI.h"
 #include "PixelFormat.h"
 #include <algorithm>
@@ -91,9 +93,22 @@ void GaussianImageExport::Request(
     const std::filesystem::path& path,
     uint64                       request_id
 ) {
-    if (m_image_readback.Valid() || m_write.valid()) {
+    RenderGraph graph("Gaussian PNG export", RenderGraph::QueueTopology::FromRHI());
+    if (AddToGraph(graph, display, frame_status, resolution, path, request_id).IsValid())
+        RecordGraphicsUploadGraph(graph, commands);
+}
+
+RenderGraph::PassHandle GaussianImageExport::AddToGraph(
+    RenderGraph&                 graph,
+    TextureView                  display,
+    BufferView                   frame_status,
+    uint2                        resolution,
+    const std::filesystem::path& path,
+    uint64                       request_id
+) {
+    if (m_status.is_busy || m_image_readback.Valid() || m_write.valid()) {
         m_status = {request_id, true, false, "PNG request rejected: previous export is still running"};
-        return;
+        return {};
     }
     auto extension = path.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
@@ -101,34 +116,71 @@ void GaussianImageExport::Request(
     });
     if (extension != ".png") {
         Reject(request_id, "PNG export requires a .png filename");
-        return;
+        return {};
+    }
+    if (display.GetTexture()->GetWidth() != resolution.x || display.GetTexture()->GetHeight() != resolution.y) {
+        Reject(request_id, "PNG source resolution does not match the captured frame");
+        return {};
+    }
+    const auto format = display.GetTexture()->GetFormat();
+    if (format != PF_R32G32B32A32_SFLOAT && format != PF_R8G8B8A8_UNORM) {
+        Reject(request_id, "PNG export requires a linear float32 or linear RGBA8 image");
+        return {};
     }
     m_status            = {request_id, true, false, "Waiting for Gaussian GPU image..."};
     m_active_request_id = request_id;
     m_path              = path;
     m_resolution        = resolution;
-    if (display.GetTexture()->GetWidth() != resolution.x || display.GetTexture()->GetHeight() != resolution.y) {
-        Reject(request_id, "PNG source resolution does not match the captured frame");
-        return;
-    }
-    const auto format = display.GetTexture()->GetFormat();
-    if (format != PF_R32G32B32A32_SFLOAT && format != PF_R8G8B8A8_UNORM) {
-        Reject(request_id, "PNG export requires a linear float32 or linear RGBA8 image");
-        return;
-    }
-    // Public raster attachments need no TRANSFER_SRC flag just to support occasional exports.
-    auto readback_texture = RenderDevice::Get().CreateTexture("Gaussian PNG snapshot",
-        Extent3D(resolution.x,resolution.y,1), format,
-        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST);
-    commands.CopyFrom(display, readback_texture->GetView());
-    m_image_readback = commands.Readback(readback_texture->GetView(), "Gaussian PNG display");
-    commands.AddCallback([readback_texture]() {});
-    m_status_readback   = commands.Readback(frame_status, "Gaussian PNG validity");
-    if (!m_image_readback.Valid() || !m_status_readback.Valid()) {
-        m_image_readback  = {};
-        m_status_readback = {};
-        Reject(request_id, "GPU readback was rejected");
-    }
+
+    // The snapshot is private to this request. Its first copy establishes its
+    // layout; the public source and status return to the raster graph boundary.
+    const auto source = ImportRasterTexture(graph, "GaussianExport.source", display.GetTexture());
+    const auto status = ImportRasterBuffer(graph, "GaussianExport.status", frame_status.GetBuffer());
+    const auto snapshot = RenderDevice::Get().CreateTexture(
+        "GaussianExport.snapshot", Extent3D(resolution.x, resolution.y, 1), format,
+        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
+    );
+    const auto image = graph.ImportTexture("GaussianExport.snapshot", snapshot, {});
+    graph.SetInitialState(image, RenderGraph::TextureBoundary::Undefined,
+        RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+    graph.Export(image, RenderGraph::TextureAccessType::TransferSource,
+        RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    const RenderGraph::TextureRange source_range{
+        .mip_first = display.mip_level, .mip_count = display.num_mips,
+        .layer_first = display.array_layer, .layer_count = display.num_array
+    };
+    graph.AddRecordPass(
+        "GaussianExport.Snapshot",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Read(source, RenderGraph::TextureAccessType::TransferSource, source_range)
+                .Write(image, RenderGraph::TextureAccessType::TransferDestination);
+        },
+        [=](CommandList& commands) {
+            commands.CopyFrom(display, snapshot->GetView());
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
+    return graph.AddRecordPass(
+        "GaussianExport.Readback",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Read(image, RenderGraph::TextureAccessType::TransferSource)
+                .Read(status, RenderGraph::BufferAccessType::TransferSource)
+                .SideEffect();
+        },
+        [this, snapshot, frame_status, request_id](CommandList& commands) {
+            m_image_readback  = commands.Readback(snapshot->GetView(), "Gaussian PNG display");
+            m_status_readback = commands.Readback(frame_status, "Gaussian PNG validity");
+            commands.AddCallback([snapshot]() {});
+            if (!m_image_readback.Valid() || !m_status_readback.Valid()) {
+                m_image_readback  = {};
+                m_status_readback = {};
+                Reject(request_id, "GPU readback was rejected");
+            }
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
 }
 void GaussianImageExport::Poll() {
     if (m_write.valid() && m_write.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {

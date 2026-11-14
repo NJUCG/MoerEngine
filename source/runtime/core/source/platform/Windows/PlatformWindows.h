@@ -1,6 +1,8 @@
 #ifndef WINDOWS_PLATFORM_H
 #define WINDOWS_PLATFORM_H
+
 #include "../PlatformImplement.h"
+#include "misc/Types.h"
 #include "platform/Platform.h"
 
 // ref directx-graphics-samples
@@ -34,25 +36,25 @@
 
 class WindowsPlatform : public PlatformImplement {
 public:
-    virtual void SetThreadAffinityMask(void* current_thread_handle, uint64_t mask) override;
+    virtual void SetThreadAffinityMask(void* current_thread_handle, Moer::uint64 mask) override;
     virtual void SetCurrentThreadAffinity(Affinity&& _affinity) override;
     virtual void SetCurrentThreadName(std::string_view _name) override;
     virtual void
-    SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask) override;
-    virtual int32_t GetProcessorWorkGroupCount() override;
-    virtual int32_t GetProcessorCoreCountInGroup(uint32_t groupID) override;
-    virtual int32_t GetProcessorCoreCount() override;
-    uint32_t        GetCurrentThreadID() override;
+                        SetThreadGroupAffinity(void* current_thread_handle, Moer::uint16 group_mask, Moer::uint64 affinity_mask) override;
+    virtual Moer::int32 GetProcessorWorkGroupCount() override;
+    virtual Moer::int32 GetProcessorCoreCountInGroup(Moer::uint32 groupID) override;
+    virtual Moer::int32 GetProcessorCoreCount() override;
+    Moer::uint32        GetCurrentThreadID() override;
     virtual void    SetEnv(const char* _name, const char* _value) override;
 
     PlatformStackTrace
-    CaptureStackTrace(std::uint32_t _frames_to_skip, std::uint32_t _max_frames) noexcept override;
+         CaptureStackTrace(Moer::uint32 _frames_to_skip, Moer::uint32 _max_frames) noexcept override;
     bool InitializeCrashDiagnostics() noexcept override;
     PlatformCrashArtifactResult
-    WriteCrashArtifacts(
-        const PlatformCrashArtifactRequest& _request,
-        std::uint32_t _timeout_ms
-    ) noexcept override;
+                      WriteCrashArtifacts(
+                          const PlatformCrashArtifactRequest& _request,
+                          Moer::uint32                        _timeout_ms
+                      ) noexcept override;
     [[noreturn]] void FailFast(std::string_view _reason) noexcept override;
 
     virtual const PlatformMemoryInfo& GetMemoryInfo() override;

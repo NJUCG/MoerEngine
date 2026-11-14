@@ -3,6 +3,12 @@
 #include "PixelFormat.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
+#include "RasterGraphResourceAccess.h"
+#include "rendergraph/RenderGraphUpload.h"
+#include <array>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
 #include <algorithm>
 #include <bit>
 #include <cstring>
@@ -10,6 +16,11 @@
 
 namespace Moer::Render::Raster {
 namespace {
+template<class Argument>
+constexpr uint64 ArgumentBit(Argument argument) {
+    return uint64(1) << uint32(argument);
+}
+
 constexpr uint k_max_work_count = 2u * 1024u * 1024u;
 uint           Groups(uint count) {
     return (count + 255u) / 256u;
@@ -17,6 +28,10 @@ uint           Groups(uint count) {
 class GaussianProjectPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianProjectPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, Camera, Gaussians, Instances, Projected, TileCounts, Status };
+    static constexpr uint64 kWriteArguments = ArgumentBit(Argument::Projected) | ArgumentBit(Argument::TileCounts);
+    static constexpr uint64 kReadWriteArguments = ArgumentBit(Argument::Status);
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(camera);
     DEFINE_SHADER_BUFFER(gaussians);
@@ -29,6 +44,10 @@ public:
 class GaussianReceiveShadowPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianReceiveShadowPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, Projected, Gaussians, Instances, ShadowViews, Bindless };
+    static constexpr uint64 kWriteArguments = 0;
+    static constexpr uint64 kReadWriteArguments = ArgumentBit(Argument::Projected);
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(projected);
     DEFINE_SHADER_BUFFER(gaussians);
@@ -40,6 +59,10 @@ public:
 class GaussianScanBlocksPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianScanBlocksPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, InputValues, Prefix, BlockSums };
+    static constexpr uint64 kWriteArguments = ArgumentBit(Argument::Prefix) | ArgumentBit(Argument::BlockSums);
+    static constexpr uint64 kReadWriteArguments = 0;
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(input_values);
     DEFINE_SHADER_BUFFER(prefix);
@@ -49,6 +72,10 @@ public:
 class GaussianScanAddPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianScanAddPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, ParentPrefix, Prefix };
+    static constexpr uint64 kWriteArguments = 0;
+    static constexpr uint64 kReadWriteArguments = ArgumentBit(Argument::Prefix);
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(parent_prefix);
     DEFINE_SHADER_BUFFER(prefix);
@@ -57,6 +84,10 @@ public:
 class GaussianFinalizePipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianFinalizePipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, Prefix, Status };
+    static constexpr uint64 kWriteArguments = 0;
+    static constexpr uint64 kReadWriteArguments = ArgumentBit(Argument::Status);
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(prefix);
     DEFINE_SHADER_BUFFER(status);
@@ -65,6 +96,10 @@ public:
 class GaussianEmitPairsPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianEmitPairsPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, Projected, Prefix, Status, Pairs };
+    static constexpr uint64 kWriteArguments = ArgumentBit(Argument::Pairs);
+    static constexpr uint64 kReadWriteArguments = 0;
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(projected);
     DEFINE_SHADER_BUFFER(prefix);
@@ -75,6 +110,10 @@ public:
 class GaussianRadixHistogramPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianRadixHistogramPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, Pairs, Status, Histogram };
+    static constexpr uint64 kWriteArguments = ArgumentBit(Argument::Histogram);
+    static constexpr uint64 kReadWriteArguments = 0;
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(pairs);
     DEFINE_SHADER_BUFFER(status);
@@ -84,6 +123,10 @@ public:
 class GaussianRadixOffsetsPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianRadixOffsetsPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, Histogram, Status, Offsets };
+    static constexpr uint64 kWriteArguments = 0;
+    static constexpr uint64 kReadWriteArguments = ArgumentBit(Argument::Offsets);
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(histogram);
     DEFINE_SHADER_BUFFER(status);
@@ -93,6 +136,10 @@ public:
 class GaussianRadixScatterPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianRadixScatterPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, Pairs, Status, Offsets, SortedPairs };
+    static constexpr uint64 kWriteArguments = ArgumentBit(Argument::SortedPairs);
+    static constexpr uint64 kReadWriteArguments = 0;
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(pairs);
     DEFINE_SHADER_BUFFER(status);
@@ -103,6 +150,10 @@ public:
 class GaussianTileRangesPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianTileRangesPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, Pairs, Status, Ranges };
+    static constexpr uint64 kWriteArguments = 0;
+    static constexpr uint64 kReadWriteArguments = ArgumentBit(Argument::Ranges);
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(pairs);
     DEFINE_SHADER_BUFFER(status);
@@ -112,6 +163,10 @@ public:
 class GaussianSplatPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianSplatPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, Camera, Projected, Pairs, Ranges, Status, ColorOutput, TransmittanceOutput, OpaqueDepth, ReferenceOutput };
+    static constexpr uint64 kWriteArguments = ArgumentBit(Argument::ColorOutput) | ArgumentBit(Argument::TransmittanceOutput) | ArgumentBit(Argument::ReferenceOutput);
+    static constexpr uint64 kReadWriteArguments = 0;
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_BUFFER(camera);
     DEFINE_SHADER_BUFFER(projected);
@@ -140,6 +195,10 @@ public:
 class GaussianDisplayPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(GaussianDisplayPipeline);
+    // Matches DEFINE_SHADER_ARGS below; names identify the writable shader fields.
+    enum class Argument : uint32 { Param, ColorInput, TransmittanceInput, Ranges, Status, DisplayOutput, Camera };
+    static constexpr uint64 kWriteArguments = ArgumentBit(Argument::DisplayOutput);
+    static constexpr uint64 kReadWriteArguments = 0;
     DEFINE_SHADER_CONSTANT(GaussianDispatchParams, param);
     DEFINE_SHADER_TEX(color_input);
     DEFINE_SHADER_TEX(transmittance_input);
@@ -149,6 +208,182 @@ public:
     DEFINE_SHADER_BUFFER(camera);
     DEFINE_SHADER_ARGS(param, color_input, transmittance_input, ranges, status, display_output, camera);
 };
+
+namespace {
+struct GaussianFrameTimings {
+    std::array<Array<QueryFuture>, 4> stages;
+    bool recorded = false;
+};
+
+// Each dispatch is a graph node. The access masks above describe the Gaussian
+// shader interfaces, rather than inspecting recorded RHI commands for hazards.
+class GaussianStageGraph {
+public:
+    GaussianStageGraph(RenderGraph& graph, std::string_view label,
+                       std::shared_ptr<GaussianFrameTimings> timings = {},
+                       Array<TextureRef> candidates = {}) :
+        graph(graph), label(label),
+        timings(std::move(timings)), candidates(std::move(candidates)) {}
+
+    void SetStage(uint32 value) { stage = value; }
+    RenderGraph::PassHandle LastPass() const { return last; }
+
+    void AddCallback(std::function<void()>&& callback) {
+        Add("Gaussian retain owners", RenderGraph::GpuWorkType::None, {},
+            [callback = std::move(callback)](CommandList& commands) mutable {
+                commands.AddCallback(std::move(callback));
+            }, false);
+    }
+    void CopyFrom(std::span<const byte> data, BufferView destination, std::string_view name = "Gaussian upload") {
+        const auto handle = Buffer(destination.GetBuffer());
+        auto bytes = std::make_shared<Array<byte>>(data.begin(), data.end());
+        Add(name, RenderGraph::GpuWorkType::Transfer,
+            [=](RenderGraph::PassBuilder& builder) { builder.Write(handle, RenderGraph::BufferAccessType::TransferDestination); },
+            [=](CommandList& commands) { commands.CopyFrom(std::span<const byte>(*bytes), destination); });
+    }
+    void ClearResource(BufferView view, uint32 value) {
+        const auto handle = Buffer(view.GetBuffer());
+        Add("Gaussian clear buffer", RenderGraph::GpuWorkType::Transfer,
+            [=](RenderGraph::PassBuilder& builder) { builder.Write(handle, RenderGraph::BufferAccessType::TransferDestination); },
+            [=](CommandList& commands) { commands.ClearResource(view, value); });
+    }
+    void ClearResource(TextureView view, float4 value) {
+        const auto handle = Texture(view.GetTexture());
+        Add("Gaussian clear texture", RenderGraph::GpuWorkType::Transfer,
+            [=](RenderGraph::PassBuilder& builder) { builder.Write(handle, RenderGraph::TextureAccessType::TransferDestination); },
+            [=](CommandList& commands) { commands.ClearResource(view, value); });
+    }
+    void UpdateBindlessArray(BindlessArrayRef table) {
+        const auto publication = graph.ImportToken("Raster.bindless", table.Get());
+        Add("Gaussian publish bindless", RenderGraph::GpuWorkType::None,
+            [=](RenderGraph::PassBuilder& builder) { builder.Write(publication).TranslateSerialControl(); },
+            [=](CommandList& commands) { commands.UpdateBindlessArray(table); }, false);
+    }
+    void ReadbackInto(BufferView view, ReadbackFuture& future, std::string_view name) {
+        const auto handle = Buffer(view.GetBuffer());
+        Add(name, RenderGraph::GpuWorkType::Transfer,
+            [=](RenderGraph::PassBuilder& builder) { builder.Read(handle, RenderGraph::BufferAccessType::TransferSource); },
+            [view, &future, name = std::string(name)](CommandList& commands) { future = commands.Readback(view, name); });
+    }
+    void Finish() {
+        // Only the CPU telemetry sink needs all callbacks recorded. GPU ordering
+        // comes from the actual buffer/texture accesses declared by each stage.
+        Add("Gaussian finish recording", RenderGraph::GpuWorkType::None,
+            [dependencies = passes](RenderGraph::PassBuilder& builder) {
+                builder.SideEffect();
+                for (auto dependency : dependencies) builder.DependsOn(dependency);
+            },
+            [timings = timings](CommandList&) { if (timings) timings->recorded = true; }, false);
+    }
+
+    template<class Pipeline, class... Args>
+    class ComputeDispatch {
+    public:
+        ComputeDispatch(GaussianStageGraph& owner, Pipeline& pipeline, Args... arguments) :
+            owner(owner), pipeline(&pipeline), arguments(std::move(arguments)...) {}
+        void Dispatch(uint3 groups, std::string_view name) {
+            owner.ComputeStage(pipeline, arguments, groups, name, std::index_sequence_for<Args...>{});
+        }
+    private:
+        GaussianStageGraph& owner;
+        Pipeline* pipeline;
+        std::tuple<Args...> arguments;
+    };
+    template<class Pipeline, class... Args>
+    auto Compute(Pipeline& pipeline, Args&&... arguments) {
+        return ComputeDispatch<Pipeline, std::decay_t<Args>...>(*this, pipeline, std::forward<Args>(arguments)...);
+    }
+
+private:
+    struct Accesses {
+        Array<std::pair<RenderGraph::BufferHandle, RenderGraph::AccessMode>> buffers;
+        Array<std::pair<RenderGraph::TextureHandle, RenderGraph::AccessMode>> textures;
+        Array<RenderGraph::TokenHandle> publications;
+        void Declare(RenderGraph::PassBuilder& builder) const {
+            for (auto [handle, mode] : buffers) {
+                if (mode == RenderGraph::AccessMode::Read) builder.Read(handle, RenderGraph::BufferAccessType::ShaderRead);
+                else if (mode == RenderGraph::AccessMode::Write) builder.Write(handle, RenderGraph::BufferAccessType::Storage);
+                else builder.ReadWrite(handle, RenderGraph::BufferAccessType::Storage);
+            }
+            for (auto [handle, mode] : textures) {
+                if (mode == RenderGraph::AccessMode::Read) builder.Read(handle, RenderGraph::TextureAccessType::Sampled);
+                else if (mode == RenderGraph::AccessMode::Write) builder.Write(handle, RenderGraph::TextureAccessType::Storage);
+                else builder.ReadWrite(handle, RenderGraph::TextureAccessType::Storage);
+            }
+            for (auto token : publications) builder.Read(token);
+        }
+    };
+    RenderGraph::BufferHandle Buffer(Render::Buffer* buffer) {
+        auto found = buffers.find(buffer);
+        if (found != buffers.end()) return found->second;
+        return buffers.emplace(buffer, ImportRasterBuffer(graph, "Gaussian.buffer", buffer)).first->second;
+    }
+    RenderGraph::TextureHandle Texture(Render::Texture* texture) {
+        auto found = textures.find(texture);
+        if (found != textures.end()) return found->second;
+        return textures.emplace(texture, ImportRasterTexture(graph, "Gaussian.texture", texture)).first->second;
+    }
+    template<class Argument>
+    void Collect(Accesses& accesses, const Argument& argument, RenderGraph::AccessMode mode) {
+        if constexpr (std::is_same_v<Argument, BufferView>) accesses.buffers.emplace_back(Buffer(argument.GetBuffer()), mode);
+        else if constexpr (std::is_same_v<Argument, TextureView>) accesses.textures.emplace_back(Texture(argument.GetTexture()), mode);
+        else if constexpr (std::is_same_v<Argument, BindlessArrayRef>) {
+            accesses.publications.push_back(graph.ImportToken("Raster.bindless", argument.Get()));
+            for (const auto& texture : candidates) if (texture) accesses.textures.emplace_back(Texture(texture.Get()), RenderGraph::AccessMode::Read);
+        }
+    }
+    template<class Pipeline, class Tuple, size_t... Indices>
+    void ComputeStage(Pipeline* pipeline, Tuple arguments, uint3 groups, std::string_view name, std::index_sequence<Indices...>) {
+        Accesses accesses;
+        (Collect(accesses, std::get<Indices>(arguments),
+            (Pipeline::kReadWriteArguments & (uint64(1) << Indices)) ? RenderGraph::AccessMode::ReadWrite :
+            (Pipeline::kWriteArguments & (uint64(1) << Indices)) ? RenderGraph::AccessMode::Write : RenderGraph::AccessMode::Read), ...);
+        const uint32 category = std::is_same_v<Pipeline, GaussianReceiveShadowPipeline> ? 3u : stage;
+        Add(name, RenderGraph::GpuWorkType::Compute,
+            [accesses = std::move(accesses)](RenderGraph::PassBuilder& builder) { accesses.Declare(builder); },
+            [pipeline, arguments = std::move(arguments), groups, name = std::string(name)](CommandList& commands) {
+                std::apply([&](const auto&... args) { commands.Compute(*pipeline, args...).Dispatch(groups, name); }, arguments);
+            }, true, category);
+    }
+    void Add(std::string_view name, RenderGraph::GpuWorkType work,
+             RenderGraph::SetupCallback setup, RenderGraph::RecordCallback record,
+             bool measure = true, uint32 category = 0) {
+        last = graph.AddRecordPass(std::format("{}.{}[{}]", label, name, passes.size()),
+            [setup = std::move(setup), work](RenderGraph::PassBuilder& builder) {
+                if (work == RenderGraph::GpuWorkType::None) {
+                    builder.TranslateSerialControl();
+                } else {
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, work);
+                }
+                if (setup) setup(builder);
+            },
+            [record = std::move(record), timings = timings, work, measure, category, name = std::string(name)](CommandList& commands) {
+                if (work == RenderGraph::GpuWorkType::None) {
+                    record(commands);
+                    return;
+                }
+                QueryToken query;
+                if (measure && timings) {
+                    query = commands.BeginTimestampQuery(name);
+                    if (query.Valid()) timings->stages[category].push_back(query.GetFuture());
+                }
+                record(commands);
+                if (query.Valid()) commands.EndTimestampQuery(query);
+            }, RenderGraph::PassRecordPolicy::Serial);
+        passes.push_back(last);
+    }
+    RenderGraph& graph;
+    std::string label;
+    Array<RenderGraph::PassHandle> passes;
+    std::shared_ptr<GaussianFrameTimings> timings;
+    Array<TextureRef> candidates;
+    uint32 stage = 0;
+    RenderGraph::PassHandle last;
+    std::unordered_map<Render::Buffer*, RenderGraph::BufferHandle> buffers;
+    std::unordered_map<Render::Texture*, RenderGraph::TextureHandle> textures;
+};
+} // namespace
+
 struct GaussianSplatPass::Impl {
     uint                           m_pair_capacity;
     GaussianProjectPipeline        m_project;
@@ -180,26 +415,29 @@ struct GaussianSplatPass::Impl {
     GaussianRasterStatus   m_telemetry{};
     uint64                 m_readback_revision = 0;
     uint2                  m_readback_resolution{};
-    QueryFuture            m_timing_future;
-    QueryFuture            m_stage_timing[3];
-    QueryFuture            m_receive_timing;
-    void                   Poll() {
-        if (m_receive_timing.Valid() && m_receive_timing.Status() != QueryStatus::Pending) {
-            auto result = m_receive_timing.Get();
-            if (auto* timing = std::get_if<TimestampQueryResult>(&result.payload))
-                m_telemetry.shadow_receive_gpu_ms = timing->duration_ns / 1000000.;
-            m_receive_timing = {};
-        }
-        double* stages[] = {
-            &m_telemetry.projection_gpu_ms, &m_telemetry.sorting_gpu_ms, &m_telemetry.accumulation_gpu_ms
-        };
-        for (uint i = 0; i < 3; ++i)
-            if (m_stage_timing[i].Valid() && m_stage_timing[i].Status() != QueryStatus::Pending) {
-                const auto result = m_stage_timing[i].Get();
-                if (const auto* timing = std::get_if<TimestampQueryResult>(&result.payload))
-                    *stages[i] = timing->duration_ns / 1000000.0;
-                m_stage_timing[i] = {};
+    std::shared_ptr<GaussianFrameTimings> m_timings;
+    void Poll() {
+        if (m_timings && m_timings->recorded) {
+            bool ready = true;
+            double values[4]{};
+            for (uint32 stage = 0; stage < 4; ++stage) {
+                for (const auto& future : m_timings->stages[stage]) {
+                    if (future.Status() == QueryStatus::Pending) { ready = false; break; }
+                    const auto result = future.Get();
+                    if (const auto* timing = std::get_if<TimestampQueryResult>(&result.payload))
+                        values[stage] += timing->duration_ns / 1000000.;
+                }
             }
+            if (ready) {
+                m_telemetry.projection_gpu_ms = values[0];
+                m_telemetry.sorting_gpu_ms = values[1];
+                m_telemetry.accumulation_gpu_ms = values[2];
+                m_telemetry.shadow_receive_gpu_ms = values[3];
+                m_telemetry.gpu_ms = values[0] + values[1] + values[2] + values[3];
+                m_telemetry.has_gpu_time = true;
+                m_timings.reset();
+            }
+        }
         if (m_status_readback.Valid() && m_status_readback.Status() != ReadbackStatus::Pending) {
             const auto result = m_status_readback.Get();
             const auto values = result.CopyAs<uint>();
@@ -217,14 +455,6 @@ struct GaussianSplatPass::Impl {
                 m_has_reported_overflow = m_telemetry.has_overflow;
             }
             m_status_readback = {};
-        }
-        if (m_timing_future.Valid() && m_timing_future.Status() != QueryStatus::Pending) {
-            const auto result = m_timing_future.Get();
-            if (const auto* timing = std::get_if<TimestampQueryResult>(&result.payload)) {
-                m_telemetry.gpu_ms       = timing->duration_ns / 1000000.0;
-                m_telemetry.has_gpu_time = result.status == QueryStatus::Ready;
-            }
-            m_timing_future = {};
         }
     }
     explicit Impl(ShaderManager& manager, GaussianRasterSettings settings) :
@@ -264,6 +494,7 @@ struct GaussianSplatPass::Impl {
                 ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST |
                     ETextureUsageFlags::UNORDERED_ACCESS
             );
+            InitializeGraphicsTexture(m_empty_depth);
         }
         if (!m_status) {
             m_status = Buffer<uint4>("Gaussian status", 1);
@@ -284,6 +515,7 @@ struct GaussianSplatPass::Impl {
             m_display       = device.CreateTexture(
                 "Gaussian display linear RGB", Extent3D(1, 1, 1), PF_R32G32B32A32_SFLOAT, usage
             );
+            InitializeGraphicsTextures(std::array<TextureRef, 3>{m_color, m_transmittance, m_display});
             m_reference = nullptr;
             m_ranges    = Buffer<uint>(
                 "Gaussian tile intervals", ((resolution.x + 15) / 16) * ((resolution.y + 15) / 16) * 2
@@ -338,21 +570,17 @@ void GaussianSplatPass::SetPairCapacity(uint capacity) {
 BufferView GaussianSplatPass::GetStatusBuffer() const {
     return m_impl->m_status->GetView();
 }
-TextureRef GaussianSplatPass::RecordAccumulation(
-    CommandList&            commands,
-    const GaussianGpuScene* scene,
-    const Camera&           camera,
-    uint2                   resolution,
-    bool                    is_editor_view,
-    bool                    is_invalid_scene,
-    GaussianViewSettings    view_settings,
-    TextureRef              opaque_depth,
-    bool                    is_engine_view,
-    bool                    needs_reference,
-    BufferRef               shadow_data,
-    BindlessArrayRef        shadow_bindless
+RenderGraph::PassHandle GaussianSplatPass::AddAccumulationToGraph(
+    RenderGraph& graph, const GaussianGpuScene* scene, const Camera& camera, uint2 resolution,
+    bool is_editor_view, bool is_invalid_scene, GaussianViewSettings view_settings,
+    TextureRef opaque_depth, bool is_engine_view, bool needs_reference,
+    BufferRef shadow_data, BindlessArrayRef shadow_bindless, Array<TextureRef> shadow_maps
 ) {
     auto& state = *m_impl;
+    state.Poll();
+    const bool measure = !state.m_timings;
+    if (measure) state.m_timings = std::make_shared<GaussianFrameTimings>();
+    GaussianStageGraph commands(graph, "Gaussian.Accumulation", measure ? state.m_timings : nullptr, std::move(shadow_maps));
     if (resolution.x == 0 || resolution.y == 0)
         throw std::runtime_error("Gaussian viewport is empty");
     uint64     work_count_64   = 0;
@@ -379,7 +607,7 @@ TextureRef GaussianSplatPass::RecordAccumulation(
     state.Resize(resolution, work_count);
     state.m_is_engine_view = is_engine_view;
     if ((!is_engine_view || needs_reference) &&
-        (state.m_display->GetWidth() != resolution.x || state.m_display->GetHeight() != resolution.y))
+        (state.m_display->GetWidth() != resolution.x || state.m_display->GetHeight() != resolution.y)) {
         state.m_display = RenderDevice::Get().CreateTexture(
             "Gaussian reference display",
             Extent3D(resolution.x, resolution.y, 1),
@@ -387,13 +615,16 @@ TextureRef GaussianSplatPass::RecordAccumulation(
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS |
                 ETextureUsageFlags::TRANSFER_SRC
         );
+        InitializeGraphicsTexture(state.m_display);
+    }
     if (!state.m_reference || (needs_reference && state.m_reference->GetWidth() != resolution.x)) {
         state.m_reference = RenderDevice::Get().CreateTexture(
             "Gaussian reference RGB",
             needs_reference ? Extent3D(resolution.x, resolution.y, 1) : Extent3D(1, 1, 1),
             PF_R32G32B32A32_SFLOAT,
-            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
+        InitializeGraphicsTexture(state.m_reference);
     }
     if (!opaque_depth)
         commands.ClearResource(state.m_empty_depth->GetView(), float4(0));
@@ -431,13 +662,6 @@ TextureRef GaussianSplatPass::RecordAccumulation(
                           reference     = state.m_reference,
                           depth         = opaque_depth,
                           empty_depth   = state.m_empty_depth]() {});
-    state.Poll();
-    QueryToken timing_token;
-    if (!state.m_timing_future.Valid()) {
-        timing_token          = commands.BeginTimestampQuery("Gaussian Raster Total");
-        state.m_timing_future = timing_token.GetFuture();
-    }
-    commands.PushScopeWithTimeScope("Gaussian Raster");
     auto camera_data           = std::make_shared<GGaussianCamera>();
     camera_data->world_to_view = Transpose(camera.GetViewMatrix());
     camera_data->view_to_clip  = Transpose(camera.GetProjectionMatrix());
@@ -474,31 +698,13 @@ TextureRef GaussianSplatPass::RecordAccumulation(
         commands.ClearResource(state.m_transmittance->GetView(), float4(1));
         commands.ClearResource(state.m_ranges->GetView(), 0u);
         commands.ClearResource(state.m_reference->GetView(), float4(0));
-        commands.PopScopeWithTimeScope();
-        if (timing_token.Valid())
-            commands.EndTimestampQuery(timing_token);
-        return state.m_color;
+        commands.Finish();
+        return commands.LastPass();
     }
     GaussianDispatchParams param{};
     param.info = uint4(work_count, state.m_pair_capacity, camera_data->viewport.z, camera_data->viewport.w);
     commands.ClearResource(state.m_status->GetView(), 0u);
-    QueryToken  stage_tokens[3];
-    const char* stage_names[] = {
-        "Gaussian project and bin", "Gaussian sort and ranges", "Gaussian accumulate"
-    };
-    auto begin_stage = [&](uint stage) {
-        commands.PushScopeWithTimeScope(stage_names[stage]);
-        if (!state.m_stage_timing[stage].Valid()) {
-            stage_tokens[stage]         = commands.BeginTimestampQuery(stage_names[stage]);
-            state.m_stage_timing[stage] = stage_tokens[stage].GetFuture();
-        }
-    };
-    auto end_stage = [&](uint stage) {
-        if (stage_tokens[stage].Valid())
-            commands.EndTimestampQuery(stage_tokens[stage]);
-        commands.PopScopeWithTimeScope();
-    };
-    begin_stage(0);
+    commands.SetStage(0);
     uint work_offset = 0;
     for (uint instance_id = 0; instance_id < scene->GetInstances().size(); ++instance_id) {
         const auto& instance = scene->GetInstances()[instance_id];
@@ -561,9 +767,7 @@ TextureRef GaussianSplatPass::RecordAccumulation(
             state.m_pairs[0]->GetView()
         )
         .Dispatch(uint3(Groups(work_count), 1, 1), "Gaussian emit pairs");
-    end_stage(0);
     state.m_telemetry.shadow_receive_gpu_ms = shadow_data ? state.m_telemetry.shadow_receive_gpu_ms : 0;
-    QueryToken receive_token;
     work_offset   = 0;
     bool received = false;
     for (uint instance_id = 0; instance_id < scene->GetInstances().size(); ++instance_id) {
@@ -573,10 +777,6 @@ TextureRef GaussianSplatPass::RecordAccumulation(
         param.job = uint4(instance.range.x, instance_id, work_offset, instance.range.y);
         if (shadow_data && shadow_bindless && (instance.range.w & 8u) && is_engine_view) {
             received = true;
-            if (!receive_token.Valid() && !state.m_receive_timing.Valid()) {
-                receive_token          = commands.BeginTimestampQuery("Gaussian shadow receiving");
-                state.m_receive_timing = receive_token.GetFuture();
-            }
             if (!state.m_receive_shadow.handle.IsValid())
                 state.m_receive_shadow = ShaderManager::Get().Compute<GaussianReceiveShadowPipeline>(
                     "features/gaussian/ReceiveShadow.comp.hlsl"
@@ -596,11 +796,9 @@ TextureRef GaussianSplatPass::RecordAccumulation(
         }
         work_offset += instance.range.y;
     }
-    if (receive_token.Valid())
-        commands.EndTimestampQuery(receive_token);
     if (!received)
         state.m_telemetry.shadow_receive_gpu_ms = 0;
-    begin_stage(1);
+    commands.SetStage(1);
     for (uint digit_id = 0; digit_id < 8; ++digit_id) {
         param.job          = uint4(digit_id, 0, 0, 0);
         auto& pairs        = state.m_pairs[digit_id & 1];
@@ -644,8 +842,7 @@ TextureRef GaussianSplatPass::RecordAccumulation(
             state.m_ranges->GetView()
         )
         .Dispatch(uint3(Groups(state.m_pair_capacity), 1, 1), "Gaussian tile ranges");
-    end_stage(1);
-    begin_stage(2);
+    commands.SetStage(2);
     // The sign bit selects visibility debug; the remaining bits store nonnegative strength.
     param.job = uint4(
         uint(is_engine_view),
@@ -669,22 +866,33 @@ TextureRef GaussianSplatPass::RecordAccumulation(
             state.m_reference->GetView()
         )
         .Dispatch(uint3(camera_data->viewport.z, camera_data->viewport.w, 1), "Gaussian splat");
-    end_stage(2);
     if (!state.m_status_readback.Valid()) {
-        state.m_status_readback     = commands.Readback(state.m_status->GetView(), "Gaussian pair status");
+        commands.ReadbackInto(state.m_status->GetView(), state.m_status_readback, "Gaussian pair status");
         state.m_readback_revision   = revision;
         state.m_readback_resolution = resolution;
     }
-    commands.PopScopeWithTimeScope();
-    if (timing_token.Valid())
-        commands.EndTimestampQuery(timing_token);
-    return state.m_color;
+    commands.Finish();
+    return commands.LastPass();
+}
+TextureRef GaussianSplatPass::RecordAccumulation(
+    CommandList& commands, const GaussianGpuScene* scene, const Camera& camera, uint2 resolution,
+    bool is_editor_view, bool is_invalid_scene, GaussianViewSettings settings, TextureRef opaque_depth,
+    bool is_engine_view, bool needs_reference, BufferRef shadow_data, BindlessArrayRef shadow_bindless,
+    Array<TextureRef> shadow_maps
+) {
+    RenderGraph graph("Gaussian accumulation", RenderGraph::QueueTopology::FromRHI());
+    AddAccumulationToGraph(graph, scene, camera, resolution, is_editor_view, is_invalid_scene, settings,
+        std::move(opaque_depth), is_engine_view, needs_reference, std::move(shadow_data), std::move(shadow_bindless), std::move(shadow_maps));
+    RecordGraphicsUploadGraph(graph, commands);
+    return m_impl->m_color;
 }
 TextureRef GaussianSplatPass::RecordDisplay(CommandList& commands, GaussianViewSettings settings) {
-    auto&                  state = *m_impl;
+    auto& state = *m_impl;
+    RenderGraph graph("Gaussian display", RenderGraph::QueueTopology::FromRHI());
+    GaussianStageGraph stages(graph, "Gaussian.Display");
     GaussianDispatchParams param{};
     param.job = uint4(static_cast<uint>(settings.display_mode), static_cast<uint>(settings.debug_view), 0, 0);
-    commands
+    stages
         .Compute(
             state.m_display_pipeline,
             param,
@@ -699,7 +907,9 @@ TextureRef GaussianSplatPass::RecordDisplay(CommandList& commands, GaussianViewS
             uint3((state.m_resolution.x + 15) / 16, (state.m_resolution.y + 15) / 16, 1),
             "Gaussian reference display"
         );
-    commands.AddCallback([display = state.m_display, camera = state.m_camera]() {});
+    stages.AddCallback([display = state.m_display, camera = state.m_camera]() {});
+    stages.Finish();
+    RecordGraphicsUploadGraph(graph, commands);
     return state.m_display;
 }
 TextureRef GaussianSplatPass::Record(
@@ -735,15 +945,17 @@ GaussianSplatPass::RecordParameters GaussianSplatPass::Prepare(
             if (instance.range.w & (is_editor_view ? 2u : 1u))
                 work_count += instance.range.y;
     m_impl->Resize(resolution, work_count > k_max_work_count ? 0 : uint(work_count));
-    if (!m_impl->m_reference || (needs_reference && m_impl->m_reference->GetWidth() != resolution.x))
+    if (!m_impl->m_reference || (needs_reference && m_impl->m_reference->GetWidth() != resolution.x)) {
         m_impl->m_reference = RenderDevice::Get().CreateTexture(
             "Gaussian reference RGB",
             needs_reference ? Extent3D(resolution.x, resolution.y, 1) : Extent3D(1, 1, 1),
             PF_R32G32B32A32_SFLOAT,
-            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED
+            ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
+        InitializeGraphicsTexture(m_impl->m_reference);
+    }
     if (needs_reference &&
-        (m_impl->m_display->GetWidth() != resolution.x || m_impl->m_display->GetHeight() != resolution.y))
+        (m_impl->m_display->GetWidth() != resolution.x || m_impl->m_display->GetHeight() != resolution.y)) {
         m_impl->m_display = RenderDevice::Get().CreateTexture(
             "Gaussian reference display",
             Extent3D(resolution.x, resolution.y, 1),
@@ -751,6 +963,8 @@ GaussianSplatPass::RecordParameters GaussianSplatPass::Prepare(
             ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::SAMPLED |
                 ETextureUsageFlags::TRANSFER_SRC
         );
+        InitializeGraphicsTexture(m_impl->m_display);
+    }
     return {
         scene, camera, resolution, is_editor_view, settings, std::move(opaque_depth), true, needs_reference
     };
@@ -768,7 +982,8 @@ void GaussianSplatPass::Record(CommandList& commands, const RecordParameters& pa
         parameters.is_engine_view,
         parameters.needs_reference,
         parameters.shadow_data,
-        parameters.shadow_bindless
+        parameters.shadow_bindless,
+        parameters.shadow_maps
     );
     if (parameters.shadow_data)
         commands.AddCallback([parameters]() {});
@@ -781,86 +996,37 @@ void GaussianSplatPass::Record(CommandList& commands, const RecordParameters& pa
 GaussianSplatPass::GraphResources GaussianSplatPass::ImportGraphResources(RenderGraph& graph) const {
     auto& state = *m_impl;
     return {
-        graph.ImportTexture("gs_color", state.m_color, {}),
-        graph.ImportTexture("gs_transmittance", state.m_transmittance, {}),
-        graph.ImportTexture("gs_reference", state.m_reference, {}),
-        graph.ImportTexture("gs_display", state.m_display, {}),
-        graph.ImportBuffer("gs_status", state.m_status, {.byte_size = state.m_status->GetByteSize()}),
-        graph.ImportBuffer("gs_ranges", state.m_ranges, {.byte_size = state.m_ranges->GetByteSize()})
+        ImportRasterTexture(graph, "gs_color", state.m_color.Get()),
+        ImportRasterTexture(graph, "gs_transmittance", state.m_transmittance.Get()),
+        ImportRasterTexture(graph, "gs_reference", state.m_reference.Get()),
+        ImportRasterTexture(graph, "gs_display", state.m_display.Get()),
+        ImportRasterBuffer(graph, "gs_status", state.m_status.Get()),
+        ImportRasterBuffer(graph, "gs_ranges", state.m_ranges.Get())
     };
 }
 RenderGraph::PassHandle GaussianSplatPass::AddToGraph(
-    RenderGraph&               graph,
-    RecordParameters           parameters,
-    GraphResources             resources,
-    RenderGraph::TextureHandle opaque_depth,
-    RenderGraph::TokenHandle   shadow_maps
+    RenderGraph& graph, RecordParameters parameters, GraphResources resources,
+    RenderGraph::TextureHandle opaque_depth, RenderGraph::TokenHandle shadow_maps
 ) {
-    Array<RenderGraph::BufferHandle> scratch;
-    auto                             add_buffer = [&](const BufferRef& buffer) {
-        scratch.push_back(graph.ImportBuffer(
-            "gs_workspace_" + std::to_string(scratch.size()), buffer, {.byte_size = buffer->GetByteSize()}
-        ));
-    };
-    auto& state = *m_impl;
-    for (const auto& buffer :
-         {state.m_projected,
-          state.m_counts,
-          state.m_pairs[0],
-          state.m_pairs[1],
-          state.m_histogram,
-          state.m_offsets})
-        add_buffer(buffer);
-    for (const auto& level : state.m_scan) {
-        add_buffer(level.prefix);
-        add_buffer(level.sums);
+    // Physical imports alias by identity. Stage declarations include the actual
+    // depth and shadow textures, not only their legacy logical ordering token.
+    auto last = AddAccumulationToGraph(graph, parameters.scene, parameters.camera, parameters.resolution,
+        parameters.is_editor_view, false, parameters.settings, parameters.opaque_depth,
+        parameters.is_engine_view, parameters.needs_reference, parameters.shadow_data,
+        parameters.shadow_bindless, parameters.shadow_maps);
+    if (parameters.needs_reference) {
+        GaussianStageGraph stages(graph, "Gaussian.Display");
+        GaussianDispatchParams param{};
+        param.job = uint4(uint(parameters.settings.display_mode), uint(EGaussianDebugView::Color), 0, 0);
+        auto& state = *m_impl;
+        stages.Compute(state.m_display_pipeline, param,
+            (state.m_is_engine_view ? state.m_reference : state.m_color)->GetView(),
+            state.m_transmittance->GetView(), state.m_ranges->GetView(), state.m_status->GetView(),
+            state.m_display->GetView(), state.m_camera->GetView())
+            .Dispatch(uint3((state.m_resolution.x + 15) / 16, (state.m_resolution.y + 15) / 16, 1), "Gaussian reference display");
+        stages.Finish();
+        last = stages.LastPass();
     }
-    Array<RenderGraph::BufferHandle> inputs;
-    if (parameters.scene && parameters.scene->GetGaussianBuffer()) {
-        for (const auto& buffer :
-             {parameters.scene->GetGaussianBuffer(), parameters.scene->GetInstanceBuffer()})
-            inputs.push_back(graph.ImportBuffer(
-                "gs_scene_" + std::to_string(inputs.size()), buffer, {.byte_size = buffer->GetByteSize()}
-            ));
-    }
-    Array<RenderGraph::TextureHandle> shadow_textures;
-    for (const auto& map : parameters.shadow_maps)
-        shadow_textures.push_back(graph.ImportTexture(
-            "gaussian_shadow_read_" + std::to_string(shadow_textures.size()), map, DescribeShadowTexture(map)
-        ));
-    RenderGraph::BufferHandle shadow_buffer{};
-    if (parameters.shadow_data)
-        shadow_buffer = graph.ImportBuffer(
-            "gaussian_shadow_views_receiver",
-            parameters.shadow_data,
-            {.byte_size = parameters.shadow_data->GetByteSize()}
-        );
-    return graph.AddRecordPass(
-        "GaussianRaster",
-        [=](RenderGraph::PassBuilder& builder) {
-            for (const auto handle : shadow_textures)
-                builder.Read(handle);
-            if (shadow_maps.IsValid())
-                builder.Read(shadow_maps);
-            if (shadow_buffer.IsValid())
-                builder.Read(shadow_buffer);
-            builder.Read(opaque_depth)
-                .Write(resources.color)
-                .Write(resources.transmittance)
-                .Write(resources.reference)
-                .Write(resources.display)
-                .ReadWrite(resources.status)
-                .ReadWrite(resources.ranges)
-                .SideEffect();
-            for (const auto buffer : scratch)
-                builder.ReadWrite(buffer);
-            for (const auto buffer : inputs)
-                builder.Read(buffer);
-        },
-        [this, parameters](CommandList& commands) {
-            Record(commands, parameters);
-        },
-        RenderGraph::PassExecutionClass::SerialRecord
-    );
+    return last;
 }
 } // namespace Moer::Render::Raster

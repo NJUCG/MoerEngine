@@ -1,7 +1,9 @@
 #ifndef MOER_SERIALIZER_H
 #define MOER_SERIALIZER_H
+
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include <cassert>
 #include <cstddef>
 #include <istream>
@@ -13,7 +15,7 @@ namespace Moer {
 template<typename T>
 static constexpr bool is_ptr_t_v =
     is_shared_ptr_v<T> || is_unique_ptr_v<T> || is_countable_v<T> || std::is_pointer_v<T>;
-static_assert(is_ptr_t_v<SharedPtr<uint>>);
+static_assert(is_ptr_t_v<SharedPtr<uint32>>);
 struct InputStream {
     InputStream(std::istream& _stream) : m_stream(_stream) {}
     template<typename T>
@@ -150,7 +152,7 @@ struct InputStream {
 private:
     std::istream& m_stream;
 };
-static_assert(InputStream::HasInputStreamOverloadFunction<UniquePtr<uint>>::value);
+static_assert(InputStream::HasInputStreamOverloadFunction<UniquePtr<uint32>>::value);
 
 struct OutputStream {
     template<typename T>

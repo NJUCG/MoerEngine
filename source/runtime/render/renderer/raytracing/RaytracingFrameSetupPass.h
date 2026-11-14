@@ -30,11 +30,8 @@ public:
         UniquePtr<Command> build_tlas_command{};
         std::atomic_bool   build_tlas_recorded{false};
 
-        uint64 target_revision      = 0;
         bool   build_tlas           = false;
         bool   full_instance_upload = false;
-        bool   scene_resources_refreshed = false;
-        bool   external_tlas_built  = false;
     };
 
     struct PreparedCommand {
@@ -51,13 +48,10 @@ public:
     };
 
     PreparedCommand Prepare(
-        const RTContext&    rt_ctx,
-        RaytracingSceneRef  scene,
-        BindlessArrayRef    bindless_array,
-        uint64              target_revision,
-        bool                build_tlas,
-        bool                scene_resources_refreshed,
-        bool                external_tlas_built
+        const RTContext&   rt_ctx,
+        RaytracingSceneRef scene,
+        BindlessArrayRef   bindless_array,
+        bool               build_tlas
     );
 
     bool AddPasses(
@@ -65,16 +59,8 @@ public:
         const PreparedCommand&      command,
         RTGraphFrameSetupResources& graph_resources
     ) const;
-    bool ProcessLinear(CommandList& cmd_list, const PreparedCommand& command) const;
 
-    void CommitAccepted(const PreparedCommand& command) noexcept;
-    void ResetAcceptedResources() noexcept;
 
-private:
-    UnorderedSet<const Buffer*> accepted_tlas_buffers;
-    UnorderedSet<const Buffer*> accepted_instance_buffers;
-    UnorderedSet<const Buffer*> accepted_scratch_buffers;
-    UnorderedSet<const Buffer*> accepted_scene_buffers;
 };
 
 } // namespace Moer::Render::Raytracing

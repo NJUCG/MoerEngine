@@ -1,8 +1,8 @@
 // Copyright 2020 Google LLC
 
 struct VSOutput {
-    float4                     Pos : SV_POSITION;
     [[vk::location(0)]] float2 UV : TEXCOORD0;
+    float4                     Pos : SV_POSITION;
 };
 
 VSOutput main(uint VertexIndex : SV_VertexID) {

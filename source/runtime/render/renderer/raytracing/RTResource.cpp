@@ -1,4 +1,6 @@
 #include "RTResource.h"
+#include "misc/Types.h"
+#include "renderer/common/GraphResourceBoundary.h"
 
 #include "Configs.h"
 #include "PixelFormat.h"
@@ -261,6 +263,37 @@ void RTContext::FillFrameResources(uint2 _resolution) {
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::TRANSFER_SRC
     );
+    const TextureRef initialized[] = {
+        frame_rt.view_depth,
+        frame_rt.diffuse_albedo,
+        frame_rt.specular_roughness,
+        frame_rt.normal,
+        frame_rt.emission,
+        frame_rt.motion,
+        frame_rt.clip_depth,
+        frame_rt.prev_view_depth,
+        frame_rt.prev_diffuse_albedo,
+        frame_rt.prev_specular_roughness,
+        frame_rt.prev_normal,
+        frame_rt.prev_luminance,
+        frame_rt.normal_roughness,
+        frame_rt.diffuse_lighting,
+        frame_rt.prev_diffuse_lighting,
+        frame_rt.specular_lighting,
+        frame_rt.prev_specular_lighting,
+        frame_rt.temporal_sample_pos,
+        frame_rt.gradients,
+        frame_rt.restir_luminance,
+        frame_rt.denoised_diffuse_lighting,
+        frame_rt.denoised_specular_lighting,
+        frame_rt.debug_color,
+        frame_rt.ldr_color,
+        frame_rt.hdr_color,
+        frame_rt.feedback_color_ping,
+        frame_rt.feedback_color_pong,
+        frame_rt.resolved_color,
+    };
+    InitializeGraphicsTextures(initialized);
     Sampler spl{ESamplerFilter::SF_LINEAR, ESamplerAddressMode::SAM_CLAMP_TO_EDGE};
     AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_depth, frame_rt.view_depth->GetView(), spl);
     AllocateAndFreeBdlsIfNeeded(bindless_handles.gbuffer_normal, frame_rt.normal->GetView(), spl);
@@ -315,7 +348,7 @@ void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _
 
     // env_pdf_tex 需要完整的 mip 链（SamplePdfMip 从最高 mip 向下采样），
     // 不能使用原始 env map 的 mip 数量（通常只有 1 级）
-    uint full_mip_count = uint(std::floor(std::log2(float(std::max(extent.x, extent.y))))) + 1;
+    uint32 full_mip_count = uint32(std::floor(std::log2(float(std::max(extent.x, extent.y))))) + 1;
 
     env_pdf_mips.clear();
     env_pdf_tex = device.CreateTexture(
@@ -329,6 +362,7 @@ void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _
     for (int i = 0; i < env_pdf_tex->GetNumMips(); ++i) {
         env_pdf_mips.push_back(env_pdf_tex->GetView(i));
     }
+    InitializeGraphicsTexture(env_pdf_tex);
     sd_utils.GenerateMipPdf(_cmd_list, env_map, env_pdf_mips);
 
     AllocateAndFreeBdlsIfNeeded(
@@ -342,14 +376,14 @@ void RTContext::CreateEnvMapResources(TextureWithHandle _env_tex, CommandList& _
 }
 
 void RTContext::CreateBuffersIfNeeded(
-    uint _num_emissive_meshes,
-    uint _num_emissive_triangles,
-    uint _num_prim_lights,
-    uint _max_primitives
+    uint32 _num_emissive_meshes,
+    uint32 _num_emissive_triangles,
+    uint32 _num_prim_lights,
+    uint32 _max_primitives
 ) {
 
     RenderDevice& device   = RenderDevice::Get();
-    uint          task_num = Max(1u, _num_emissive_meshes + _num_prim_lights);
+    uint32        task_num = Max(1u, _num_emissive_meshes + _num_prim_lights);
 
     if (!task_buf || task_num > task_buf->GetNumElement()) {
         task_buf = device.CreateBuffer<PrepareLightsTask>(
@@ -361,12 +395,12 @@ void RTContext::CreateBuffersIfNeeded(
     max_emissive_meshes    = _num_emissive_meshes;
     max_emissive_triangles = _num_emissive_triangles;
 
-    uint max_local_lights  = Max(1u, max_emissive_triangles + max_prim_lights);
-    uint light_buf_element = max_local_lights * 2;
+    uint32 max_local_lights  = Max(1u, max_emissive_triangles + max_prim_lights);
+    uint32 light_buf_element = max_local_lights * 2;
 
     if (!light_mapping_buf || !light_data_buf || light_buf_element > light_mapping_buf->GetNumElement() ||
         light_buf_element > light_data_buf->GetNumElement()) {
-        light_mapping_buf = device.CreateBuffer<uint>(
+        light_mapping_buf = device.CreateBuffer<uint32>(
             "Raytracing::light_mapping_buf", light_buf_element, EBufferUsageFlags::UNORDERED_ACCESS
         );
         light_data_buf = device.CreateBuffer<PolymorphicLightInfo>(
@@ -379,15 +413,15 @@ void RTContext::CreateBuffersIfNeeded(
 
     if (!prim_light_buf || max_prim_lights > prim_light_buf->GetNumElement()) {
         // max_prim_lights 可以为 0（没有场景光源），但 buffer 大小必须至少为 1
-        uint prim_light_buf_size = max_prim_lights > 0 ? max_prim_lights : 1u;
+        uint32 prim_light_buf_size = max_prim_lights > 0 ? max_prim_lights : 1u;
         prim_light_buf           = device.CreateBuffer<PolymorphicLightInfo>(
             "Raytracing::prim_light_buf", prim_light_buf_size, EBufferUsageFlags::UNORDERED_ACCESS
         );
     }
 
-    const uint primitive_capacity = Max(1u, _max_primitives);
+    const uint32 primitive_capacity = Max(1u, _max_primitives);
     if (!primitive_to_light_buf || primitive_capacity > primitive_to_light_buf->GetNumElement()) {
-        primitive_to_light_buf = device.CreateBuffer<uint>(
+        primitive_to_light_buf = device.CreateBuffer<uint32>(
             "Raytracing::primitive_to_light_buf", primitive_capacity, EBufferUsageFlags::UNORDERED_ACCESS
         );
         AllocateAndFreeBdlsIfNeeded(bindless_handles.primitive_to_light, primitive_to_light_buf->GetView());
@@ -395,10 +429,10 @@ void RTContext::CreateBuffersIfNeeded(
     {
         // 计算 texture 尺寸
         // light_buf_element 已经通过上面的 assert 确保 > 0
-        uint texture_width  = RoundUpToPowerOf2(uint(ceil(sqrt(double(light_buf_element)))));
-        uint texture_height = RoundUpToPowerOf2(uint(ceil(double(light_buf_element) / texture_width)));
+        uint32 texture_width  = RoundUpToPowerOf2(uint32(ceil(sqrt(double(light_buf_element)))));
+        uint32 texture_height = RoundUpToPowerOf2(uint32(ceil(double(light_buf_element) / texture_width)));
         assert(texture_width > 0 && texture_height > 0 && "Texture dimensions must be greater than 0");
-        uint mips = Max(1u, uint(log2(Max(texture_width, texture_height))) + 1u);
+        uint32 mips = Max(1u, uint32(log2(Max(texture_width, texture_height))) + 1u);
 
         if (!local_light_pdf_tex || texture_height != local_light_pdf_tex->GetExtent().y ||
             texture_width != local_light_pdf_tex->GetExtent().x) {
@@ -424,7 +458,7 @@ void RTContext::CreateBuffersIfNeeded(
     }
 }
 
-void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _view, Sampler _sampler) {
+void RTContext::AllocateAndFreeBdlsIfNeeded(uint32& _target, const TextureView& _view, Sampler _sampler) {
     if (_target) {
         bdls->UnbindTexture(_target);
         if (allocated_bdls_tex.contains(_target)) {
@@ -435,7 +469,7 @@ void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _v
     allocated_bdls_tex.insert(_target);
 }
 
-void RTContext::AllocateAndFreeBdlsIfNeeded(uint& _target, const BufferView& _view) {
+void RTContext::AllocateAndFreeBdlsIfNeeded(uint32& _target, const BufferView& _view) {
     if (_target) {
         bdls->UnbindBuffer(_target);
         if (allocated_bdls_buf.contains(_target)) {
@@ -512,7 +546,7 @@ void RTContext::Tick(Camera& _camera, float2 _jitter) {
 
         if (!ris_buf ||
             2 * std::max(is_ctx.GetSegmentAllocator().GetTotalSize(), 1u) > ris_buf->GetNumElement()) {
-            ris_buf = device.CreateBuffer<uint>(
+            ris_buf = device.CreateBuffer<uint32>(
                 "Raytracing::ris_buf",
                 2 * std::max(is_ctx.GetSegmentAllocator().GetTotalSize(), 1u),
                 EBufferUsageFlags::UNORDERED_ACCESS

@@ -1,91 +1,107 @@
 #include <NvInfer.h>
-#include <NvOnnxParser.h>
+#include <array>
+#include <cmath>
 #include <cuda_runtime_api.h>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 
-using namespace nvinfer1;
-
-const char* ONNX_PATH = "D:\\Data\\NJU3a\\1-MoerEngine\\Assets\\model4_t.onnx";
-
-// Logger
-class Logger : public ILogger {
-    void log(Severity severity, const char* msg) noexcept override {
+namespace {
+class Logger : public nvinfer1::ILogger {
+    void log(Severity severity, const char* message) noexcept override {
         if (severity <= Severity::kWARNING)
-            std::cout << "[TRT] " << msg << std::endl;
+            std::cerr << "[TensorRT] " << message << '\n';
     }
-} gLogger;
+};
+void Require(bool condition, const char* message) {
+    if (!condition)
+        throw std::runtime_error(message);
+}
+void Check(cudaError_t result) {
+    if (result != cudaSuccess)
+        throw std::runtime_error(cudaGetErrorString(result));
+}
+struct CudaFree {
+    void operator()(void* pointer) const {
+        cudaFree(pointer);
+    }
+};
+struct Stream {
+    cudaStream_t handle{};
+    Stream() {
+        Check(cudaStreamCreate(&handle));
+    }
+    ~Stream() {
+        cudaStreamDestroy(handle);
+    }
+};
+} // namespace
 
-/**
- * Example Output:
- *   Engine has 2 I/O tensors:
- *   Tensor[0] name = data
- *   Tensor[1] name = resnetv19_dense0_fwd
- *   Input dims: 1 3 224 224
- *   Output dims: 1 1000
- */
 int main() {
-    // 1. Builder
-    auto       builder       = std::unique_ptr<IBuilder>(createInferBuilder(gLogger));
-    const auto explicitBatch = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
-
-    auto network = std::unique_ptr<INetworkDefinition>(builder->createNetworkV2(explicitBatch));
-
-    auto parser = std::unique_ptr<nvonnxparser::IParser>(nvonnxparser::createParser(*network, gLogger));
-
-    if (!parser->parseFromFile(ONNX_PATH, static_cast<int>(ILogger::Severity::kWARNING))) {
-        std::cerr << "ONNX parse failed. Please check the ONNX file path!\n";
-        return -1;
+    try {
+        using namespace nvinfer1;
+        Logger logger;
+        auto   builder = std::unique_ptr<IBuilder>(createInferBuilder(logger));
+        Require(bool(builder), "TensorRT builder creation failed");
+        auto network = std::unique_ptr<INetworkDefinition>(builder->createNetworkV2(0));
+        Require(bool(network), "TensorRT network creation failed");
+        const float scale       = 2.0f;
+        const float shift       = 1.0f;
+        auto*       input       = network->addInput("input", DataType::kFLOAT, Dims{1, {8}});
+        auto*       scale_layer = network->addConstant(Dims{1, {1}}, Weights{DataType::kFLOAT, &scale, 1});
+        auto*       shift_layer = network->addConstant(Dims{1, {1}}, Weights{DataType::kFLOAT, &shift, 1});
+        Require(input && scale_layer && shift_layer, "TensorRT input creation failed");
+        auto* product =
+            network->addElementWise(*input, *scale_layer->getOutput(0), ElementWiseOperation::kPROD);
+        Require(product != nullptr, "TensorRT multiplication creation failed");
+        auto* sum = network->addElementWise(
+            *product->getOutput(0), *shift_layer->getOutput(0), ElementWiseOperation::kSUM
+        );
+        Require(sum != nullptr, "TensorRT addition creation failed");
+        sum->getOutput(0)->setName("output");
+        network->markOutput(*sum->getOutput(0));
+        auto config = std::unique_ptr<IBuilderConfig>(builder->createBuilderConfig());
+        Require(bool(config), "TensorRT configuration creation failed");
+        config->setMemoryPoolLimit(MemoryPoolType::kWORKSPACE, 64ULL << 20);
+        auto plan = std::unique_ptr<IHostMemory>(builder->buildSerializedNetwork(*network, *config));
+        Require(bool(plan), "TensorRT engine build failed");
+        // The runtime must outlive the deserialized engine and its execution context.
+        auto runtime = std::unique_ptr<IRuntime>(createInferRuntime(logger));
+        Require(bool(runtime), "TensorRT runtime creation failed");
+        auto engine =
+            std::unique_ptr<ICudaEngine>(runtime->deserializeCudaEngine(plan->data(), plan->size()));
+        Require(bool(engine), "TensorRT engine deserialization failed");
+        auto context = std::unique_ptr<IExecutionContext>(engine->createExecutionContext());
+        Require(bool(context), "TensorRT execution context creation failed");
+        Stream               stream;
+        std::array<float, 8> host_input{-3.0f, -1.0f, 0.0f, 0.5f, 1.0f, 2.0f, 4.0f, 16.0f};
+        std::array<float, 8> host_output{};
+        void*                input_raw{};
+        Check(cudaMalloc(&input_raw, sizeof(host_input)));
+        std::unique_ptr<void, CudaFree> device_input(input_raw);
+        void*                           output_raw{};
+        Check(cudaMalloc(&output_raw, sizeof(host_output)));
+        std::unique_ptr<void, CudaFree> device_output(output_raw);
+        Require(context->setTensorAddress("input", input_raw), "TensorRT input binding failed");
+        Require(context->setTensorAddress("output", output_raw), "TensorRT output binding failed");
+        Check(cudaMemcpyAsync(
+            input_raw, host_input.data(), sizeof(host_input), cudaMemcpyHostToDevice, stream.handle
+        ));
+        Require(context->enqueueV3(stream.handle), "TensorRT inference failed");
+        Check(cudaMemcpyAsync(
+            host_output.data(), output_raw, sizeof(host_output), cudaMemcpyDeviceToHost, stream.handle
+        ));
+        Check(cudaStreamSynchronize(stream.handle));
+        for (size_t i = 0; i != host_input.size(); ++i) {
+            Require(
+                std::isfinite(host_output[i]) && std::abs(host_output[i] - (2 * host_input[i] + 1)) < 1e-5f,
+                "TensorRT inference output does not match the CPU result"
+            );
+        }
+        std::cout << "[TESTCASE][PASS] TensorRTInference outputs=8 formula=2*x+1 readback=verified\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
     }
-
-    // 2. Config
-    auto config = std::unique_ptr<IBuilderConfig>(builder->createBuilderConfig());
-    config->setMemoryPoolLimit(MemoryPoolType::kWORKSPACE, 1ULL << 30); // 1GB
-
-    auto profile = builder->createOptimizationProfile();
-
-    // 假设模型的输入名是 "data"，维度 [N, C, H, W]，N 可以是动态
-    profile->setDimensions("data", OptProfileSelector::kMIN, Dims4(1, 3, 224, 224));
-    profile->setDimensions("data", OptProfileSelector::kOPT, Dims4(1, 3, 224, 224));
-    profile->setDimensions("data", OptProfileSelector::kMAX, Dims4(1, 3, 224, 224));
-
-    config->addOptimizationProfile(profile);
-
-    // 2.1 Engine
-    auto engine = std::unique_ptr<ICudaEngine>(builder->buildEngineWithConfig(*network, *config));
-    if (!engine) {
-        std::cerr << "Engine build failed\n";
-        return -1;
-    }
-
-    // 3. Context
-    auto context = std::unique_ptr<IExecutionContext>(engine->createExecutionContext());
-    if (!context) {
-        std::cerr << "Context creation failed\n";
-        return -1;
-    }
-
-    // 4. 输入输出张量
-    int nbIOTensors = engine->getNbIOTensors();
-    std::cout << "Engine has " << nbIOTensors << " I/O tensors:\n";
-    for (int i = 0; i < nbIOTensors; ++i) {
-        std::cout << "Tensor[" << i << "] name = " << engine->getIOTensorName(i) << "\n";
-    }
-
-    const char* inputName  = engine->getIOTensorName(0); // 假设第0个是输入
-    const char* outputName = engine->getIOTensorName(1); // 假设第1个是输出
-    auto        inputDims  = engine->getTensorShape(inputName);
-    auto        outputDims = engine->getTensorShape(outputName);
-
-    std::cout << "Input dims: ";
-    for (int i = 0; i < inputDims.nbDims; i++)
-        std::cout << inputDims.d[i] << " ";
-    std::cout << "\n";
-
-    std::cout << "Output dims: ";
-    for (int i = 0; i < outputDims.nbDims; i++)
-        std::cout << outputDims.d[i] << " ";
-    std::cout << "\n";
-
-    return 0;
 }

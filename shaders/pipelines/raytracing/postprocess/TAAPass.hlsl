@@ -18,8 +18,8 @@
 [[vk::binding(3, 0)]] Texture2D<float4> feedback_rt : register(t2);
 [[vk::binding(4, 0)]] SamplerState s_sampler : register(s0);
 
-[[vk::binding(5, 0)]] RWTexture2D<float4> output_rt : register(u0);
-[[vk::binding(6, 0)]] RWTexture2D<float4> rw_feedback_rt : register(u1);
+[[vk::binding(5, 0), vk::image_format("rgba16f")]] RWTexture2D<float4> output_rt : register(u0);
+[[vk::binding(6, 0), vk::image_format("rgba16_snorm")]] RWTexture2D<float4> rw_feedback_rt : register(u1);
 
 #define GROUP_X 16
 #define GROUP_Y 16
@@ -182,7 +182,8 @@ float2 OutputToInput(int2 _pixel_pos_to_origin) {
   float3 color_moment2 = 0;
 
   float longest_motion = 0;
-  int2 longest_motion_pos = 0;
+  // An all-zero neighborhood still selects its own center, not the tile origin.
+  int2 longest_motion_pos = in_pos_shared + int2(1, 1);
   float3 this_pixel_color = 0;
 
   [unroll] for (int dy = 0; dy <= 2; ++dy) {

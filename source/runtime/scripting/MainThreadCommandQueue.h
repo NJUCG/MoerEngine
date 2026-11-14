@@ -30,8 +30,7 @@ public:
 
     template<typename Fn>
     auto Submit(Fn&& fn) -> std::future<std::invoke_result_t<std::decay_t<Fn>&, Scene&>> {
-        using StoredFn   = std::decay_t<Fn>;
-        using ResultType = std::invoke_result_t<StoredFn&, Scene&>;
+        using StoredFn = std::decay_t<Fn>;
 
         auto command = std::make_unique<PendingCommand<StoredFn>>(std::forward<Fn>(fn));
         auto future  = command->GetFuture();
@@ -80,10 +79,14 @@ private:
         std::promise<ResultType> m_promise;
     };
 
-    void Enqueue(std::unique_ptr<PendingCommandBase> command);
+    using PendingCommands = std::deque<std::unique_ptr<PendingCommandBase>>;
 
-    std::mutex                                      m_mutex;
-    std::deque<std::unique_ptr<PendingCommandBase>> m_pending_commands;
+    // Detach one batch under the mutex; execution and cancellation happen after it is released.
+    PendingCommands TakePendingCommands();
+    void            Enqueue(std::unique_ptr<PendingCommandBase> command);
+
+    std::mutex      m_mutex;
+    PendingCommands m_pending_commands;
 };
 
 } // namespace Moer::scripting

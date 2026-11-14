@@ -1,4 +1,12 @@
 #include "core/common/Bindless.hlsl"
+
+struct GuiVertexOutput {
+  float4 pos : SV_POSITION;
+  float4 col : COLOR0;
+  float2 uv : TEXCOORD0;
+  uint id : INSTANCEID;
+};
+
 struct DrawParam {
   float2 min_xy;
   float2 max_xy;
@@ -13,4 +21,4 @@ struct Constant {
 BINDLESS_BINDINGS(1, 2, 3, 4)
 
 StructuredBuffer<DrawParam> arg_buffer : register(t0, space0);
-[[vk::push_constant]] ConstantBuffer<Constant> param : register(b0);
+DEFINE_SHADER_CONSTANT(Constant, param)

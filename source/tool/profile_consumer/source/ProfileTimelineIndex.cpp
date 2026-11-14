@@ -1,4 +1,5 @@
 #include "profile_consumer/ProfileTimelineIndex.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 #include <array>
@@ -15,32 +16,32 @@ namespace Moer::ProfileDump {
 namespace {
 
 struct TimelineIntervalTree {
-    std::uint64_t tree_offset{0};
-    std::uint64_t leaf_count{0};
+    uint64 tree_offset{0};
+    uint64 leaf_count{0};
 };
 
 struct GpuFrameSlicePlan {
-    std::uint32_t track_index{0};
-    std::uint32_t domain_index{0};
-    std::uint64_t frame_id{0};
-    std::uint64_t source_frame_index{kInvalidSessionIndex};
-    std::uint64_t first_scope{0};
-    std::uint64_t scope_count{0};
-    std::uint64_t ready_scope_count{0};
-    std::uint64_t error_scope_count{0};
-    std::uint64_t axis_frame_index{kInvalidSessionIndex};
-    std::uint64_t tree_offset{0};
-    std::uint64_t tree_leaf_count{0};
+    uint32 track_index{0};
+    uint32 domain_index{0};
+    uint64 frame_id{0};
+    uint64 source_frame_index{kInvalidSessionIndex};
+    uint64 first_scope{0};
+    uint64 scope_count{0};
+    uint64 ready_scope_count{0};
+    uint64 error_scope_count{0};
+    uint64 axis_frame_index{kInvalidSessionIndex};
+    uint64 tree_offset{0};
+    uint64 tree_leaf_count{0};
 };
 
 struct GpuAxisFramePlan {
-    std::uint32_t         domain_index{0};
-    std::uint64_t         frame_id{0};
-    std::uint64_t         source_frame_index{kInvalidSessionIndex};
-    std::uint64_t         origin_tick{0};
-    std::uint64_t         extent_ticks{0};
-    std::uint64_t         ready_scope_count{0};
-    std::uint64_t         error_scope_count{0};
+    uint32                domain_index{0};
+    uint64                frame_id{0};
+    uint64                source_frame_index{kInvalidSessionIndex};
+    uint64                origin_tick{0};
+    uint64                extent_ticks{0};
+    uint64                ready_scope_count{0};
+    uint64                error_scope_count{0};
     ProfileGpuFrameStatus frame_status{ProfileGpuFrameStatus::Invalid};
     bool                  has_frame_record{false};
     bool                  timing_available{false};
@@ -51,20 +52,20 @@ struct GpuAxisFramePlan {
 struct GpuBuildPlan {
     std::vector<GpuFrameSlicePlan> slices{};
     std::vector<GpuAxisFramePlan>  axis_frames{};
-    std::vector<std::uint64_t>     track_first_slice{};
-    std::vector<std::uint64_t>     track_slice_count{};
-    std::uint64_t                  timeline_scope_count{0};
-    std::uint64_t                  tree_value_count{0};
+    std::vector<uint64>            track_first_slice{};
+    std::vector<uint64>            track_slice_count{};
+    uint64                         timeline_scope_count{0};
+    uint64                         tree_value_count{0};
 };
 
 class CancellationProbe final {
 public:
     explicit CancellationProbe(const TimelineIndexBuildControl& _control) noexcept :
         control_(_control),
-        interval_(std::max<std::uint64_t>(std::uint64_t{1}, _control.cancellation_check_interval)),
+        interval_(std::max<uint64>(uint64{1}, _control.cancellation_check_interval)),
         remaining_budget_(_control.max_work_items_before_cancel) {}
 
-    [[nodiscard]] bool Requested(std::uint64_t _work_items = 1) noexcept {
+    [[nodiscard]] bool Requested(uint64 _work_items = 1) noexcept {
         if (_work_items > remaining_budget_) {
             remaining_budget_ = 0;
             return true;
@@ -86,21 +87,21 @@ public:
     }
 
     [[nodiscard]] std::size_t SortRunSize() const noexcept {
-        constexpr std::uint64_t kMaximumSortRunSize = 4096;
+        constexpr uint64 kMaximumSortRunSize = 4096;
         return static_cast<std::size_t>(std::min(interval_, kMaximumSortRunSize));
     }
 
 private:
     const TimelineIndexBuildControl& control_;
-    std::uint64_t                    interval_{1};
-    std::uint64_t                    pending_work_{0};
-    std::uint64_t                    remaining_budget_{std::numeric_limits<std::uint64_t>::max()};
+    uint64                           interval_{1};
+    uint64                           pending_work_{0};
+    uint64                           remaining_budget_{std::numeric_limits<uint64>::max()};
 };
 
 [[nodiscard]] bool MarkCancelled(
     CancellationProbe&        _cancellation,
     TimelineIndexBuildResult& _result,
-    std::uint64_t             _work_items = 1
+    uint64                    _work_items = 1
 ) noexcept;
 
 [[nodiscard]] bool
@@ -177,8 +178,8 @@ template<typename T, typename Compare>
     return !MarkCancelledNow(_cancellation, _result);
 }
 
-[[nodiscard]] bool AddOverflow(std::uint64_t _left, std::uint64_t _right, std::uint64_t& _result) noexcept {
-    if (_right > std::numeric_limits<std::uint64_t>::max() - _left) {
+[[nodiscard]] bool AddOverflow(uint64 _left, uint64 _right, uint64& _result) noexcept {
+    if (_right > std::numeric_limits<uint64>::max() - _left) {
         return true;
     }
     _result = _left + _right;
@@ -186,22 +187,22 @@ template<typename T, typename Compare>
 }
 
 [[nodiscard]] bool
-MultiplyOverflow(std::uint64_t _left, std::uint64_t _right, std::uint64_t& _result) noexcept {
-    if (_left != 0 && _right > std::numeric_limits<std::uint64_t>::max() / _left) {
+MultiplyOverflow(uint64 _left, uint64 _right, uint64& _result) noexcept {
+    if (_left != 0 && _right > std::numeric_limits<uint64>::max() / _left) {
         return true;
     }
     _result = _left * _right;
     return false;
 }
 
-[[nodiscard]] bool NextPowerOfTwo(std::uint64_t _value, std::uint64_t& _result) noexcept {
+[[nodiscard]] bool NextPowerOfTwo(uint64 _value, uint64& _result) noexcept {
     if (_value == 0) {
         _result = 1;
         return true;
     }
-    std::uint64_t power = 1;
+    uint64 power = 1;
     while (power < _value) {
-        if (power > std::numeric_limits<std::uint64_t>::max() / 2) {
+        if (power > std::numeric_limits<uint64>::max() / 2) {
             return false;
         }
         power *= 2;
@@ -210,13 +211,13 @@ MultiplyOverflow(std::uint64_t _left, std::uint64_t _right, std::uint64_t& _resu
     return true;
 }
 
-[[nodiscard]] std::uint64_t TimestampMask(std::uint32_t _valid_bits) noexcept {
-    return _valid_bits == 64 ? std::numeric_limits<std::uint64_t>::max() :
-                               (std::uint64_t{1} << _valid_bits) - 1;
+[[nodiscard]] uint64 TimestampMask(uint32 _valid_bits) noexcept {
+    return _valid_bits == 64 ? std::numeric_limits<uint64>::max() :
+                               (uint64{1} << _valid_bits) - 1;
 }
 
-[[nodiscard]] std::uint64_t
-TimestampDelta(std::uint64_t _begin_tick, std::uint64_t _end_tick, std::uint32_t _valid_bits) noexcept {
+[[nodiscard]] uint64
+TimestampDelta(uint64 _begin_tick, uint64 _end_tick, uint32 _valid_bits) noexcept {
     return (_end_tick - _begin_tick) & TimestampMask(_valid_bits);
 }
 
@@ -228,25 +229,25 @@ TimestampDelta(std::uint64_t _begin_tick, std::uint64_t _end_tick, std::uint32_t
     return std::abs(_left - _right) <= tolerance;
 }
 
-[[nodiscard]] std::uint64_t QueryEnd(const CpuTimelineScopeRef& _scope) noexcept {
+[[nodiscard]] uint64 QueryEnd(const CpuTimelineScopeRef& _scope) noexcept {
     if (_scope.end_ns > _scope.begin_ns) {
         return _scope.end_ns;
     }
-    return _scope.begin_ns == std::numeric_limits<std::uint64_t>::max() ? _scope.begin_ns :
-                                                                          _scope.begin_ns + 1;
+    return _scope.begin_ns == std::numeric_limits<uint64>::max() ? _scope.begin_ns :
+                                                                   _scope.begin_ns + 1;
 }
 
-[[nodiscard]] std::uint64_t QueryEnd(const GpuTimelineScopeRef& _scope) noexcept {
+[[nodiscard]] uint64 QueryEnd(const GpuTimelineScopeRef& _scope) noexcept {
     if (_scope.end_tick_offset > _scope.begin_tick_offset) {
         return _scope.end_tick_offset;
     }
-    return _scope.begin_tick_offset == std::numeric_limits<std::uint64_t>::max() ?
+    return _scope.begin_tick_offset == std::numeric_limits<uint64>::max() ?
                _scope.begin_tick_offset :
                _scope.begin_tick_offset + 1;
 }
 
 [[nodiscard]] bool
-Overlaps(const CpuTimelineScopeRef& _scope, std::uint64_t _view_begin, std::uint64_t _view_end) noexcept {
+Overlaps(const CpuTimelineScopeRef& _scope, uint64 _view_begin, uint64 _view_end) noexcept {
     if (_scope.end_ns > _scope.begin_ns) {
         return _scope.end_ns > _view_begin && _scope.begin_ns < _view_end;
     }
@@ -254,7 +255,7 @@ Overlaps(const CpuTimelineScopeRef& _scope, std::uint64_t _view_begin, std::uint
 }
 
 [[nodiscard]] bool
-Overlaps(const GpuTimelineScopeRef& _scope, std::uint64_t _view_begin, std::uint64_t _view_end) noexcept {
+Overlaps(const GpuTimelineScopeRef& _scope, uint64 _view_begin, uint64 _view_end) noexcept {
     if (_scope.end_tick_offset > _scope.begin_tick_offset) {
         return _scope.end_tick_offset > _view_begin && _scope.begin_tick_offset < _view_end;
     }
@@ -263,15 +264,15 @@ Overlaps(const GpuTimelineScopeRef& _scope, std::uint64_t _view_begin, std::uint
 
 template<typename ScopeRef, typename Output, typename Project>
 [[nodiscard]] TimelineOverlapQueryResult QueryTimelineOverlaps(
-    std::span<const ScopeRef>      _scopes,
-    std::uint64_t                  _first_scope,
-    std::uint64_t                  _scope_count,
-    const TimelineIntervalTree&    _tree,
-    std::span<const std::uint64_t> _tree_max_end,
-    std::uint64_t                  _view_begin,
-    std::uint64_t                  _view_end,
-    std::span<Output>              _output,
-    Project                        _project
+    std::span<const ScopeRef>   _scopes,
+    uint64                      _first_scope,
+    uint64                      _scope_count,
+    const TimelineIntervalTree& _tree,
+    std::span<const uint64>     _tree_max_end,
+    uint64                      _view_begin,
+    uint64                      _view_end,
+    std::span<Output>           _output,
+    Project                     _project
 ) noexcept {
     TimelineOverlapQueryResult query{};
     if (_view_end <= _view_begin || _first_scope > _scopes.size() ||
@@ -290,9 +291,9 @@ template<typename ScopeRef, typename Output, typename Project>
     }
 
     struct StackNode {
-        std::uint64_t node{0};
-        std::uint64_t begin{0};
-        std::uint64_t end{0};
+        uint64 node{0};
+        uint64 begin{0};
+        uint64 end{0};
     };
     std::array<StackNode, 128> stack{};
     std::size_t                stack_size = 0;
@@ -307,7 +308,7 @@ template<typename ScopeRef, typename Output, typename Project>
         if (current.begin >= _scope_count) {
             continue;
         }
-        const std::uint64_t tree_value = _tree_max_end[_tree.tree_offset + current.node];
+        const uint64 tree_value = _tree_max_end[_tree.tree_offset + current.node];
         if (tree_value <= _view_begin) {
             continue;
         }
@@ -335,7 +336,7 @@ template<typename ScopeRef, typename Output, typename Project>
             break;
         }
 
-        const std::uint64_t middle = current.begin + (current.end - current.begin) / 2;
+        const uint64 middle = current.begin + (current.end - current.begin) / 2;
         if (stack_size + 2 > stack.size()) {
             query.valid = false;
             return query;
@@ -362,7 +363,7 @@ void AddQualityFlag(ProfileTimelineQuality& _quality, TimelineQualityFlag _flag)
 [[nodiscard]] bool MarkCancelled(
     CancellationProbe&        _cancellation,
     TimelineIndexBuildResult& _result,
-    std::uint64_t             _work_items
+    uint64                    _work_items
 ) noexcept {
     if (!_cancellation.Requested(_work_items)) {
         return false;
@@ -384,12 +385,12 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
     const GpuScopeRecord&     _scope,
     const GpuTimestampDomain& _domain,
     const GpuAxisFramePlan&   _axis_frame,
-    std::uint64_t&            _begin_offset,
-    std::uint64_t&            _end_offset
+    uint64&                   _begin_offset,
+    uint64&                   _end_offset
 ) noexcept {
-    const std::uint64_t mask     = TimestampMask(_domain.valid_bits);
+    const uint64 mask            = TimestampMask(_domain.valid_bits);
     _begin_offset                = (_scope.begin_tick - _axis_frame.origin_tick) & mask;
-    const std::uint64_t duration = TimestampDelta(_scope.begin_tick, _scope.end_tick, _domain.valid_bits);
+    const uint64 duration        = TimestampDelta(_scope.begin_tick, _scope.end_tick, _domain.valid_bits);
     if (_begin_offset > _axis_frame.extent_ticks || duration > _axis_frame.extent_ticks - _begin_offset) {
         return false;
     }
@@ -407,8 +408,8 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
     TimelineIndexBuildResult&           _result,
     GpuBuildPlan&                       _plan
 ) {
-    std::uint64_t planned_slice_count = 0;
-    std::uint64_t ready_scope_count   = 0;
+    uint64 planned_slice_count = 0;
+    uint64 ready_scope_count   = 0;
     for (std::size_t track_index = 0; track_index < _gpu_tracks.size(); ++track_index) {
         if (MarkCancelled(_cancellation, _result)) {
             return false;
@@ -423,8 +424,8 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
         const std::size_t source_begin         = static_cast<std::size_t>(track.first_scope);
         const std::size_t source_end           = source_begin + static_cast<std::size_t>(track.scope_count);
         bool              has_frame            = false;
-        std::uint64_t     previous_frame_id    = 0;
-        std::uint64_t     previous_frame_index = kInvalidSessionIndex;
+        uint64            previous_frame_id    = 0;
+        uint64            previous_frame_index = kInvalidSessionIndex;
         for (std::size_t scope_index = source_begin; scope_index < source_end; ++scope_index) {
             if (MarkCancelled(_cancellation, _result)) {
                 return false;
@@ -435,7 +436,7 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
                 return false;
             }
             if (scope.status == ProfileGpuScopeStatus::Ready &&
-                AddOverflow(ready_scope_count, std::uint64_t{1}, ready_scope_count)) {
+                AddOverflow(ready_scope_count, uint64{1}, ready_scope_count)) {
                 _result.status = TimelineIndexBuildStatus::ResourceExhausted;
                 return false;
             }
@@ -466,13 +467,13 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
         }
     }
 
-    const auto add_bytes = [](std::uint64_t& _total, std::uint64_t _count, std::uint64_t _size) {
-        std::uint64_t bytes = 0;
+    const auto add_bytes = [](uint64& _total, uint64 _count, uint64 _size) {
+        uint64 bytes = 0;
         return !MultiplyOverflow(_count, _size, bytes) && !AddOverflow(_total, bytes, _total);
     };
-    std::uint64_t initial_transient_bytes = 0;
-    if (!add_bytes(initial_transient_bytes, _gpu_tracks.size(), sizeof(std::uint64_t)) ||
-        !add_bytes(initial_transient_bytes, _gpu_tracks.size(), sizeof(std::uint64_t)) ||
+    uint64 initial_transient_bytes = 0;
+    if (!add_bytes(initial_transient_bytes, _gpu_tracks.size(), sizeof(uint64)) ||
+        !add_bytes(initial_transient_bytes, _gpu_tracks.size(), sizeof(uint64)) ||
         !add_bytes(initial_transient_bytes, planned_slice_count, sizeof(GpuFrameSlicePlan)) ||
         !add_bytes(initial_transient_bytes, planned_slice_count, sizeof(std::size_t)) ||
         !add_bytes(initial_transient_bytes, planned_slice_count, sizeof(std::size_t))) {
@@ -524,12 +525,12 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
 
             const GpuScopeRecord& first = _gpu_scopes[slice_begin];
             GpuFrameSlicePlan     slice{
-                    .track_index        = static_cast<std::uint32_t>(track_index),
-                    .domain_index       = track.domain_index,
-                    .frame_id           = first.frame_id,
-                    .source_frame_index = first.frame_index,
-                    .first_scope        = slice_begin,
-                    .scope_count        = slice_end - slice_begin,
+                .track_index        = static_cast<uint32>(track_index),
+                .domain_index       = track.domain_index,
+                .frame_id           = first.frame_id,
+                .source_frame_index = first.frame_index,
+                .first_scope        = slice_begin,
+                .scope_count        = slice_end - slice_begin,
             };
             for (std::size_t scope_index = slice_begin; scope_index < slice_end; ++scope_index) {
                 if (MarkCancelled(_cancellation, _result)) {
@@ -592,7 +593,7 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
         return false;
     }
 
-    std::uint64_t axis_frame_count = 0;
+    uint64 axis_frame_count = 0;
     for (std::size_t index = 0; index < slice_order.size(); ++index) {
         if (MarkCancelled(_cancellation, _result)) {
             return false;
@@ -608,23 +609,23 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
         }
     }
 
-    std::uint64_t persistent_plan_bytes = 0;
-    std::uint64_t endpoint_peak_bytes   = 0;
-    std::uint64_t timeline_sort_bytes   = 0;
-    if (!add_bytes(persistent_plan_bytes, _gpu_tracks.size(), sizeof(std::uint64_t)) ||
-        !add_bytes(persistent_plan_bytes, _gpu_tracks.size(), sizeof(std::uint64_t)) ||
+    uint64 persistent_plan_bytes = 0;
+    uint64 endpoint_peak_bytes   = 0;
+    uint64 timeline_sort_bytes   = 0;
+    if (!add_bytes(persistent_plan_bytes, _gpu_tracks.size(), sizeof(uint64)) ||
+        !add_bytes(persistent_plan_bytes, _gpu_tracks.size(), sizeof(uint64)) ||
         !add_bytes(persistent_plan_bytes, planned_slice_count, sizeof(GpuFrameSlicePlan)) ||
         !add_bytes(persistent_plan_bytes, axis_frame_count, sizeof(GpuAxisFramePlan)) ||
         !add_bytes(endpoint_peak_bytes, planned_slice_count, sizeof(std::size_t)) ||
-        !add_bytes(endpoint_peak_bytes, ready_scope_count, sizeof(std::uint64_t)) ||
-        !add_bytes(endpoint_peak_bytes, ready_scope_count, sizeof(std::uint64_t)) ||
-        !add_bytes(endpoint_peak_bytes, ready_scope_count, sizeof(std::uint64_t)) ||
-        !add_bytes(endpoint_peak_bytes, ready_scope_count, sizeof(std::uint64_t)) ||
+        !add_bytes(endpoint_peak_bytes, ready_scope_count, sizeof(uint64)) ||
+        !add_bytes(endpoint_peak_bytes, ready_scope_count, sizeof(uint64)) ||
+        !add_bytes(endpoint_peak_bytes, ready_scope_count, sizeof(uint64)) ||
+        !add_bytes(endpoint_peak_bytes, ready_scope_count, sizeof(uint64)) ||
         !add_bytes(timeline_sort_bytes, ready_scope_count, sizeof(GpuTimelineScopeRef))) {
         _result.status = TimelineIndexBuildStatus::ResourceExhausted;
         return false;
     }
-    std::uint64_t peak_transient_bytes = 0;
+    uint64 peak_transient_bytes = 0;
     if (AddOverflow(
             persistent_plan_bytes, std::max(endpoint_peak_bytes, timeline_sort_bytes), peak_transient_bytes
         )) {
@@ -638,7 +639,7 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
     }
     _plan.axis_frames.reserve(static_cast<std::size_t>(axis_frame_count));
 
-    std::vector<std::uint64_t> endpoints;
+    std::vector<uint64>        endpoints;
     std::size_t                group_begin = 0;
     while (group_begin < slice_order.size()) {
         std::size_t              group_end   = group_begin + 1;
@@ -672,7 +673,7 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
         }
 
         endpoints.clear();
-        std::uint64_t group_ready_scope_count = 0;
+        uint64 group_ready_scope_count = 0;
         for (std::size_t order_index = group_begin; order_index < group_end; ++order_index) {
             if (MarkCancelled(_cancellation, _result) ||
                 AddOverflow(
@@ -686,8 +687,8 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
                 return false;
             }
         }
-        std::uint64_t endpoint_count = 0;
-        if (MultiplyOverflow(group_ready_scope_count, std::uint64_t{2}, endpoint_count) ||
+        uint64 endpoint_count = 0;
+        if (MultiplyOverflow(group_ready_scope_count, uint64{2}, endpoint_count) ||
             endpoint_count > std::numeric_limits<std::size_t>::max()) {
             _result.status = TimelineIndexBuildStatus::ResourceExhausted;
             return false;
@@ -703,7 +704,7 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
             }
             axis_frame.ready_scope_count += slice.ready_scope_count;
             axis_frame.error_scope_count += slice.error_scope_count;
-            for (std::uint64_t scope_offset = 0; scope_offset < slice.scope_count; ++scope_offset) {
+            for (uint64 scope_offset = 0; scope_offset < slice.scope_count; ++scope_offset) {
                 if (MarkCancelled(_cancellation, _result)) {
                     return false;
                 }
@@ -717,7 +718,7 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
                     timing_layout_valid = false;
                     continue;
                 }
-                const std::uint64_t mask = TimestampMask(domain.valid_bits);
+                const uint64 mask = TimestampMask(domain.valid_bits);
                 endpoints.push_back(scope.begin_tick & mask);
                 endpoints.push_back(scope.end_tick & mask);
             }
@@ -728,7 +729,7 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
                     endpoints,
                     0,
                     endpoints.size(),
-                    [](std::uint64_t _left, std::uint64_t _right) {
+                    [](uint64 _left, uint64 _right) {
                         return _left < _right;
                     },
                     _cancellation,
@@ -752,19 +753,19 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
                 axis_frame.origin_tick  = endpoints.front();
                 axis_frame.extent_ticks = 0;
             } else {
-                std::uint64_t largest_gap = 0;
-                std::uint64_t origin_tick = endpoints.front();
+                uint64 largest_gap = 0;
+                uint64 origin_tick = endpoints.front();
                 for (std::size_t index = 1; index < endpoints.size(); ++index) {
                     if (MarkCancelled(_cancellation, _result)) {
                         return false;
                     }
-                    const std::uint64_t gap = endpoints[index] - endpoints[index - 1];
+                    const uint64 gap = endpoints[index] - endpoints[index - 1];
                     if (gap > largest_gap) {
                         largest_gap = gap;
                         origin_tick = endpoints[index];
                     }
                 }
-                const std::uint64_t wrap_gap =
+                const uint64 wrap_gap =
                     (endpoints.front() - endpoints.back()) & TimestampMask(domain.valid_bits);
                 if (wrap_gap > largest_gap) {
                     largest_gap = wrap_gap;
@@ -772,22 +773,22 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
                 }
                 axis_frame.origin_tick = origin_tick;
                 if (domain.valid_bits == 64) {
-                    axis_frame.extent_ticks = std::uint64_t{0} - largest_gap;
+                    axis_frame.extent_ticks = uint64{0} - largest_gap;
                 } else {
-                    const std::uint64_t modulus = std::uint64_t{1} << domain.valid_bits;
+                    const uint64 modulus        = uint64{1} << domain.valid_bits;
                     axis_frame.extent_ticks     = modulus - largest_gap;
                 }
             }
 
-            const std::uint64_t half_range = domain.valid_bits == 64 ?
-                                                 (std::uint64_t{1} << 63) :
-                                                 (std::uint64_t{1} << (domain.valid_bits - 1));
+            const uint64 half_range        = domain.valid_bits == 64 ?
+                                                 (uint64{1} << 63) :
+                                                 (uint64{1} << (domain.valid_bits - 1));
             timing_layout_valid            = axis_frame.extent_ticks < half_range;
             if (timing_layout_valid) {
                 for (std::size_t order_index = group_begin; order_index < group_end && timing_layout_valid;
                      ++order_index) {
                     const GpuFrameSlicePlan& slice = _plan.slices[slice_order[order_index]];
-                    for (std::uint64_t scope_offset = 0; scope_offset < slice.scope_count; ++scope_offset) {
+                    for (uint64 scope_offset = 0; scope_offset < slice.scope_count; ++scope_offset) {
                         if (MarkCancelled(_cancellation, _result)) {
                             return false;
                         }
@@ -795,8 +796,8 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
                         if (scope.status != ProfileGpuScopeStatus::Ready) {
                             continue;
                         }
-                        std::uint64_t begin_offset = 0;
-                        std::uint64_t end_offset   = 0;
+                        uint64 begin_offset = 0;
+                        uint64 end_offset   = 0;
                         timing_layout_valid =
                             ComputeGpuOffsets(scope, domain, axis_frame, begin_offset, end_offset);
                         if (!timing_layout_valid) {
@@ -810,7 +811,7 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
         }
 
         axis_frame.timing_available          = timing_layout_valid && axis_frame.ready_scope_count != 0;
-        const std::uint64_t axis_frame_index = _plan.axis_frames.size();
+        const uint64 axis_frame_index        = _plan.axis_frames.size();
         for (std::size_t order_index = group_begin; order_index < group_end; ++order_index) {
             if (MarkCancelled(_cancellation, _result)) {
                 return false;
@@ -825,8 +826,8 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
                 _result.status = TimelineIndexBuildStatus::ResourceExhausted;
                 return false;
             }
-            std::uint64_t tree_values = 0;
-            if (MultiplyOverflow(slice.tree_leaf_count, std::uint64_t{2}, tree_values) ||
+            uint64 tree_values = 0;
+            if (MultiplyOverflow(slice.tree_leaf_count, uint64{2}, tree_values) ||
                 AddOverflow(_plan.tree_value_count, tree_values, _plan.tree_value_count) ||
                 AddOverflow(
                     _plan.timeline_scope_count, slice.ready_scope_count, _plan.timeline_scope_count
@@ -854,14 +855,14 @@ MarkCancelledNow(const CancellationProbe& _cancellation, TimelineIndexBuildResul
         return false;
     }
 
-    std::uint64_t tree_offset = 0;
+    uint64 tree_offset = 0;
     for (GpuFrameSlicePlan& slice : _plan.slices) {
         if (MarkCancelled(_cancellation, _result)) {
             return false;
         }
         slice.tree_offset         = tree_offset;
-        std::uint64_t tree_values = 0;
-        if (MultiplyOverflow(slice.tree_leaf_count, std::uint64_t{2}, tree_values) ||
+        uint64 tree_values        = 0;
+        if (MultiplyOverflow(slice.tree_leaf_count, uint64{2}, tree_values) ||
             AddOverflow(tree_offset, tree_values, tree_offset)) {
             _result.status = TimelineIndexBuildStatus::ResourceExhausted;
             return false;
@@ -882,26 +883,26 @@ struct ProfileTimelineIndex::Impl {
     };
     ProfileTimelineQuality       quality{};
     const ProfileSessionSummary* session_identity{nullptr};
-    std::uint64_t                session_generation{0};
-    std::uint64_t                cpu_scope_count{0};
-    std::uint64_t                gpu_frame_count{0};
-    std::uint64_t                gpu_scope_count{0};
-    std::uint32_t                cpu_track_count{0};
-    std::uint32_t                gpu_track_count{0};
-    std::uint32_t                gpu_domain_count{0};
+    uint64                       session_generation{0};
+    uint64                       cpu_scope_count{0};
+    uint64                       gpu_frame_count{0};
+    uint64                       gpu_scope_count{0};
+    uint32                       cpu_track_count{0};
+    uint32                       gpu_track_count{0};
+    uint32                       gpu_domain_count{0};
 
     std::vector<TimelineAxis>          axes{};
     std::vector<CpuTimelineTrackIndex> cpu_tracks{};
     std::vector<CpuTimelineScopeRef>   cpu_scopes{};
     std::vector<TimelineIntervalTree>  cpu_trees{};
-    std::vector<std::uint64_t>         cpu_tree_max_end{};
+    std::vector<uint64>                cpu_tree_max_end{};
     std::vector<GpuTimelineFrameRef>   gpu_frames{};
     std::vector<GpuTimelineTrackIndex> gpu_tracks{};
     std::vector<GpuTimelineFrameSlice> gpu_frame_slices{};
     std::vector<GpuTimelineAxisFrame>  gpu_axis_frames{};
     std::vector<GpuTimelineScopeRef>   gpu_timeline_scopes{};
     std::vector<TimelineIntervalTree>  gpu_trees{};
-    std::vector<std::uint64_t>         gpu_tree_max_end{};
+    std::vector<uint64>                gpu_tree_max_end{};
 };
 
 ProfileTimelineIndex::~ProfileTimelineIndex() {
@@ -987,10 +988,10 @@ std::span<const GpuTimelineScopeRef> ProfileTimelineIndex::GpuTimelineScopes() c
 }
 
 TimelineOverlapQueryResult ProfileTimelineIndex::QueryCpuOverlaps(
-    std::uint32_t            _track_index,
-    std::uint64_t            _view_begin_ns,
-    std::uint64_t            _view_end_ns,
-    std::span<std::uint64_t> _output
+    uint32            _track_index,
+    uint64            _view_begin_ns,
+    uint64            _view_end_ns,
+    std::span<uint64> _output
 ) const noexcept {
     if (!Valid() || _track_index >= impl_->cpu_tracks.size() || _view_end_ns <= _view_begin_ns) {
         return {};
@@ -1003,7 +1004,7 @@ TimelineOverlapQueryResult ProfileTimelineIndex::QueryCpuOverlaps(
         track.first_scope,
         track.scope_count,
         tree,
-        std::span<const std::uint64_t>(impl_->cpu_tree_max_end),
+        std::span<const uint64>(impl_->cpu_tree_max_end),
         _view_begin_ns,
         _view_end_ns,
         _output,
@@ -1014,9 +1015,9 @@ TimelineOverlapQueryResult ProfileTimelineIndex::QueryCpuOverlaps(
 }
 
 TimelineOverlapQueryResult ProfileTimelineIndex::QueryCpuTimelineOverlaps(
-    std::uint32_t                  _track_index,
-    std::uint64_t                  _view_begin_ns,
-    std::uint64_t                  _view_end_ns,
+    uint32                         _track_index,
+    uint64                         _view_begin_ns,
+    uint64                         _view_end_ns,
     std::span<CpuTimelineScopeRef> _output
 ) const noexcept {
     if (!Valid() || _track_index >= impl_->cpu_tracks.size() || _view_end_ns <= _view_begin_ns) {
@@ -1030,7 +1031,7 @@ TimelineOverlapQueryResult ProfileTimelineIndex::QueryCpuTimelineOverlaps(
         track.first_scope,
         track.scope_count,
         tree,
-        std::span<const std::uint64_t>(impl_->cpu_tree_max_end),
+        std::span<const uint64>(impl_->cpu_tree_max_end),
         _view_begin_ns,
         _view_end_ns,
         _output,
@@ -1040,7 +1041,7 @@ TimelineOverlapQueryResult ProfileTimelineIndex::QueryCpuTimelineOverlaps(
     );
 }
 
-const GpuTimelineFrameRef* ProfileTimelineIndex::FindGpuFrame(std::uint64_t _frame_id) const noexcept {
+const GpuTimelineFrameRef* ProfileTimelineIndex::FindGpuFrame(uint64 _frame_id) const noexcept {
     if (!Valid()) {
         return nullptr;
     }
@@ -1048,7 +1049,7 @@ const GpuTimelineFrameRef* ProfileTimelineIndex::FindGpuFrame(std::uint64_t _fra
         impl_->gpu_frames.begin(),
         impl_->gpu_frames.end(),
         _frame_id,
-        [](const GpuTimelineFrameRef& _frame, std::uint64_t _id) {
+        [](const GpuTimelineFrameRef& _frame, uint64 _id) {
             return _frame.frame_id < _id;
         }
     );
@@ -1056,22 +1057,22 @@ const GpuTimelineFrameRef* ProfileTimelineIndex::FindGpuFrame(std::uint64_t _fra
 }
 
 const GpuTimelineFrameSlice*
-ProfileTimelineIndex::FindGpuFrameSlice(std::uint32_t _track_index, std::uint64_t _frame_id) const noexcept {
+ProfileTimelineIndex::FindGpuFrameSlice(uint32 _track_index, uint64 _frame_id) const noexcept {
     if (!Valid() || _track_index >= impl_->gpu_tracks.size()) {
         return nullptr;
     }
     const GpuTimelineTrackIndex& track = impl_->gpu_tracks[_track_index];
     const auto begin = impl_->gpu_frame_slices.begin() + static_cast<std::ptrdiff_t>(track.first_frame_slice);
     const auto end   = begin + static_cast<std::ptrdiff_t>(track.frame_slice_count);
-    const auto found =
-        std::lower_bound(begin, end, _frame_id, [](const GpuTimelineFrameSlice& _slice, std::uint64_t _id) {
+    const auto                   found =
+        std::lower_bound(begin, end, _frame_id, [](const GpuTimelineFrameSlice& _slice, uint64 _id) {
             return _slice.frame_id < _id;
         });
     return found != end && found->frame_id == _frame_id ? &*found : nullptr;
 }
 
 const GpuTimelineAxisFrame*
-ProfileTimelineIndex::FindGpuAxisFrame(std::uint32_t _axis_index, std::uint64_t _frame_id) const noexcept {
+ProfileTimelineIndex::FindGpuAxisFrame(uint32 _axis_index, uint64 _frame_id) const noexcept {
     if (!Valid() || _axis_index >= impl_->axes.size()) {
         return nullptr;
     }
@@ -1091,11 +1092,11 @@ ProfileTimelineIndex::FindGpuAxisFrame(std::uint32_t _axis_index, std::uint64_t 
 }
 
 TimelineOverlapQueryResult ProfileTimelineIndex::QueryGpuOverlaps(
-    std::uint32_t            _track_index,
-    std::uint64_t            _frame_id,
-    std::uint64_t            _view_begin_ticks,
-    std::uint64_t            _view_end_ticks,
-    std::span<std::uint64_t> _output
+    uint32            _track_index,
+    uint64            _frame_id,
+    uint64            _view_begin_ticks,
+    uint64            _view_end_ticks,
+    std::span<uint64> _output
 ) const noexcept {
     if (!Valid() || _track_index >= impl_->gpu_tracks.size() || _view_end_ticks <= _view_begin_ticks) {
         return {};
@@ -1115,7 +1116,7 @@ TimelineOverlapQueryResult ProfileTimelineIndex::QueryGpuOverlaps(
         slice->first_timeline_scope,
         slice->timeline_scope_count,
         tree,
-        std::span<const std::uint64_t>(impl_->gpu_tree_max_end),
+        std::span<const uint64>(impl_->gpu_tree_max_end),
         _view_begin_ticks,
         _view_end_ticks,
         _output,
@@ -1126,10 +1127,10 @@ TimelineOverlapQueryResult ProfileTimelineIndex::QueryGpuOverlaps(
 }
 
 TimelineOverlapQueryResult ProfileTimelineIndex::QueryGpuTimelineOverlaps(
-    std::uint32_t                  _track_index,
-    std::uint64_t                  _frame_id,
-    std::uint64_t                  _view_begin_ticks,
-    std::uint64_t                  _view_end_ticks,
+    uint32                         _track_index,
+    uint64                         _frame_id,
+    uint64                         _view_begin_ticks,
+    uint64                         _view_end_ticks,
     std::span<GpuTimelineScopeRef> _output
 ) const noexcept {
     if (!Valid() || _track_index >= impl_->gpu_tracks.size() || _view_end_ticks <= _view_begin_ticks) {
@@ -1150,7 +1151,7 @@ TimelineOverlapQueryResult ProfileTimelineIndex::QueryGpuTimelineOverlaps(
         slice->first_timeline_scope,
         slice->timeline_scope_count,
         tree,
-        std::span<const std::uint64_t>(impl_->gpu_tree_max_end),
+        std::span<const uint64>(impl_->gpu_tree_max_end),
         _view_begin_ticks,
         _view_end_ticks,
         _output,
@@ -1198,15 +1199,15 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
             return result;
         }
 
-        std::uint64_t cpu_tree_value_count = 0;
+        uint64 cpu_tree_value_count = 0;
         for (const CpuTrack& track : cpu_tracks) {
             if (MarkCancelled(cancellation, result)) {
                 return result;
             }
-            std::uint64_t leaf_count = 0;
-            std::uint64_t tree_count = 0;
+            uint64 leaf_count = 0;
+            uint64 tree_count = 0;
             if (!NextPowerOfTwo(track.scope_count, leaf_count) ||
-                MultiplyOverflow(leaf_count, std::uint64_t{2}, tree_count) ||
+                MultiplyOverflow(leaf_count, uint64{2}, tree_count) ||
                 AddOverflow(cpu_tree_value_count, tree_count, cpu_tree_value_count)) {
                 result.status = TimelineIndexBuildStatus::ResourceExhausted;
                 return result;
@@ -1220,8 +1221,8 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
             return result;
         }
 
-        const auto add_vector_bytes = [&](std::uint64_t _count, std::uint64_t _element_size) {
-            std::uint64_t bytes = 0;
+        const auto add_vector_bytes = [&](uint64 _count, uint64 _element_size) {
+            uint64 bytes = 0;
             return !MultiplyOverflow(_count, _element_size, bytes) &&
                    !AddOverflow(result.logical_bytes, bytes, result.logical_bytes);
         };
@@ -1229,14 +1230,14 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
             !add_vector_bytes(cpu_tracks.size(), sizeof(CpuTimelineTrackIndex)) ||
             !add_vector_bytes(cpu_scopes.size(), sizeof(CpuTimelineScopeRef)) ||
             !add_vector_bytes(cpu_tracks.size(), sizeof(TimelineIntervalTree)) ||
-            !add_vector_bytes(cpu_tree_value_count, sizeof(std::uint64_t)) ||
+            !add_vector_bytes(cpu_tree_value_count, sizeof(uint64)) ||
             !add_vector_bytes(gpu_frames.size(), sizeof(GpuTimelineFrameRef)) ||
             !add_vector_bytes(gpu_tracks.size(), sizeof(GpuTimelineTrackIndex)) ||
             !add_vector_bytes(gpu_plan.slices.size(), sizeof(GpuTimelineFrameSlice)) ||
             !add_vector_bytes(gpu_plan.axis_frames.size(), sizeof(GpuTimelineAxisFrame)) ||
             !add_vector_bytes(gpu_plan.timeline_scope_count, sizeof(GpuTimelineScopeRef)) ||
             !add_vector_bytes(gpu_plan.slices.size(), sizeof(TimelineIntervalTree)) ||
-            !add_vector_bytes(gpu_plan.tree_value_count, sizeof(std::uint64_t))) {
+            !add_vector_bytes(gpu_plan.tree_value_count, sizeof(uint64))) {
             result.status = TimelineIndexBuildStatus::ResourceExhausted;
             return result;
         }
@@ -1263,9 +1264,9 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
         impl.cpu_scope_count             = cpu_scopes.size();
         impl.gpu_frame_count             = gpu_frames.size();
         impl.gpu_scope_count             = gpu_scopes.size();
-        impl.cpu_track_count             = static_cast<std::uint32_t>(cpu_tracks.size());
-        impl.gpu_track_count             = static_cast<std::uint32_t>(gpu_tracks.size());
-        impl.gpu_domain_count            = static_cast<std::uint32_t>(gpu_domains.size());
+        impl.cpu_track_count             = static_cast<uint32>(cpu_tracks.size());
+        impl.gpu_track_count             = static_cast<uint32>(gpu_tracks.size());
+        impl.gpu_domain_count            = static_cast<uint32>(gpu_domains.size());
 
         impl.axes.reserve(1 + gpu_domains.size());
         impl.cpu_tracks.reserve(cpu_tracks.size());
@@ -1296,7 +1297,7 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
             const GpuTimestampDomain& domain = gpu_domains[index];
             impl.axes.push_back({
                 .kind                            = TimelineAxisKind::GpuPhysicalTimestampDomain,
-                .source_domain_index             = static_cast<std::uint32_t>(index),
+                .source_domain_index             = static_cast<uint32>(index),
                 .native_queue_id                 = domain.native_queue_id,
                 .family_id                       = domain.family_id,
                 .logical_queue_mask              = domain.logical_queue_mask,
@@ -1309,7 +1310,7 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
             });
         }
 
-        std::uint64_t tree_offset = 0;
+        uint64 tree_offset = 0;
         for (std::size_t track_index = 0; track_index < cpu_tracks.size(); ++track_index) {
             if (MarkCancelled(cancellation, result)) {
                 return result;
@@ -1322,7 +1323,7 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
                 return result;
             }
 
-            std::uint64_t leaf_count = 0;
+            uint64 leaf_count = 0;
             if (!NextPowerOfTwo(track.scope_count, leaf_count)) {
                 result.status = TimelineIndexBuildStatus::ResourceExhausted;
                 return result;
@@ -1332,13 +1333,13 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
                 .leaf_count  = leaf_count,
             });
             CpuTimelineTrackIndex indexed_track{
-                .source_track_index = static_cast<std::uint32_t>(track_index),
+                .source_track_index = static_cast<uint32>(track_index),
                 .axis_index         = 0,
                 .first_scope        = impl.cpu_scopes.size(),
                 .scope_count        = track.scope_count,
             };
 
-            std::uint64_t     previous_begin = 0;
+            uint64            previous_begin = 0;
             bool              has_scope      = false;
             const std::size_t source_begin   = static_cast<std::size_t>(track.first_scope);
             const std::size_t source_end     = source_begin + static_cast<std::size_t>(track.scope_count);
@@ -1352,8 +1353,8 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
                     result.status = TimelineIndexBuildStatus::ProtocolViolation;
                     return result;
                 }
-                const std::uint64_t begin_ns = scope.begin_ns - summary.cpu_begin_ns;
-                const std::uint64_t end_ns   = scope.end_ns - summary.cpu_begin_ns;
+                const uint64 begin_ns = scope.begin_ns - summary.cpu_begin_ns;
+                const uint64 end_ns   = scope.end_ns - summary.cpu_begin_ns;
                 if (has_scope && begin_ns < previous_begin) {
                     result.status = TimelineIndexBuildStatus::ProtocolViolation;
                     return result;
@@ -1377,15 +1378,15 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
             }
             impl.cpu_tracks.push_back(indexed_track);
 
-            const std::uint64_t track_tree_offset = tree_offset;
-            for (std::uint64_t local_index = 0; local_index < track.scope_count; ++local_index) {
+            const uint64 track_tree_offset = tree_offset;
+            for (uint64 local_index = 0; local_index < track.scope_count; ++local_index) {
                 if (MarkCancelled(cancellation, result)) {
                     return result;
                 }
                 const CpuTimelineScopeRef& scope = impl.cpu_scopes[indexed_track.first_scope + local_index];
                 impl.cpu_tree_max_end[track_tree_offset + leaf_count + local_index] = QueryEnd(scope);
             }
-            for (std::uint64_t node = leaf_count; node > 1;) {
+            for (uint64 node = leaf_count; node > 1;) {
                 if (MarkCancelled(cancellation, result)) {
                     return result;
                 }
@@ -1427,7 +1428,7 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
             impl.gpu_axis_frames.push_back({
                 .frame_id                  = planned.frame_id,
                 .source_frame_index        = planned.source_frame_index,
-                .axis_index                = static_cast<std::uint32_t>(1 + planned.domain_index),
+                .axis_index                = static_cast<uint32>(1 + planned.domain_index),
                 .origin_tick               = planned.origin_tick,
                 .extent_ticks              = planned.extent_ticks,
                 .ready_scope_count         = planned.ready_scope_count,
@@ -1453,19 +1454,19 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
                 return result;
             }
             GpuTimelineTrackIndex indexed_track{
-                .source_track_index = static_cast<std::uint32_t>(track_index),
-                .axis_index         = static_cast<std::uint32_t>(1 + track.domain_index),
+                .source_track_index = static_cast<uint32>(track_index),
+                .axis_index         = static_cast<uint32>(1 + track.domain_index),
                 .first_frame_slice  = impl.gpu_frame_slices.size(),
                 .frame_slice_count  = gpu_plan.track_slice_count[track_index],
             };
-            const std::uint64_t plan_begin = gpu_plan.track_first_slice[track_index];
-            const std::uint64_t plan_end   = plan_begin + gpu_plan.track_slice_count[track_index];
+            const uint64 plan_begin = gpu_plan.track_first_slice[track_index];
+            const uint64 plan_end   = plan_begin + gpu_plan.track_slice_count[track_index];
             if (plan_end > gpu_plan.slices.size()) {
                 result.status = TimelineIndexBuildStatus::ProtocolViolation;
                 return result;
             }
 
-            for (std::uint64_t plan_index = plan_begin; plan_index < plan_end; ++plan_index) {
+            for (uint64 plan_index = plan_begin; plan_index < plan_end; ++plan_index) {
                 if (MarkCancelled(cancellation, result)) {
                     return result;
                 }
@@ -1496,17 +1497,17 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
 
                 if (axis_frame.timing_available) {
                     const GpuTimestampDomain& domain = gpu_domains[planned.domain_index];
-                    for (std::uint64_t scope_offset = 0; scope_offset < planned.scope_count; ++scope_offset) {
+                    for (uint64 scope_offset = 0; scope_offset < planned.scope_count; ++scope_offset) {
                         if (MarkCancelled(cancellation, result)) {
                             return result;
                         }
-                        const std::uint64_t   source_index = planned.first_scope + scope_offset;
+                        const uint64          source_index = planned.first_scope + scope_offset;
                         const GpuScopeRecord& scope        = gpu_scopes[source_index];
                         if (scope.status != ProfileGpuScopeStatus::Ready) {
                             continue;
                         }
-                        std::uint64_t begin_offset = 0;
-                        std::uint64_t end_offset   = 0;
+                        uint64 begin_offset = 0;
+                        uint64 end_offset   = 0;
                         if (!ComputeGpuOffsets(scope, domain, axis_plan, begin_offset, end_offset)) {
                             result.status = TimelineIndexBuildStatus::ProtocolViolation;
                             return result;
@@ -1547,7 +1548,7 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
                     .leaf_count  = planned.tree_leaf_count,
                 });
                 if (planned.tree_leaf_count != 0) {
-                    for (std::uint64_t local_index = 0; local_index < slice.timeline_scope_count;
+                    for (uint64 local_index = 0; local_index < slice.timeline_scope_count;
                          ++local_index) {
                         if (MarkCancelled(cancellation, result)) {
                             return result;
@@ -1557,7 +1558,7 @@ TimelineIndexBuildResult BuildProfileTimelineIndex(
                         impl.gpu_tree_max_end[planned.tree_offset + planned.tree_leaf_count + local_index] =
                             QueryEnd(scope);
                     }
-                    for (std::uint64_t node = planned.tree_leaf_count; node > 1;) {
+                    for (uint64 node = planned.tree_leaf_count; node > 1;) {
                         if (MarkCancelled(cancellation, result)) {
                             return result;
                         }

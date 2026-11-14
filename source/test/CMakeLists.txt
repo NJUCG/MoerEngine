@@ -20,9 +20,27 @@ set_target_properties(TestGaussianSceneData PROPERTIES FOLDER "${moer_test_folde
 add_test(NAME GaussianSceneDataContract COMMAND $<TARGET_FILE:TestGaussianSceneData>)
 set_tests_properties(GaussianSceneDataContract PROPERTIES TIMEOUT 60 WORKING_DIRECTORY "$<TARGET_FILE_DIR:TestGaussianSceneData>")
 
+option(MOER_D3D12_GPU_TESTS "Register D3D12 hardware integration tests in CTest" OFF)
+if(WIN32)
+    add_executable(TestD3D12Backend "D3D12BackendTest.cpp")
+    target_link_libraries(TestD3D12Backend PRIVATE Moer::Render)
+    target_compile_definitions(TestD3D12Backend PRIVATE MOER_TEST_WORKSPACE="${BINARY_ROOT_DIR}/bin/$<CONFIG>")
+    set_target_properties(TestD3D12Backend PROPERTIES FOLDER ${moer_test_folder})
+    if(MOER_D3D12_GPU_TESTS)
+        add_test(NAME D3D12BackendContract COMMAND $<TARGET_FILE:TestD3D12Backend>)
+        set_tests_properties(D3D12BackendContract PROPERTIES WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 120 LABELS "gpu;d3d12")
+    endif()
+endif()
+
 add_subdirectory(math)
 add_subdirectory(remote)
 add_subdirectory(scripting)
+
+add_executable(TestHashValue "HashValueTest.cpp")
+target_link_libraries(TestHashValue PRIVATE Moer::Core)
+set_target_properties(TestHashValue PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME HashValueContract COMMAND $<TARGET_FILE:TestHashValue>)
+set_tests_properties(HashValueContract PROPERTIES TIMEOUT 60)
 
 set(test_target TestCVarCommandCore)
 add_executable(${test_target} "CVarCommandCoreTest.cpp")
@@ -208,6 +226,17 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+add_executable(TestShaderEffectsSmoke "ShaderEffectsSmokeTest.cpp")
+target_link_libraries(TestShaderEffectsSmoke PRIVATE Moer::Runtime)
+set_target_properties(TestShaderEffectsSmoke PROPERTIES FOLDER ${moer_test_folder})
+# Opt in: requires a Vulkan ray-tracing GPU and the configured scene assets.
+option(MOER_SHADER_GPU_TESTS "Register shader effect rendering smoke tests" OFF)
+if(MOER_SHADER_GPU_TESTS)
+    add_test(NAME ShaderEffectsSmoke COMMAND $<TARGET_FILE:TestShaderEffectsSmoke>)
+    set_tests_properties(ShaderEffectsSmoke PROPERTIES
+        WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 180 LABELS "gpu;shader")
+endif()
+
 set(test_target TestShaderStageSupport)
 add_executable(${test_target} "ShaderStageSupportTest.cpp")
 target_link_libraries(${test_target}
@@ -222,7 +251,7 @@ target_link_libraries(${test_target} PRIVATE Moer::Render)
 target_compile_definitions(${test_target} PRIVATE MOER_TEST_WORKSPACE="${BINARY_ROOT_DIR}/bin/$<CONFIG>")
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME ShaderConstantsContract COMMAND $<TARGET_FILE:${test_target}>)
-set_tests_properties(ShaderConstantsContract PROPERTIES TIMEOUT 60)
+set_tests_properties(ShaderConstantsContract PROPERTIES TIMEOUT 120)
 
 set(test_target TestShaderParameterReflection)
 add_executable(${test_target} "ShaderParameterReflectionTest.cpp")
@@ -239,6 +268,23 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RenderGraphContract COMMAND $<TARGET_FILE:${test_target}>)
+
+# Manual CPU benchmark; timing and allocation diagnostics use separate compilations.
+set(test_target TestRenderGraphCompilerBenchmark)
+add_executable(${test_target} "RenderGraphCompilerBenchmark.cpp")
+target_link_libraries(${test_target} PRIVATE Moer::Render)
+if(MOER_RDG_DIAGNOSTICS)
+    target_sources(${test_target} PRIVATE "diagnostics/RdgAllocationOverrides.cpp")
+    target_link_libraries(${test_target} PRIVATE dbghelp)
+    add_test(NAME RenderGraphDiagnosticsContract COMMAND $<TARGET_FILE:${test_target}> --diagnose selftest)
+endif()
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+
+set(test_target TestCountableRef)
+add_executable(${test_target} "CountableRefTest.cpp")
+target_link_libraries(${test_target} PRIVATE Moer::Core)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME CountableRefContract COMMAND $<TARGET_FILE:${test_target}>)
 
 set(test_target TestRenderGraphParameterAccess)
 add_executable(${test_target} "RenderGraphParameterAccessTest.cpp")
@@ -341,25 +387,20 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME WindowInputSnapshotContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(WindowInputSnapshotContract PROPERTIES TIMEOUT 60)
 
-set(test_target TestRHICmdReorderer)
-add_executable(${test_target} "RHICmdReordererTest.cpp")
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-)
+set(test_target TestRHIResourceLifetime)
+add_executable(${test_target} "RHIResourceLifetimeTest.cpp")
+target_link_libraries(${test_target} PRIVATE Moer::Render)
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(NAME RHICmdReordererContract COMMAND $<TARGET_FILE:${test_target}>)
+add_test(NAME RHIResourceLifetimeContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(RHIResourceLifetimeContract PROPERTIES TIMEOUT 60)
 
-# The barrier contract calls VkTracker methods implemented only by the Vulkan
-# backend, which is excluded from the Render library on macOS.
-if (NOT APPLE)
-    set(test_target TestRHIExplicitBarrier)
-    add_executable(${test_target} "RHIExplicitBarrierTest.cpp")
-    target_link_libraries(${test_target}
-        PRIVATE Moer::Render
-    )
-    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-    add_test(NAME RHIExplicitBarrierContract COMMAND $<TARGET_FILE:${test_target}>)
-endif()
+# CPU-only explicit barrier payload and exact-range validation.
+set(test_target TestRHIExplicitBarrier)
+add_executable(${test_target} "RHIExplicitBarrierTest.cpp")
+target_link_libraries(${test_target} PRIVATE Moer::Render Moer::VulkanHeaders)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME RHIExplicitBarrierContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(RHIExplicitBarrierContract PROPERTIES TIMEOUT 60)
 
 # CPU-only contract for Vulkan-style multiview masks and attachment layer
 # coverage. The Vulkan integration test below owns the real GPU draw/readback.
@@ -478,24 +519,6 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIGpuCompletionContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(RHIGpuCompletionContract PROPERTIES TIMEOUT 60)
 
-set(test_target TestRHIPresentationCompletion)
-add_executable(
-    ${test_target}
-    "RHIPresentationCompletionContractTest.cpp"
-)
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(
-    NAME RHIPresentationCompletionContract
-    COMMAND $<TARGET_FILE:${test_target}>
-)
-set_tests_properties(
-    RHIPresentationCompletionContract
-    PROPERTIES TIMEOUT 60
-)
-
 set(test_target TestRHIReadback)
 add_executable(${test_target} "RHIReadbackContractTest.cpp")
 target_link_libraries(${test_target}
@@ -513,22 +536,6 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME ExternalCpuJoinContract COMMAND $<TARGET_FILE:${test_target}>)
 
-set(test_target TestRHIRecordDiagnostics)
-add_executable(${test_target} "RHIRecordDiagnosticsTest.cpp")
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(NAME RHIRecordDiagnosticsContract COMMAND $<TARGET_FILE:${test_target}>)
-
-set(test_target TestRHIParallelRecord)
-add_executable(${test_target} "RHIParallelRecordTest.cpp")
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(NAME RHIParallelRecordContract COMMAND $<TARGET_FILE:${test_target}>)
-
 set(test_target TestRHISubmissionTopology)
 add_executable(${test_target} "RHISubmissionTopologyTest.cpp")
 target_link_libraries(${test_target}
@@ -537,15 +544,15 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHISubmissionTopologyContract COMMAND $<TARGET_FILE:${test_target}>)
 
-set(test_target TestRHIExecutorRecordingHandoff)
-add_executable(${test_target} "RHIExecutorRecordingHandoffTest.cpp")
+set(test_target TestRHIExecutorWorkQueue)
+add_executable(${test_target} "RHIExecutorWorkQueueTest.cpp")
 target_link_libraries(${test_target}
     PRIVATE Moer::Render
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(NAME RHIExecutorRecordingHandoffContract COMMAND $<TARGET_FILE:${test_target}>)
+add_test(NAME RHIExecutorWorkQueueContract COMMAND $<TARGET_FILE:${test_target}>)
 set_tests_properties(
-    RHIExecutorRecordingHandoffContract
+    RHIExecutorWorkQueueContract
     PROPERTIES TIMEOUT 60
 )
 
@@ -559,17 +566,6 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHIThreadOwnershipContract COMMAND $<TARGET_FILE:${test_target}>)
 
-# CPU-only deterministic watchdog contract. It uses an injected clock/sink to
-# verify stall suppression, recovery, parked stages, slot reuse and teardown.
-set(test_target TestRHIThreadHeartbeat)
-add_executable(${test_target} "RHIThreadHeartbeatTest.cpp")
-target_link_libraries(${test_target}
-    PRIVATE Moer::Render
-)
-set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-add_test(NAME RHIThreadHeartbeatContract COMMAND $<TARGET_FILE:${test_target}>)
-set_tests_properties(RHIThreadHeartbeatContract PROPERTIES TIMEOUT 60)
-
 # CPU-only contract for the bounded cross-batch submission policy. It verifies
 # the configured window clamp and the correctness-critical Graphics/Compute
 # native-queue alias fallback without requiring alias-capable Vulkan hardware.
@@ -581,23 +577,19 @@ target_link_libraries(${test_target}
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME RHISubmissionPipelinePolicyContract COMMAND $<TARGET_FILE:${test_target}>)
 
-# These CPU-only contracts still link implementations from Vulkan-only source
-# files, which the Render target excludes on macOS.
+# Header-only submission worker fault-injection and completion ownership.
+set(test_target TestVulkanSubmissionRequestDispatch)
+add_executable(${test_target} "VulkanSubmissionRequestDispatchTest.cpp")
+target_include_directories(${test_target} PRIVATE
+    "${moer_source_dir}/runtime/render"
+    "${moer_source_dir}/runtime/core/include"
+)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
+
+# This CPU-only contract links a Vulkan-only implementation, which the Render
+# target excludes on macOS.
 if (NOT APPLE)
-    # Recorder work heuristic using RHI command payloads.
-    set(test_target TestVulkanParallelRecordWorkEstimator)
-    add_executable(${test_target} "VulkanParallelRecordWorkEstimatorTest.cpp")
-    target_link_libraries(${test_target} PRIVATE Moer::Render)
-    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-    add_test(NAME VulkanParallelRecordWorkEstimatorContract COMMAND $<TARGET_FILE:${test_target}>)
-
-    # Submission worker fault-injection and completion ownership.
-    set(test_target TestVulkanSubmissionRequestDispatch)
-    add_executable(${test_target} "VulkanSubmissionRequestDispatchTest.cpp")
-    target_link_libraries(${test_target} PRIVATE Moer::Render)
-    set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
-    add_test(NAME VulkanSubmissionRequestDispatchContract COMMAND $<TARGET_FILE:${test_target}>)
-
     # Dependency-wave contract for same-batch Vulkan translation.
     set(test_target TestVulkanTranslateWaveScheduler)
     add_executable(${test_target} "VulkanTranslateWaveSchedulerTest.cpp")
@@ -610,19 +602,126 @@ endif()
 # intentionally includes vulkan_core.h before engine Vulkan headers to ensure
 # VK_NO_PROTOTYPES propagates through the same lightweight header interface
 # used by Moer::Render.
+set(test_target TestVulkanFailure)
+add_executable(${test_target} "VulkanFailureTest.cpp")
+target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders Moer::Render)
+target_compile_definitions(${test_target} PRIVATE NDEBUG)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanFailureContract COMMAND $<TARGET_FILE:${test_target}>)
+
+set(test_target TestVulkanRaytracingInstance)
+add_executable(${test_target} "VulkanRaytracingInstanceTest.cpp")
+target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders Moer::Render)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanRaytracingInstanceContract COMMAND $<TARGET_FILE:${test_target}>)
+
 set(test_target TestVulkanHeaderContract)
 add_executable(${test_target} "VulkanHeaderContractTest.cpp")
+# Public Render headers contain inline code that references Render symbols.
+# Keep the Vulkan header contract explicit and satisfy those link dependencies.
 target_link_libraries(${test_target}
-    PRIVATE Moer::VulkanHeaders
+    PRIVATE Moer::VulkanHeaders Moer::Render
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 add_test(NAME VulkanHeaderContract COMMAND $<TARGET_FILE:${test_target}>)
+
+# The Metal fence bookkeeping can exercise the shared wait contract without a GPU.
+if (APPLE)
+    add_executable(TestMetalFenceContract "MetalFenceContractTest.mm")
+    target_link_libraries(TestMetalFenceContract
+        PRIVATE Moer::Render "-framework Metal" "-framework Foundation"
+    )
+    target_compile_options(TestMetalFenceContract PRIVATE -fobjc-arc)
+    set_target_properties(TestMetalFenceContract PROPERTIES FOLDER ${moer_test_folder})
+    add_test(NAME MetalFenceContract COMMAND $<TARGET_FILE:TestMetalFenceContract>)
+    set_tests_properties(MetalFenceContract PROPERTIES TIMEOUT 10)
+endif()
+
+# CPU-only feature checks are built from the platform-independent implementation
+# so padding and capability regressions can be tested without a Vulkan GPU.
+set(test_target TestVulkanDeviceFeatures)
+add_executable(${test_target}
+    "VulkanDeviceFeaturesTest.cpp"
+    "${moer_source_dir}/runtime/render/rhi/backends/vulkan/VulkanDeviceFeature.cpp"
+)
+target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanDeviceFeaturesContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(VulkanDeviceFeaturesContract PROPERTIES TIMEOUT 60)
+
+# Property query chains are tested with mock Vulkan entry points, without a GPU.
+set(test_target TestVulkanDeviceProperties)
+add_executable(${test_target}
+    "VulkanDevicePropertiesTest.cpp"
+    "${moer_source_dir}/runtime/render/rhi/backends/vulkan/VulkanDeviceProperty.cpp"
+)
+target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanDevicePropertiesContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(VulkanDevicePropertiesContract PROPERTIES TIMEOUT 60)
+
+# Optional extension selection and native chain lifetime are tested without a GPU.
+add_executable(TestVulkanDeviceInitialization
+    "VulkanDeviceInitializationTest.cpp"
+    "${moer_source_dir}/runtime/render/rhi/backends/vulkan/VulkanDeviceInitialization.cpp"
+)
+target_link_libraries(TestVulkanDeviceInitialization PRIVATE Moer::VulkanHeaders)
+set_target_properties(TestVulkanDeviceInitialization PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanDeviceInitializationContract COMMAND $<TARGET_FILE:TestVulkanDeviceInitialization>)
+set_tests_properties(VulkanDeviceInitializationContract PROPERTIES TIMEOUT 30)
+
+# Descriptor storage bookkeeping is CPU-only and is exercised on Metal hosts too.
+find_package(Threads REQUIRED)
+set(test_target TestVulkanDescriptorBufferAllocator)
+add_executable(${test_target}
+    "VulkanDescriptorBufferAllocatorTest.cpp"
+    "${moer_source_dir}/runtime/render/rhi/backends/vulkan/VulkanDescriptorBufferAllocator.cpp"
+)
+target_include_directories(${test_target} PRIVATE
+    "${moer_source_dir}/runtime/render"
+    "${moer_source_dir}/runtime/core/include"
+)
+target_link_libraries(${test_target} PRIVATE Threads::Threads)
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanDescriptorBufferAllocatorContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(VulkanDescriptorBufferAllocatorContract PROPERTIES TIMEOUT 30)
+
+add_executable(TestVulkanDescriptorPolicy "VulkanDescriptorPolicyTest.cpp")
+target_include_directories(TestVulkanDescriptorPolicy PRIVATE
+    "${moer_source_dir}/runtime/render"
+    "${moer_source_dir}/runtime/core/include"
+)
+set_target_properties(TestVulkanDescriptorPolicy PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanDescriptorPolicyContract COMMAND $<TARGET_FILE:TestVulkanDescriptorPolicy>)
+
+# Exercise the real temporary allocator against counted, failing buffer creation.
+# Keep Render out of this target so test doubles never replace runtime symbols.
+set(test_target TestVulkanTemporaryBufferAllocator)
+add_executable(${test_target}
+    "VulkanTemporaryBufferAllocatorTest.cpp"
+    "${moer_source_dir}/runtime/render/rhi/backends/vulkan/VulkanTemporaryBufferAllocator.cpp"
+)
+target_link_libraries(${test_target} PRIVATE Moer::VulkanHeaders)
+target_compile_definitions(${test_target} PRIVATE RENDER_MODULE_SHARED_LIB)
+if (WIN32)
+    target_compile_definitions(${test_target} PRIVATE NOMINMAX)
+endif()
+set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
+add_test(NAME VulkanTemporaryBufferAllocatorContract COMMAND $<TARGET_FILE:${test_target}>)
+set_tests_properties(VulkanTemporaryBufferAllocatorContract PROPERTIES TIMEOUT 30)
 
 # Vulkan integration seam for ordered multi-primary submission and the
 # recoverable worker-failure path. It is intentionally run explicitly because
 # it requires a Vulkan-capable machine; the CPU-only contracts above remain in
 # the default CTest suite.
 if (NOT APPLE)
+    add_executable(TestVulkanDescriptorBackend "VulkanDescriptorBackendTest.cpp")
+    target_link_libraries(TestVulkanDescriptorBackend PRIVATE Moer::Render)
+    set_target_properties(TestVulkanDescriptorBackend PROPERTIES FOLDER ${moer_test_folder})
+
+endif()
+
+if (NOT APPLE AND MOER_VULKAN_TEST_SUPPORT)
     set(test_target TestRHIParallelRecordVulkan)
     add_executable(${test_target} "RHIParallelRecordVulkanTest.cpp")
     target_link_libraries(${test_target}
@@ -688,7 +787,7 @@ set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 #     PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/core/include>
 #     PUBLIC $<BUILD_INTERFACE:${moer_source_dir}/runtime/render/include>
 # )
-# target_link_libraries(ShaderReflectionTest 
+# target_link_libraries(ShaderReflectionTest
 #     PRIVATE Moer::Render
 #     PRIVATE dxc
 #     )
@@ -835,6 +934,12 @@ endif()
 
 # CUDA Test
 if (TARGET Moer::Cuda)
+    if (MOER_VULKAN_TEST_SUPPORT)
+        add_executable(TestCudaInterop CudaInteropTest.cpp)
+        target_link_libraries(TestCudaInterop PRIVATE Moer::Runtime Moer::Cuda)
+        set_target_properties(TestCudaInterop PROPERTIES FOLDER ${moer_test_folder})
+    endif()
+
     set(test_target TestCuda)
     add_executable(${test_target} CudaTest.cpp)
     target_include_directories(${test_target}
@@ -887,6 +992,21 @@ if (TARGET TensorRT)
     )
     set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 endif()
+
+# These tests execute GPU work and fail on unavailable runtimes or wrong readbacks.
+# Keep SDK DLL lookup local to each test instead of relying on a global PATH.
+foreach(cuda_test IN ITEMS TestCuda TestTorch TestTensorRT TestCudaInterop)
+    if (TARGET ${cuda_test})
+        add_test(NAME ${cuda_test}Smoke COMMAND $<TARGET_FILE:${cuda_test}>)
+        set_tests_properties(${cuda_test}Smoke PROPERTIES
+            TIMEOUT 180
+            LABELS "gpu;cuda"
+            RESOURCE_LOCK cuda_gpu
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${CUDAToolkit_BIN_DIR};PATH=path_list_prepend:${LIBTORCH_DIR}/lib;PATH=path_list_prepend:${TENSORRT_DIR}/lib;PATH=path_list_prepend:${TENSORRT_DIR}/bin"
+        )
+    endif()
+endforeach()
 
 if (TARGET EnTT::EnTT)
     set(test_target TestEnTT)

@@ -1,5 +1,7 @@
 // 负责将 Assimp 场景转换为 LogicalScene，并组装网格、材质、节点、相机和灯光数据。
+
 #include "Parser.h"
+#include "misc/Types.h"
 
 #include "ClusterBuilder.h"
 
@@ -25,7 +27,7 @@
 
 namespace Moer::assimp {
 
-int32_t GetEmbeddedTextureId(const std::string& path) {
+int32 GetEmbeddedTextureId(const std::string& path) {
     if (path.length() >= 2 && path[0] == '*') {
         for (int i = 1; i < path.length(); i++) {
             if (!isdigit(path[i])) {
@@ -123,7 +125,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         uint32 vtx_cnt = 0;
         uint32 idx_cnt = 0;
 
-        for (uint i = 0; i < ai_scene->mNumMeshes; i++) {
+        for (uint32 i = 0; i < ai_scene->mNumMeshes; i++) {
             auto* mesh = ai_scene->mMeshes[i];
 
             vtx_cnt += mesh->mNumVertices;
@@ -231,7 +233,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             return entity;
         };
 
-        for (uint i = 0; i < ai_scene->mNumMeshes; i++) {
+        for (uint32 i = 0; i < ai_scene->mNumMeshes; i++) {
             auto* mesh = ai_scene->mMeshes[i];
 
             MeshClusterStats mesh_stats{
@@ -380,9 +382,9 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             const auto* material = ai_scene->mMaterials[i];
 
             for (const auto texture_type : available_texture_types) {
-                const uint32_t texture_count = material->GetTextureCount(texture_type);
+                const uint32 texture_count = material->GetTextureCount(texture_type);
 
-                for (uint32_t j = 0; j < texture_count; j++) {
+                for (uint32 j = 0; j < texture_count; j++) {
                     aiString texture_path;
 
                     if (material->GetTexture(texture_type, j, &texture_path) == AI_SUCCESS) {
@@ -571,7 +573,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
     std::stringstream mat_ss;
     mat_ss << "\nMaterial Info: \n";
 
-    gtl::flat_hash_map<uint, entt::entity> material_index_to_entity_map;
+    gtl::flat_hash_map<uint32, entt::entity> material_index_to_entity_map;
     {
         gtl::flat_hash_map<std::string, entt::entity> mat_map;
 
@@ -704,7 +706,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         };
 
         // 前面添加了aiProcess_RemoveRedundantMaterials，此处基本保证没有重复Material
-        for (uint i = 0; i < ai_scene->mNumMaterials; i++) {
+        for (uint32 i = 0; i < ai_scene->mNumMaterials; i++) {
             const auto* material = ai_scene->mMaterials[i];
 
             std::string material_name = ([&]() {
@@ -751,7 +753,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 auto& c_primitive = r.get<ecs::CPrimitive>(primitive_entity);
 
                 // 通过 mesh->mMaterialIndex 找到对应的 material entity
-                uint material_index = mesh->mMaterialIndex;
+                uint32 material_index = mesh->mMaterialIndex;
                 if (material_index_to_entity_map.contains(material_index)) {
                     c_primitive.material_entt = material_index_to_entity_map[material_index];
                 } else {
@@ -780,7 +782,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         bool has_main_camera = false;
         bool has_main_light  = false;
 
-        for (uint i = 0; i < ai_scene->mNumCameras; i++) {
+        for (uint32 i = 0; i < ai_scene->mNumCameras; i++) {
             const auto* camera = ai_scene->mCameras[i];
 
             const std::string camera_name = camera->mName.C_Str();
@@ -792,7 +794,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 main_camera_name = camera_name;
             }
         }
-        for (uint i = 0; i < ai_scene->mNumLights; i++) {
+        for (uint32 i = 0; i < ai_scene->mNumLights; i++) {
             const auto* light = ai_scene->mLights[i];
 
             const std::string light_name = light->mName.C_Str();
@@ -830,7 +832,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
 
         // 计算Mesh Node的hash值
         uint64 hash = 0;
-        for (uint i = 0; i < node->mNumMeshes; i++) {
+        for (uint32 i = 0; i < node->mNumMeshes; i++) {
             auto* mesh = ai_scene->mMeshes[node->mMeshes[i]];
             HashCombine(hash, reinterpret_cast<uint64>(mesh));
         };
@@ -858,7 +860,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
         Array<entt::entity> all_leaf_entts;
         Array<entt::entity> all_nonleaf_entts;
 
-        for (uint i = 0; i < node->mNumMeshes; i++) {
+        for (uint32 i = 0; i < node->mNumMeshes; i++) {
             auto* mesh = ai_scene->mMeshes[node->mMeshes[i]];
 
             assert(
@@ -1114,7 +1116,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             Array<entt::entity> child_entities;
             child_entities.reserve(y->mNumChildren);
 
-            for (uint i = 0; i < y->mNumChildren; i++) {
+            for (uint32 i = 0; i < y->mNumChildren; i++) {
                 const auto& child_entity = r.create();
                 child_entities.emplace_back(child_entity);
 
@@ -1135,7 +1137,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
             bool is_light  = is_light_node(y);
             bool is_camera = is_camera_node(y);
 
-            uint type_count = uint(is_mesh) + uint(is_light) + uint(is_camera);
+            uint32 type_count = uint32(is_mesh) + uint32(is_light) + uint32(is_camera);
             if (type_count > 1) {
                 LOG_WARNING(
                     "Node '{}' has multiple types (mesh: {}, camera: {}, light: {}). "
@@ -1161,7 +1163,7 @@ bool Parser::LoadSceneFromFile(ecs::LogicalScene& out_logical_scene, const std::
                 r.all_of<ecs::CTagRootNode>(x) ? std::string_view{} : std::string_view(y->mName.C_Str());
             ecs::EnsureNodeName(r, x, source_node_name);
 
-            for (uint i = 0; i < y->mNumChildren; i++) {
+            for (uint32 i = 0; i < y->mNumChildren; i++) {
                 dfs_node(child_entities[i], y->mChildren[i]);
             }
         };

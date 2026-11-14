@@ -60,34 +60,33 @@ bool ShadeSurface(inout DI::Reservoir _res, Surface _surface,
 
 #endif // MOER_FRAMEWORK_DI_RESERVOIRS_HLSLI
 
-void StoreShadingResults(uint2 _pixel_pos, float _view_depth, float _roughness,
-                         float3 _diffuse, float3 _specular, float _light_dist,
-                         bool _is_first_pass) {
+void StoreShadingResults(uint2 _pixel_pos, float _view_depth,
+                         float3 _diffuse, float3 _specular, float _light_dist) {
 #if WITH_NRD
   if (resample_params.denoiser_mode != Moer::s_denoiser_mode_off) {
 
     bool b_relax = resample_params.denoiser_mode == Moer::s_denoiser_mode_relax;
-    const bool santitize = true;
+    const bool sanitize = true;
 
     if (b_relax) {
       rw_diffuse_lighting[_pixel_pos] = RELAX_FrontEnd_PackRadianceAndHitDist(
-          _diffuse, _light_dist, santitize);
+          _diffuse, _light_dist, sanitize);
       rw_specular_lighting[_pixel_pos] = RELAX_FrontEnd_PackRadianceAndHitDist(
-          _specular, _light_dist, santitize);
+          _specular, _light_dist, sanitize);
     } else {
       float diff_norm_dist = REBLUR_FrontEnd_GetNormHitDist(
           _light_dist, _view_depth, resample_params.reblur_diff_hit_dist_params,
           1.f);
       rw_diffuse_lighting[_pixel_pos] =
           REBLUR_FrontEnd_PackRadianceAndNormHitDist(_diffuse, diff_norm_dist,
-                                                     santitize);
+                                                     sanitize);
 
       float spec_norm_dist = REBLUR_FrontEnd_GetNormHitDist(
           _light_dist, _view_depth, resample_params.reblur_spec_hit_dist_params,
           1.f);
       rw_specular_lighting[_pixel_pos] =
           REBLUR_FrontEnd_PackRadianceAndNormHitDist(_specular, spec_norm_dist,
-                                                     santitize);
+                                                     sanitize);
     }
   } else
 

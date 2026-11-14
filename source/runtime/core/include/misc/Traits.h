@@ -5,18 +5,12 @@
 #include "math/Base.h"
 #include "math/Matrix.h"
 #include "misc/CountableRef.h"
+#include "misc/Types.h"
 #include <type_traits>
 #include <vector>
 namespace Moer {
-using uint     = uint32_t;
-using int32    = int32_t;
-using uint32   = uint32_t;
-using uint64   = uint64_t;
-using int64    = int64_t;
-using uint8    = uint8_t;
-using int8     = int8_t;
-using uint16   = uint16_t;
-using int16    = int16_t;
+// Shared C++/HLSL headers use the HLSL spelling for 32-bit unsigned integers.
+using uint     = uint32;
 using float4   = Vector4f;
 using float3   = Vector3f;
 using float2   = Vector2f;

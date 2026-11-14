@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "renderer/common/UIRenderer.h"
 #include "window/WindowFrameSnapshot.h"
 
@@ -14,9 +15,9 @@ void Require(bool condition) {
 }
 
 WindowSurfaceIdentity MakeIdentity(
-    uintptr_t window_system_handle,
-    uintptr_t platform_window_handle,
-    uint64_t  generation
+    uintptr_t    window_system_handle,
+    uintptr_t    platform_window_handle,
+    Moer::uint64 generation
 ) {
     return {
         .window_system          = EWindowSystemType::GLFW,

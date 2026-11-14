@@ -1,7 +1,9 @@
 #ifndef MOER_ENGINE_SHADER_PROXY_H
 #define MOER_ENGINE_SHADER_PROXY_H
+
 #include "API_Macro.h"
 #include "misc/Hash.h"
+#include "misc/Types.h"
 #include "rhi/RHIResource.h"
 #include "shader/ShaderParameterTypeInfo.h"
 #include <cstddef>
@@ -69,36 +71,36 @@ class VertexFactoryType;
     lastMemberId;                                            \
     END_SHADER_PARAMETER_DEFINITION(StructureName, )
 
-#define INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, GetStructMetadataFunctionImpl, ...)          \
-    class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) StructureName {                                     \
-    public:                                                                                                 \
-        StructureName() {                                                                                   \
-            memset(this, 0, sizeof(StructureName));                                                         \
-        }                                                                                                   \
-        /* struct type info*/                                                                               \
-        struct TypeInfo {                                                                                   \
-            static constexpr int32_t s_num_rows                     = 1;                                    \
-            static constexpr int32_t s_num_columns                  = 1;                                    \
-            static constexpr int32_t s_num_elements                 = 0;                                    \
-            static constexpr int32_t alignment                      = SHADER_PARAMETER_STRUCTURE_ALIGNMENT; \
-            static constexpr bool    b_is_stored_in_constant_buffer = true;                                 \
-                                                                                                            \
-            using TParamPtr = StructureName;                                                                \
-                                                                                                            \
-            static const ShaderParametersMetadata* GetStructMetadata() GetStructMetadataFunctionImpl        \
-        };                                                                                                  \
-                                                                                                            \
-    private:                                                                                                \
-        using TThisStruct = StructureName;                                                                  \
-        struct _firstMemberId {                                                                             \
-            enum {                                                                                          \
-                HasDeclaredResource = 0                                                                     \
-            };                                                                                              \
-        };                                                                                                  \
-        typedef void* (*MemberFunction)(_firstMemberId, Moer::Array<ShaderParametersMetadata::Member>*);    \
-        static void* AppendMemberGetPrev(_firstMemberId, Moer::Array<ShaderParametersMetadata::Member>*) {  \
-            return nullptr;                                                                                 \
-        }                                                                                                   \
+#define INNER_BEGIN_SHADER_PARAMETER_DEFINITION(StructureName, GetStructMetadataFunctionImpl, ...)              \
+    class alignas(SHADER_PARAMETER_STRUCTURE_ALIGNMENT) StructureName {                                         \
+    public:                                                                                                     \
+        StructureName() {                                                                                       \
+            memset(this, 0, sizeof(StructureName));                                                             \
+        }                                                                                                       \
+        /* struct type info*/                                                                                   \
+        struct TypeInfo {                                                                                       \
+            static constexpr Moer::int32 s_num_rows                     = 1;                                    \
+            static constexpr Moer::int32 s_num_columns                  = 1;                                    \
+            static constexpr Moer::int32 s_num_elements                 = 0;                                    \
+            static constexpr Moer::int32 alignment                      = SHADER_PARAMETER_STRUCTURE_ALIGNMENT; \
+            static constexpr bool        b_is_stored_in_constant_buffer = true;                                 \
+                                                                                                                \
+            using TParamPtr = StructureName;                                                                    \
+                                                                                                                \
+            static const ShaderParametersMetadata* GetStructMetadata() GetStructMetadataFunctionImpl            \
+        };                                                                                                      \
+                                                                                                                \
+    private:                                                                                                    \
+        using TThisStruct = StructureName;                                                                      \
+        struct _firstMemberId {                                                                                 \
+            enum {                                                                                              \
+                HasDeclaredResource = 0                                                                         \
+            };                                                                                                  \
+        };                                                                                                      \
+        typedef void* (*MemberFunction)(_firstMemberId, Moer::Array<ShaderParametersMetadata::Member>*);        \
+        static void* AppendMemberGetPrev(_firstMemberId, Moer::Array<ShaderParametersMetadata::Member>*) {      \
+            return nullptr;                                                                                     \
+        }                                                                                                       \
         typedef _firstMemberId
 
 #define INTERNAL_DEFINE_SHADER_PARAM_IMPL(                                                             \

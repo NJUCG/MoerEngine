@@ -75,7 +75,8 @@ public:
         bool                    is_engine_view  = false,
         bool                    needs_reference = false,
         BufferRef               shadow_data     = {},
-        BindlessArrayRef        shadow_bindless = {}
+        BindlessArrayRef        shadow_bindless = {},
+        Array<TextureRef>       shadow_maps     = {}
     );
     TextureRef           RecordDisplay(CommandList& commands, GaussianViewSettings settings = {});
     // Premultiplied source RGB, before layer decoding in GaussianCompositePass.
@@ -87,6 +88,12 @@ public:
     BufferView           GetStatusBuffer() const;
 
 private:
+    RenderGraph::PassHandle AddAccumulationToGraph(
+        RenderGraph& graph, const GaussianGpuScene* scene, const Camera& camera, uint2 resolution,
+        bool is_editor_view, bool is_invalid_scene, GaussianViewSettings settings,
+        TextureRef opaque_depth, bool is_engine_view, bool needs_reference,
+        BufferRef shadow_data, BindlessArrayRef shadow_bindless, Array<TextureRef> shadow_maps
+    );
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };

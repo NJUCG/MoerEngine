@@ -3,7 +3,7 @@
 #include "remote/RemoteApi.h"
 #include "remote/RemoteEvent.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <functional>
 #include <mutex>
 #include <unordered_map>
@@ -17,18 +17,18 @@ using RemoteEventCallback = std::function<void(const RemoteEvent&)>;
 class REMOTE_API RemoteEventHub {
 public:
     // 注册一个事件订阅回调并返回订阅 ID
-    uint64_t Subscribe(RemoteEventCallback callback);
+    uint64 Subscribe(RemoteEventCallback callback);
 
     // 根据订阅 ID 取消对应的事件订阅
-    void Unsubscribe(uint64_t subscription_id);
+    void Unsubscribe(uint64 subscription_id);
 
     // 向所有当前订阅者广播一条事件
     void Publish(RemoteEvent event);
 
 private:
     std::mutex                                        m_mutex;
-    std::unordered_map<uint64_t, RemoteEventCallback> m_callbacks;
-    uint64_t                                          m_next_subscription_id = 1;
+    std::unordered_map<uint64, RemoteEventCallback>   m_callbacks;
+    uint64                                            m_next_subscription_id = 1;
 };
 
 } // namespace Moer::remote

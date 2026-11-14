@@ -1,10 +1,11 @@
 #include "ShadowDepthPass.h"
-
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTextures.h"
 #include "RasterTool.h"
 #include "misc/Timer.h"
+#include "misc/Types.h"
+#include "profile/ProfileScope.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
 #include "scene/LogicalComponents.h"
@@ -37,7 +38,7 @@ struct CSMCascadeCandidate {
     float    absolute_light_z_max       = 0.0f;
     float    receiver_z_min             = 0.0f;
     float    receiver_z_max             = 0.0f;
-    uint     intersecting_caster_count  = 0u;
+    uint32   intersecting_caster_count  = 0u;
     bool     used_legacy_z_fallback     = false;
 };
 
@@ -49,10 +50,10 @@ struct CSMCascadeSphere {
 StaticArray<float, CSM_MAX_CASCADES> get_csm_blend(
     const StaticArray<float, CSM_MAX_CASCADES> split_point_raw,
     const float                                blend_percentage,
-    const uint                                 enabled_cascade_layers
+    const uint32                               enabled_cascade_layers
 ) {
     StaticArray<float, CSM_MAX_CASCADES> blend_start_points;
-    for (uint i = 0; i < enabled_cascade_layers; i++) {
+    for (uint32 i = 0; i < enabled_cascade_layers; i++) {
         float width_raw       = (i == 0) ? split_point_raw[0] : (split_point_raw[i] - split_point_raw[i - 1]);
         blend_start_points[i] = split_point_raw[i] - width_raw * blend_percentage;
     }
@@ -60,13 +61,13 @@ StaticArray<float, CSM_MAX_CASCADES> get_csm_blend(
 }
 
 StaticArray<float, CSM_MAX_CASCADES> get_cascade_split_points(
-    const float near_clip,
-    const float far_clip,
-    const float lerp_factor,
-    const uint  enabled_cascade_layers
+    const float  near_clip,
+    const float  far_clip,
+    const float  lerp_factor,
+    const uint32 enabled_cascade_layers
 ) {
     StaticArray<float, CSM_MAX_CASCADES> split_points;
-    for (uint i = 0; i < enabled_cascade_layers; i++) {
+    for (uint32 i = 0; i < enabled_cascade_layers; i++) {
         float split_ratio  = (float)(i + 1) / (float)enabled_cascade_layers;
         float log_split    = near_clip * Pow(far_clip / near_clip, split_ratio);
         float linear_split = near_clip + (far_clip - near_clip) * split_ratio;
@@ -79,10 +80,10 @@ StaticArray<float, CSM_MAX_CASCADES> transform_split_points_to_ratios(
     const StaticArray<float, CSM_MAX_CASCADES> split_points,
     const float                                near_clip,
     const float                                far_clip,
-    const uint                                 enabled_cascade_layers
+    const uint32                               enabled_cascade_layers
 ) {
     StaticArray<float, CSM_MAX_CASCADES> split_ratios;
-    for (uint i = 0; i < enabled_cascade_layers; i++) {
+    for (uint32 i = 0; i < enabled_cascade_layers; i++) {
         split_ratios[i] = (split_points[i] - near_clip) / (far_clip - near_clip);
     }
     return split_ratios;
@@ -92,10 +93,10 @@ StaticArray<float, CSM_MAX_CASCADES> transform_split_ratios_to_points(
     const StaticArray<float, CSM_MAX_CASCADES> split_ratios,
     const float                                near_clip,
     const float                                far_clip,
-    const uint                                 enabled_cascade_layers
+    const uint32                               enabled_cascade_layers
 ) {
     StaticArray<float, CSM_MAX_CASCADES> split_points;
-    for (uint i = 0; i < enabled_cascade_layers; i++) {
+    for (uint32 i = 0; i < enabled_cascade_layers; i++) {
         split_points[i] = near_clip + split_ratios[i] * (far_clip - near_clip);
     }
     return split_points;
@@ -147,7 +148,7 @@ bool is_shadow_cache_config_equal(
         return false;
     }
 
-    for (uint i = 0; i < CSM_MAX_CASCADES; i++) {
+    for (uint32 i = 0; i < CSM_MAX_CASCADES; i++) {
         if (lhs.shadow_csm_cover_ratio_of_camera[i] != rhs.shadow_csm_cover_ratio_of_camera[i] ||
             lhs.shadow_cache_camera_move_threshold_in_texels[i] !=
                 rhs.shadow_cache_camera_move_threshold_in_texels[i]) {
@@ -167,7 +168,7 @@ void invalidate_shadow_cache_entries(Moer::Render::Raster::RasterContext::CSMDat
 void store_shadow_cache_entry(
     ShadowCacheEntry&          shadow_cache_entry,
     const CSMCascadeCandidate& candidate,
-    const uint64_t             frame_index
+    const uint64               frame_index
 ) {
     shadow_cache_entry.valid                      = true;
     shadow_cache_entry.world2shadow_clip          = candidate.world2shadow_clip;
@@ -263,7 +264,7 @@ Box3D transform_bounds_to_snapped_light_space(
 void tick_and_log_shadow_cache(
     const RasterConfig&                         ui_config,
     const bool                                  shadow_cache_settings_changed,
-    const uint                                  enabled_cascade_layers,
+    const uint32                                enabled_cascade_layers,
     const StaticArray<bool, CSM_MAX_CASCADES>&  shadow_cache_eligible_flags,
     const StaticArray<bool, CSM_MAX_CASCADES>&  shadow_cache_reuse_flags,
     const StaticArray<float, CSM_MAX_CASCADES>& shadow_cache_move_in_texels,
@@ -274,9 +275,9 @@ void tick_and_log_shadow_cache(
         return;
     }
 
-    uint eligible_cascade_count = 0;
-    uint reused_cascade_count   = 0;
-    for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
+    uint32 eligible_cascade_count = 0;
+    uint32 reused_cascade_count   = 0;
+    for (uint32 cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
         eligible_cascade_count += shadow_cache_eligible_flags[cascade_index] ? 1u : 0u;
         reused_cascade_count += shadow_cache_reuse_flags[cascade_index] ? 1u : 0u;
     }
@@ -290,7 +291,7 @@ void tick_and_log_shadow_cache(
            << " reused=" << reused_cascade_count
            << " refreshed=" << (enabled_cascade_layers - reused_cascade_count);
 
-    for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
+    for (uint32 cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
         stream << " | c" << cascade_index << '=';
         if (!shadow_cache_eligible_flags[cascade_index]) {
             stream << "refresh(force)";
@@ -370,13 +371,13 @@ CSMCascadeCandidate build_csm_cascade_candidate(
     // AABB
     StaticArray<float3, 8> frustum_corners = camera.GetFrustumCorners(frustum_near_ratio, frustum_far_ratio);
     StaticArray<float3, 8> frustum_corner_in_light_space;
-    for (uint i = 0; i < 8; i++) {
+    for (uint32 i = 0; i < 8; i++) {
         frustum_corner_in_light_space[i] = world_to_light_view_rotate_only * frustum_corners[i];
     }
     // - Get AABB
     float3 min = frustum_corner_in_light_space[0];
     float3 max = frustum_corner_in_light_space[0];
-    for (uint i = 1; i < 8; i++) {
+    for (uint32 i = 1; i < 8; i++) {
         min = Min(min, frustum_corner_in_light_space[i]);
         max = Max(max, frustum_corner_in_light_space[i]);
     }
@@ -565,6 +566,7 @@ ShadowDepthPass::ShadowDepthPass(RasterContext& context) : m_culling_pass(contex
 }
 
 bool ShadowDepthPass::RefreshShadowCasterBounds(RasterContext& context) {
+    MOER_PROFILE_SCOPE("Raster.Shadow.RefreshCasterBounds");
     const SceneUpdateBatch& scene_updates = context.GetSceneUpdates();
     if (!scene_updates.scene_ready) {
         if (!m_shadow_caster_bounds_valid && m_shadow_caster_bounds.empty()) {
@@ -616,7 +618,7 @@ bool ShadowDepthPass::RefreshShadowCasterBounds(RasterContext& context) {
 
 bool ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config) {
     bool bindless_changed = false;
-    for (uint i = 0; i < enabled_cascade_layers; i++) {
+    for (uint32 i = 0; i < enabled_cascade_layers; i++) {
         auto& shadow_map_texture = context.csm_data.shadow_map_textures[i];
 
         bool b_need_to_create = shadow_map_texture.tex == nullptr ||
@@ -635,7 +637,6 @@ bool ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
                 TexConfig::Depth(
                     context.textures.depth_linear_sampler.tex->GetFormat() // 使用普通DepthBuffer的格式
                 )
-                    .Size(sm_size)
                     .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT)
                     .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE);
 
@@ -648,6 +649,7 @@ bool ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
                 false
             );
 
+            InitializeGraphicsTexture(shadow_map_texture.tex->GetView().GetTexture());
             AssetTool::AllocateRasterResourceHandle(context.bdls, shadow_map_texture, tex_cfg);
 
             LOG_DEBUG(
@@ -666,7 +668,7 @@ bool ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
 
 bool ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const RasterConfig& ui_config) {
     bool bindless_changed = false;
-    for (uint i = 0; i < RasterContext::PointShadowData::MAX_POINT_SHADOWS; i++) {
+    for (uint32 i = 0; i < RasterContext::PointShadowData::MAX_POINT_SHADOWS; i++) {
         auto& cube_res = context.point_shadow_data.shadow_cubes[i];
 
         // 检查是否需要创建或重建 (例如分辨率发生变化)
@@ -691,6 +693,7 @@ bool ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
                 context.textures.depth_linear_sampler.tex->GetFormat(),
                 ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
             );
+            InitializeGraphicsTexture(cube_res.tex);
 
             // GetView 必须请求完整的 6 层 (0, 1, 0, 6)，这样 Shader 才能把它当 Cube 采
             cube_res.handle =
@@ -741,6 +744,7 @@ void ShadowDepthPass::PrepareCSM(
     const Camera& camera,
     RecordParameters& parameters
 ) {
+    MOER_PROFILE_SCOPE("Raster.Shadow.PrepareCSM");
     enabled_cascade_layers = ui_config.shadow_csm_num_of_cascades;
     assert(enabled_cascade_layers <= CSM_MAX_CASCADES);
 
@@ -759,7 +763,7 @@ void ShadowDepthPass::PrepareCSM(
     context.lighting_data.main_light_direction = Normalizef(c_light_directional.d_direction);
     context.csm_data.light_dir                 = context.lighting_data.main_light_direction;
 
-    const uint disabled_cache_cascade_count = static_cast<uint>(
+    const uint32 disabled_cache_cascade_count = static_cast<uint32>(
         Max(0, Min(ui_config.shadow_cache_disable_first_n_cascades, static_cast<int>(enabled_cascade_layers)))
     );
     const auto shadow_cache_snapshot = build_shadow_cache_config_snapshot(ui_config);
@@ -771,7 +775,7 @@ void ShadowDepthPass::PrepareCSM(
     }
     context.csm_data.shadow_cache_config_snapshot       = shadow_cache_snapshot;
     context.csm_data.shadow_cache_config_snapshot_valid = true;
-    const uint64_t shadow_cache_frame_index             = ++context.csm_data.shadow_cache_frame_counter;
+    const uint64 shadow_cache_frame_index               = ++context.csm_data.shadow_cache_frame_counter;
 
     //lerp csm ratios
     StaticArray<float, CSM_MAX_CASCADES>
@@ -786,7 +790,7 @@ void ShadowDepthPass::PrepareCSM(
                 local_cascade_split_points, near_clip, far_clip, enabled_cascade_layers
             );
 
-            for (uint i = 0; i < enabled_cascade_layers; i++) {
+            for (uint32 i = 0; i < enabled_cascade_layers; i++) {
                 context.lighting_data.cascade_split_ratios[i] = ratios[i];
             }
             break;
@@ -796,7 +800,7 @@ void ShadowDepthPass::PrepareCSM(
             local_cascade_split_points = transform_split_ratios_to_points(
                 ui_config.shadow_csm_cover_ratio_of_camera, near_clip, far_clip, enabled_cascade_layers
             );
-            for (uint i = 0; i < enabled_cascade_layers; i++) {
+            for (uint32 i = 0; i < enabled_cascade_layers; i++) {
                 context.lighting_data.cascade_split_ratios[i] = ui_config.shadow_csm_cover_ratio_of_camera[i];
             }
     }
@@ -810,7 +814,7 @@ void ShadowDepthPass::PrepareCSM(
         far_clip,
         enabled_cascade_layers
     );
-    for (uint i = 0; i < enabled_cascade_layers; i++) {
+    for (uint32 i = 0; i < enabled_cascade_layers; i++) {
         context.lighting_data.cascade_blend_start_ratios[i] = local_cascade_blend_start_ratios[i];
     }
 
@@ -828,7 +832,7 @@ void ShadowDepthPass::PrepareCSM(
         );
         caster_bounds = &combined_caster_bounds;
     }
-    for (uint cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
+    for (uint32 cascade_index = 0; cascade_index < enabled_cascade_layers; cascade_index++) {
 
         // World to Shadow Clip Matrix
         const float frustum_near_ratio =
@@ -948,7 +952,7 @@ void ShadowDepthPass::SetGaussians(
     m_gaussian_editor_view = editor_view;
     Array<Box3D> bounds;
     bool active = false;
-    if (scene) for (uint i = 0; i < scene->GetInstances().size(); ++i) {
+    if (scene) for (uint32 i = 0; i < scene->GetInstances().size(); ++i) {
         const auto& instance = scene->GetInstances()[i];
         if (!(instance.range.w & (editor_view ? 2u : 1u))) continue;
         active |= (instance.range.w & 12u) != 0;
@@ -999,69 +1003,12 @@ Array<TextureRef> ShadowDepthPass::GetGaussianShadowTextures(RasterContext& cont
                 result.push_back(TextureRef(map.tex->GetView().GetTexture()));
     return result;
 }
-void ShadowDepthPass::DeclareGaussianResources(
-    RenderGraph&              graph,
-    RenderGraph::PassBuilder& builder,
-    RasterContext&            context,
-    bool                      write
-) {
-    if (!m_gaussian_scene || !m_gaussian_pass)
-        return;
-    const std::string prefix = write ? "shadow_write_" : "shadow_debug_read_";
-    auto              data   = m_gaussian_pass->GetDataBuffer();
-    auto data_handle         = graph.ImportBuffer(prefix + "views", data, {.byte_size = data->GetByteSize()});
-    if (write)
-        builder.Write(data_handle);
-    else
-        builder.Read(data_handle);
-    uint input_index = 0;
-    if (write)
-        for (const auto& input :
-             {m_gaussian_scene->GetGaussianBuffer(), m_gaussian_scene->GetInstanceBuffer()})
-            builder.Read(graph.ImportBuffer(
-                prefix + "input_" + std::to_string(input_index++), input, {.byte_size = input->GetByteSize()}
-            ));
-    uint map_index = 0;
-    for (const auto& texture : m_gaussian_pass->GetMaps())
-        if (texture) {
-            auto handle = graph.ImportTexture(
-                prefix + "gaussian_map_" + std::to_string(map_index++),
-                texture,
-                DescribeShadowTexture(texture)
-            );
-            if (write)
-                builder.Write(handle);
-            else
-                builder.Read(handle);
-        }
-    if (m_gaussian_pass && m_gaussian_point_mode) {
-        if (auto texture = context.point_shadow_data.shadow_cubes[0].tex) {
-            auto handle = graph.ImportTexture(prefix + "point", texture, DescribeShadowTexture(texture));
-            if (write)
-                builder.Write(handle);
-            else
-                builder.Read(handle);
-        }
-    } else
-        for (const auto& map : context.csm_data.shadow_map_textures)
-            if (map.tex) {
-                auto handle = graph.ImportTexture(
-                    prefix + "cascade_" + std::to_string(map_index++),
-                    map.tex,
-                    DescribeShadowTexture(TextureRef(map.tex->GetView().GetTexture()))
-                );
-                if (write)
-                    builder.Write(handle);
-                else
-                    builder.Read(handle);
-            }
-}
-
 ShadowDepthPass::RecordParameters ShadowDepthPass::Prepare(
     RasterContext& context,
     const RasterConfig& ui_config,
     const Camera& camera
 ) {
+    MOER_PROFILE_SCOPE("Raster.Prepare.ShadowDepth");
     RecordParameters parameters{
         .bindless = context.bdls,
         .index_buffer = context.GetGpuSceneRes().index_buf.buf->GetView(),
@@ -1122,7 +1069,7 @@ void ShadowDepthPass::PreparePointShadows(
         return;
     }
 
-    const uint light_idx = 0; // 目前我们只处理第一个点光源的阴影
+    const uint32 light_idx = 0; // 目前我们只处理第一个点光源的阴影
     auto&      cube_res  = context.point_shadow_data.shadow_cubes[light_idx];
 
     // 记录光源信息供 Lighting Pass 使用
@@ -1155,7 +1102,7 @@ void ShadowDepthPass::PreparePointShadows(
 
     StaticArray<float4x4, CUBE_FACE_Num> view_projections{};
     PointShadowViewMatrices              multiview_matrices{};
-    for (uint face = 0; face < CUBE_FACE_Num; ++face) {
+    for (uint32 face = 0; face < CUBE_FACE_Num; ++face) {
         const float3   light_pos = cube_res.light_pos;
         const float4x4 view = MakeLookatViewMatrixRH(light_pos, light_pos + faces[face].dir, faces[face].up);
         view_projections[face]            = proj * view;
@@ -1191,7 +1138,7 @@ void ShadowDepthPass::PreparePointShadows(
     }
 
     // Compatibility path: cull and render each cube face independently.
-    for (uint face = 0; face < CUBE_FACE_Num; ++face) {
+    for (uint32 face = 0; face < CUBE_FACE_Num; ++face) {
         const float4x4& view_proj = view_projections[face];
 
         TextureView face_view = TextureView(cube_res.tex.Get()).Slice(face, 1);
@@ -1271,6 +1218,14 @@ void ShadowDepthPass::RecordPointShadowMultiview(
         "Raster::PointShadowMultiviewMatrices"
     );
 
+    RecordPointShadowMultiviewDraw(cmd_list, parameters, batch);
+}
+
+void ShadowDepthPass::RecordPointShadowMultiviewDraw(
+    CommandList&            cmd_list,
+    const RecordParameters& parameters,
+    const DrawBatch&        batch
+) {
     cmd_list.PushScopeWithTimeScope(batch.draw_profile_scope_name);
     auto draw = cmd_list.Gfx(
         m_point_shadow_multiview_pso,

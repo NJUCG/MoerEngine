@@ -3,12 +3,12 @@
 #include "Core.h"
 #include "PixelFormat.h"
 #include "RenderAPI.h"
+#include "misc/Types.h"
 #include "rhi/RHICommon.h"
+#include "rhi/RHIResource.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
 #include "rhi/plugin/RHICooperative.h"
-#include "rhi/RHIResource.h"
 #include "taskgraph/ThreadManager.h"
-#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -18,42 +18,27 @@
 namespace Moer::Render {
 class CommandQueue;
 class CopyQueue;
-class IOInterface;
 class RenderDevice;
-using IOInterfaceRef = std::shared_ptr<IOInterface>;
 } // namespace Moer::Render
 
 #include "rhi/RHICommand.h"
 
 struct RHIInitInfo {
-    uint32_t max_frame_in_flight = 3;
+    Moer::uint32 max_frame_in_flight = 3;
     bool     ray_tracing         = false;
 };
 
 struct RHIInfo {
     ERHIType rhi_type;
-    uint32_t max_frame_in_flight;
+    Moer::uint32 max_frame_in_flight;
     bool     ray_tracing;
 };
 struct DeviceInitInfo {
     ERHIType         rhi_type;
     std::string_view name;
     std::string_view rhi_api_version;
-    bool             rhi_thread                          = false;
-    bool             rhi_bypass                          = true;
-    bool             thread_profile_logging              = false;
-    bool             parallel_recording                  = false;
-    uint32_t         parallel_record_workers              = 0;
-    bool             parallel_record_verify              = false;
-    bool             parallel_record_profile             = false;
-    uint32_t         parallel_record_min_work_units_per_job = 8;
-    uint32_t         submission_batch_window =
+    Moer::uint32     submission_batch_window =
         Moer::Render::RHISubmissionPipelinePolicy::DefaultBatchWindow;
-    bool             rhi_heartbeat_enabled               = false;
-    uint32_t         rhi_heartbeat_stall_timeout_ms       = 5000;
-    uint32_t         rhi_heartbeat_poll_interval_ms       = 1000;
-    uint64_t         parallel_record_worker_throw_trigger = 0;
-    uint64_t         vulkan_present_submit_fault_trigger = 0;
 };
 namespace Moer::Render {
 
@@ -95,12 +80,12 @@ template<typename T>
 static constexpr bool user_trivial_type_v = user_trivial_type<T>::value;
 
 struct DeviceConfig {
-    uint b_support_ray_tracing : 1;
-    uint b_support_mesh_shader : 1;
-    uint b_support_task_shader : 1;
-    uint b_support_bindless : 1;
-    uint b_support_direct_storage : 1;
-    uint b_support_virtual_texture : 1;
+    uint32 b_support_ray_tracing : 1;
+    uint32 b_support_mesh_shader : 1;
+    uint32 b_support_task_shader : 1;
+    uint32 b_support_bindless : 1;
+    uint32 b_support_direct_storage : 1;
+    uint32 b_support_virtual_texture : 1;
 };
 
 // RuntimePlugin用于承载运行时可选插件
@@ -129,7 +114,7 @@ public:
         )
     BufferRef CreateBuffer(
         std::string_view  _name,
-        uint              _element_cnt,
+        uint32            _element_cnt,
         EBufferUsageFlags _usage,
         EPixelFormat      _format = PF_UNDEFINED
     ) {
@@ -139,22 +124,22 @@ public:
     /** Runtime-stride allocation used by resource pools and typed graph allocators. */
     RENDER_API BufferRef CreateBuffer(std::string_view _name, const BufferInfo& _info);
 
-    RENDER_API BufferRef CreateStagingBuffer(uint64_t _byte_size);
+    RENDER_API BufferRef CreateStagingBuffer(uint64 _byte_size);
 
     RENDER_API TextureRef CreateTexture(
         Extent2D           _size,
         EPixelFormat       _format,
         ETextureUsageFlags _usage,
-        uint32_t           _mip_cnt    = 1,
-        uint32_t           _array_size = 1
+        uint32             _mip_cnt    = 1,
+        uint32             _array_size = 1
     );
 
     RENDER_API TextureRef CreateTexture(
         Extent3D           _size,
         EPixelFormat       _format,
         ETextureUsageFlags _usage,
-        uint32_t           _mip_cnt    = 1,
-        uint32_t           _array_size = 1
+        uint32             _mip_cnt    = 1,
+        uint32             _array_size = 1
     );
 
     RENDER_API TextureRef CreateTexture(
@@ -162,8 +147,8 @@ public:
         Extent3D           _size,
         EPixelFormat       _format,
         ETextureUsageFlags _usage,
-        uint32_t           _mip_cnt    = 1,
-        uint32_t           _array_size = 1
+        uint32             _mip_cnt    = 1,
+        uint32             _array_size = 1
     );
 
     RENDER_API TextureRef
@@ -174,19 +159,19 @@ public:
         Extent2D           _size,
         EPixelFormat       _format,
         ETextureUsageFlags _usage,
-        uint32_t           _mip_cnt = 1
+        uint32             _mip_cnt = 1
     );
 
     RENDER_API DepthBufferRef CreateDepthBuffer(
         std::string_view   _name,
         Extent2D           _size,
         EPixelFormat       _format,
-        uint32_t           _array_size = 1,
+        uint32             _array_size = 1,
         ETextureUsageFlags _usage      = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
     );
 
-    static constexpr uint       k_default_bindless_array_size = 5000;
-    RENDER_API BindlessArrayRef CreateBindlessArray(uint _max_size = k_default_bindless_array_size);
+    static constexpr uint32     k_default_bindless_array_size = 5000;
+    RENDER_API BindlessArrayRef CreateBindlessArray(uint32 _max_size = k_default_bindless_array_size);
 
     // BackBufferInfo GetNextBackBufferInfo(RHIViewport* _viewport);
 
@@ -202,8 +187,8 @@ public:
     }
 
     RENDER_API bool SupportsTessellation() const;
-    RENDER_API uint32_t GetMaxTessellationFactor() const;
-    RENDER_API bool SupportsMultiview(uint32_t view_count) const;
+    RENDER_API uint32 GetMaxTessellationFactor() const;
+    RENDER_API bool   SupportsMultiview(uint32 view_count) const;
     RENDER_API bool SupportsRaytracingAccelerationStructures() const;
 
     RENDER_API PipelineHandle
@@ -245,14 +230,11 @@ public:
     RENDER_API void FlushDebugMessages() const;
     RENDER_API void WaitIdle();
 
-protected:
-    RENDER_API IOInterfaceRef CreateIOInterface(CopyQueue& _copy_queue);
-
 private:
     RENDER_API BufferRef CreateBuffer(
         std::string_view  _name,
-        uint              _element_cnt,
-        uint              _stride,
+        uint32            _element_cnt,
+        uint32            _stride,
         EBufferUsageFlags _usage,
         EPixelFormat      _format
     );

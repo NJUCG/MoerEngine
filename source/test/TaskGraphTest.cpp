@@ -3,6 +3,7 @@
 #include "misc/LockFree.h"
 #include "misc/MMemory.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskSystem.h"
 #include <atomic>
@@ -111,8 +112,8 @@ void ClosableMpScStackTest() {
     Moer::Array<A*> array;
     A               a;
 
-    std::atomic_int32_t push_count    = 0;
-    std::atomic_int32_t consume_count = 0;
+    std::atomic<Moer::int32> push_count    = 0;
+    std::atomic<Moer::int32> consume_count = 0;
 
     auto push_operation = [&]() {
         for (int i = 0; i < 1; ++i) {

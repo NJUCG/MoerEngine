@@ -1,4 +1,5 @@
 #include "renderer/raster/ProbeAdaptiveLayout.h"
+#include "misc/Types.h"
 
 #include <cmath>
 #include <iostream>
@@ -8,8 +9,8 @@ namespace {
 using Moer::Render::Raster::ProbeAdaptiveLayout;
 using Moer::Render::Raster::ProbeBrickVirtualKey;
 using namespace Moer::Render;
-using Moer::uint;
 using Moer::uint3;
+using Moer::uint32;
 
 bool Expect(bool condition, const char* message) {
     if (!condition) {
@@ -65,7 +66,7 @@ bool TestStableLevelRanges() {
 bool TestParentAndNeighbors() {
     const ProbeBrickVirtualKey key{2u, 0u, uint3(3u, 2u, 1u)};
     const ProbeBrickVirtualKey parent = ProbeAdaptiveLayout::GetParent(key);
-    const uint expected_parent_page = 2u * RASTER_PROBE_MAX_PAGES_PER_VOLUME + 64u + 3u;
+    const Moer::uint32         expected_parent_page = 2u * RASTER_PROBE_MAX_PAGES_PER_VOLUME + 64u + 3u;
 
     return Expect(parent == ProbeBrickVirtualKey{2u, 1u, uint3(1u, 1u, 0u)}, "parent key must halve coordinates") &&
            Expect(

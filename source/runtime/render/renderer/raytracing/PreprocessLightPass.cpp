@@ -1,6 +1,6 @@
 #include "PreprocessLightPass.h"
-
 #include "RaytracingGraphResources.h"
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 #include "shader/ShaderResourceManager.h"
 
@@ -14,33 +14,33 @@ namespace Moer::Render::Raytracing {
 
 namespace {
 
-uint FloatToUInt(float value, float scale) {
-    return static_cast<uint>(std::floor(value * scale + 0.5f));
+uint32 FloatToUInt(float value, float scale) {
+    return static_cast<uint32>(std::floor(value * scale + 0.5f));
 }
 
 float Saturate(float value) {
     return std::clamp(value, 0.f, 1.f);
 }
 
-uint Float3ToR8G8B8Unorm(const float3& value) {
+uint32 Float3ToR8G8B8Unorm(const float3& value) {
     return (FloatToUInt(Saturate(value.x), 255.f) & 0xffu) |
            ((FloatToUInt(Saturate(value.y), 255.f) & 0xffu) << 8) |
            ((FloatToUInt(Saturate(value.z), 255.f) & 0xffu) << 16);
 }
 
-uint16_t Fp32ToFp16(float value) {
+uint16 Fp32ToFp16(float value) {
     static const union FloatBits {
-        uint  ui;
+        uint32 ui;
         float f;
     } multiplier = {0x07800000};
 
     FloatBits biased_float{};
     biased_float.f  = value * multiplier.f;
-    const uint bits = biased_float.ui;
+    const uint32 bits = biased_float.ui;
 
-    const uint sign = bits & 0x80000000;
-    const uint body = bits & 0x0fffffff;
-    return static_cast<uint16_t>((sign >> 16 | body >> 13) & 0xffffu);
+    const uint32 sign = bits & 0x80000000;
+    const uint32 body = bits & 0x0fffffff;
+    return static_cast<uint16>((sign >> 16 | body >> 13) & 0xffffu);
 }
 
 void PackPolyLightColor(const float3& color, PolymorphicLightInfo& info) {
@@ -55,7 +55,7 @@ void PackPolyLightColor(const float3& color, PolymorphicLightInfo& info) {
         0.f,
         1.f
     );
-    const uint  packed_radiance = std::min(static_cast<uint>(std::ceil(log_radiance * 65534.f)) + 1, 0xffffu);
+    const uint32 packed_radiance   = std::min(static_cast<uint32>(std::ceil(log_radiance * 65534.f)) + 1, 0xffffu);
     const float unpacked_radiance = std::exp2f(
         (static_cast<float>(packed_radiance - 1) / 65534.f) *
             (g_poly_morphic_light_max_log2_radiance - g_poly_morphic_light_min_log2_radiance) +
@@ -66,7 +66,7 @@ void PackPolyLightColor(const float3& color, PolymorphicLightInfo& info) {
     info.log_radiance = packed_radiance;
 }
 
-constexpr uint RoundUpCapacity(uint count, uint chunk_size) {
+constexpr uint32 RoundUpCapacity(uint32 count, uint32 chunk_size) {
     if (count == 0) {
         return 0;
     }
@@ -127,13 +127,13 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(
     const RaytracingSceneFrameSnapshot& scene_snapshot,
     uint64                              scene_revision
 ) {
-    static constexpr uint s_mesh_alloc_chunk      = 128;
-    static constexpr uint s_triangle_alloc_chunk  = 1024;
-    static constexpr uint s_primitive_alloc_chunk = 128;
+    static constexpr uint32 s_mesh_alloc_chunk      = 128;
+    static constexpr uint32 s_triangle_alloc_chunk  = 1024;
+    static constexpr uint32 s_primitive_alloc_chunk = 128;
 
-    uint emissive_mesh_count     = 0;
-    uint emissive_triangle_count = 0;
-    uint primitive_count         = std::max(scene_snapshot.primitive_count, 1u);
+    uint32 emissive_mesh_count     = 0;
+    uint32 emissive_triangle_count = 0;
+    uint32 primitive_count         = std::max(scene_snapshot.primitive_count, 1u);
     for (const auto& primitive : scene_snapshot.emissive_primitives) {
         if (primitive.num_triangles == 0) {
             continue;
@@ -144,8 +144,8 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(
     }
 
     const bool has_environment_light = rt_ctx.scene_params.enable_env_map && rt_ctx.env_pdf_tex;
-    const uint primitive_light_count =
-        static_cast<uint>(scene_snapshot.analytic_lights.size()) + static_cast<uint>(has_environment_light);
+    const uint32 primitive_light_count =
+        static_cast<uint32>(scene_snapshot.analytic_lights.size()) + static_cast<uint32>(has_environment_light);
     rt_ctx.CreateBuffersIfNeeded(
         RoundUpCapacity(emissive_mesh_count, s_mesh_alloc_chunk),
         RoundUpCapacity(emissive_triangle_count, s_triangle_alloc_chunk),
@@ -180,17 +180,17 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(
                                    accepted_scene_revision != scene_revision;
 
     const UnorderedMap<uint64, EmissiveLightHistory> empty_instance_offsets{};
-    const UnorderedMap<uint64, uint>                 empty_primitive_offsets{};
+    const UnorderedMap<uint64, uint32>               empty_primitive_offsets{};
     const auto&                                      previous_instance_offsets =
         payload->reset_light_history ? empty_instance_offsets : instance_light_buffer_offsets;
     const auto& previous_primitive_offsets =
         payload->reset_light_history ? empty_primitive_offsets : primitive_light_buffer_offsets;
     const bool current_odd_frame = payload->reset_light_history ? false : b_odd_frame;
 
-    payload->primitive_to_light = Array<uint>(primitive_count, s_invalid_light_idx);
+    payload->primitive_to_light = Array<uint32>(primitive_count, s_invalid_light_idx);
 
-    uint light_buffer_offset          = 0;
-    uint num_emissive_triangle_lights = 0;
+    uint32 light_buffer_offset          = 0;
+    uint32 num_emissive_triangle_lights = 0;
     for (const auto& primitive : scene_snapshot.emissive_primitives) {
         if (primitive.num_triangles == 0) {
             continue;
@@ -225,15 +225,15 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(
         payload->tasks.emplace_back(task);
     }
 
-    uint num_finite_primitive_lights   = 0;
-    uint num_infinite_primitive_lights = 0;
-    uint num_environment_lights        = 0;
+    uint32 num_finite_primitive_lights   = 0;
+    uint32 num_infinite_primitive_lights = 0;
+    uint32 num_environment_lights        = 0;
 
     for (const auto& light : scene_snapshot.analytic_lights) {
         const auto previous = previous_primitive_offsets.find(light.stable_key);
 
         PrepareLightsTask task{};
-        task.primitive_id  = static_cast<uint>(payload->primitive_light_infos.size()) | g_task_prim_light_bit;
+        task.primitive_id      = static_cast<uint32>(payload->primitive_light_infos.size()) | g_task_prim_light_bit;
         task.light_offset  = light_buffer_offset;
         task.num_triangles = 1;
         task.prev_light_offset = previous == previous_primitive_offsets.end() ? -1 : previous->second;
@@ -258,7 +258,7 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(
 
     if (has_environment_light) {
         PolymorphicLightInfo light_info{};
-        light_info.color_type_flags = static_cast<uint>(EPolyLightType::ELEnv)
+        light_info.color_type_flags = static_cast<uint32>(EPolyLightType::ELEnv)
                                       << g_poly_morphic_light_type_shift;
 
         PackPolyLightColor(float3(rt_ctx.scene_params.env_map_scale), light_info);
@@ -272,7 +272,7 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(
         const auto       previous              = previous_primitive_offsets.find(environment_light_key);
 
         PrepareLightsTask task{};
-        task.primitive_id  = static_cast<uint>(payload->primitive_light_infos.size()) | g_task_prim_light_bit;
+        task.primitive_id      = static_cast<uint32>(payload->primitive_light_infos.size()) | g_task_prim_light_bit;
         task.light_offset  = light_buffer_offset;
         task.num_triangles = 1;
         task.prev_light_offset = previous == previous_primitive_offsets.end() ? -1 : previous->second;
@@ -284,7 +284,7 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(
         ++num_environment_lights;
     }
 
-    payload->params.num_tasks          = static_cast<uint>(payload->tasks.size());
+    payload->params.num_tasks          = static_cast<uint32>(payload->tasks.size());
     payload->params.primitive_buf_hdl  = rt_ctx.GetBindlessHandles().primitive_buf_hdl;
     payload->params.instance_buf_hdl   = rt_ctx.GetBindlessHandles().instance_buf_hdl;
     payload->params.material_buf_hdl   = rt_ctx.GetBindlessHandles().material_buf_hdl;
@@ -293,9 +293,9 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(
     payload->params.texcoord0_buf_hdl  = rt_ctx.GetBindlessHandles().texcoord0_buf_hdl;
     payload->params.primitive_to_light = rt_ctx.GetBindlessHandles().primitive_to_light;
 
-    const uint max_lights_in_buffer   = static_cast<uint>(rt_ctx.light_data_buf->GetNumElement() / 2);
-    payload->params.cur_light_offset  = max_lights_in_buffer * static_cast<uint>(current_odd_frame);
-    payload->params.prev_light_offset = max_lights_in_buffer * static_cast<uint>(!current_odd_frame);
+    const uint32 max_lights_in_buffer = static_cast<uint32>(rt_ctx.light_data_buf->GetNumElement() / 2);
+    payload->params.cur_light_offset  = max_lights_in_buffer * static_cast<uint32>(current_odd_frame);
+    payload->params.prev_light_offset = max_lights_in_buffer * static_cast<uint32>(!current_odd_frame);
     payload->light_buffer_params      = ImportanceSamplingContext::BuildLightBufferParams(
         payload->params.cur_light_offset,
         num_finite_primitive_lights + num_emissive_triangle_lights,
@@ -322,9 +322,9 @@ PrepareLightPass::PreparedCommand PrepareLightPass::Prepare(
         "light_data"
     );
 
-    constexpr uint max_destination_mips_per_dispatch = 5;
-    const uint     mip_count = static_cast<uint>(payload->resources.local_light_pdf_mips.size());
-    for (uint source_mip = 0; source_mip + 1 < mip_count; source_mip += max_destination_mips_per_dispatch) {
+    constexpr uint32 max_destination_mips_per_dispatch = 5;
+    const uint32     mip_count                         = static_cast<uint32>(payload->resources.local_light_pdf_mips.size());
+    for (uint32 source_mip = 0; source_mip + 1 < mip_count; source_mip += max_destination_mips_per_dispatch) {
         payload->mip_dispatches.emplace_back(MipDispatch{
             .source_mip      = source_mip,
             .bound_mip_count = std::min(max_destination_mips_per_dispatch + 1, mip_count - source_mip)
@@ -340,8 +340,8 @@ void PrepareLightPass::RecordUploads(CommandList& cmd_list, SharedPtr<const Reco
     if (!payload->primitive_to_light.empty()) {
         cmd_list.CopyFrom(
             std::span<byte>(
-                reinterpret_cast<byte*>(const_cast<uint*>(payload->primitive_to_light.data())),
-                payload->primitive_to_light.size() * sizeof(uint)
+                reinterpret_cast<byte*>(const_cast<uint32*>(payload->primitive_to_light.data())),
+                payload->primitive_to_light.size() * sizeof(uint32)
             ),
             payload->resources.primitive_to_light_buf->GetView(),
             "Upload primitive_to_light"
@@ -393,52 +393,6 @@ void PrepareLightPass::RecordClears(CommandList& cmd_list, SharedPtr<const Recor
     cmd_list.AddCallback([payload(std::move(payload))]() {});
 }
 
-void PrepareLightPass::RecordSceneInputTransitions(
-    CommandList&                   cmd_list,
-    SharedPtr<const RecordPayload> payload
-) {
-    if (!payload->reads_scene_geometry) {
-        return;
-    }
-
-    Array<ReadBuffer> buffers;
-    buffers.reserve(6);
-    for (const BufferRef& buffer : {
-             payload->resources.primitive_buf,
-             payload->resources.instance_buf,
-             payload->resources.material_buf,
-             payload->resources.position_buf,
-             payload->resources.index_buf,
-         }) {
-        buffers.emplace_back(ReadBuffer{buffer->GetView(), EBufferState::SHADER_RESOURCE});
-    }
-    if (payload->resources.texcoord0_buf) {
-        buffers.emplace_back(
-            ReadBuffer{payload->resources.texcoord0_buf->GetView(), EBufferState::SHADER_RESOURCE}
-        );
-    }
-    cmd_list.BufferBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Compute,
-        std::move(buffers),
-        Array<WriteBuffer>{}
-    );
-
-    if (!payload->resources.material_textures.empty()) {
-        Array<ReadTexture> textures;
-        textures.reserve(payload->resources.material_textures.size());
-        for (const TextureRef& texture : payload->resources.material_textures) {
-            textures.emplace_back(
-                ReadTexture{texture->GetView(0, texture->GetNumMips()), ETextureState::SAMPLE}
-            );
-        }
-        cmd_list.TextureBarriers(
-            EQueueType::Graphics, EQueueType::Graphics, EPassType::Compute, std::move(textures)
-        );
-    }
-}
-
 void PrepareLightPass::RecordDispatch(CommandList& cmd_list, SharedPtr<const RecordPayload> payload) {
     if (payload->dispatch_light_count == 0) {
         return;
@@ -469,72 +423,6 @@ void PrepareLightPass::RecordGenerateMips(
     );
     payload->resources.shader_utils->GenerateMipsChunk(cmd_list, mips);
     cmd_list.AddCallback([payload(std::move(payload))]() {});
-}
-
-void PrepareLightPass::Process(CommandList& cmd_list, const PreparedCommand& command) {
-    const auto payload = command.record;
-    cmd_list.PushScopeWithTimeScope("PrepareLights");
-    RecordUploads(cmd_list, payload);
-    RecordClears(cmd_list, payload);
-    RecordSceneInputTransitions(cmd_list, payload);
-    RecordDispatch(cmd_list, payload);
-    for (const MipDispatch dispatch : payload->mip_dispatches) {
-        RecordGenerateMips(cmd_list, payload, dispatch);
-    }
-    cmd_list.PopScopeWithTimeScope();
-}
-
-void PrepareLightPass::RecordLightingInputTransitions(CommandList& cmd_list, const PreparedCommand& command) {
-    const auto payload = command.record;
-    cmd_list.Barriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Compute,
-        ReadBuffer{payload->resources.primitive_to_light_buf->GetView(), EBufferState::SHADER_RESOURCE},
-        ReadBuffer{payload->resources.light_mapping_buf->GetView(), EBufferState::SHADER_RESOURCE},
-        ReadBuffer{payload->resources.light_data_buf->GetView(), EBufferState::SHADER_RESOURCE},
-        ReadTexture{
-            payload->resources.local_light_pdf_tex->GetView(
-                0, payload->resources.local_light_pdf_tex->GetNumMips()
-            ),
-            ETextureState::SAMPLE
-        }
-    );
-}
-
-void PrepareLightPass::RecordAcceptedBoundary(CommandList& cmd_list, const PreparedCommand& command) {
-    const auto payload = command.record;
-
-    Array<ReadBuffer> buffers;
-    buffers.reserve(5);
-    for (const BufferRef& buffer : {
-             payload->resources.primitive_to_light_buf,
-             payload->resources.task_buf,
-             payload->resources.prim_light_buf,
-             payload->resources.light_mapping_buf,
-             payload->resources.light_data_buf,
-         }) {
-        buffers.emplace_back(ReadBuffer{buffer->GetView(), EBufferState::SHADER_RESOURCE});
-    }
-    cmd_list.BufferBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Compute,
-        std::move(buffers),
-        Array<WriteBuffer>{}
-    );
-
-    cmd_list.TextureBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Compute,
-        Array<ReadTexture>{ReadTexture{
-            payload->resources.local_light_pdf_tex->GetView(
-                0, payload->resources.local_light_pdf_tex->GetNumMips()
-            ),
-            ETextureState::SHADER_RESOURCE
-        }}
-    );
 }
 
 bool PrepareLightPass::AddPasses(
@@ -627,7 +515,8 @@ bool PrepareLightPass::AddPasses(
     const auto initial_persistent_buffer = [&](RenderGraph::BufferHandle buffer, bool initialized) {
         graph.SetInitialState(
             buffer,
-            initialized ? RenderGraph::BufferState::ShaderResource : RenderGraph::BufferState::Undefined,
+            initialized ? RenderGraph::BufferBoundaryState{RenderGraph::BufferAccessType::ShaderRead} :
+                          RenderGraph::BufferBoundaryState{RenderGraph::BufferBoundary::Undefined},
             initialized ? RenderGraph::QueueRole::Graphics : RenderGraph::QueueRole::None,
             initialized ? RenderGraph::AccessMode::Read : RenderGraph::AccessMode::None
         );
@@ -639,8 +528,8 @@ bool PrepareLightPass::AddPasses(
     initial_persistent_buffer(light_data, payload->light_data_initialized);
     graph.SetInitialState(
         local_light_pdf,
-        payload->local_light_pdf_initialized ? RenderGraph::TextureState::ShaderResource :
-                                               RenderGraph::TextureState::Undefined,
+        payload->local_light_pdf_initialized ? RenderGraph::TextureBoundaryState{RenderGraph::TextureAccessType::Sampled} :
+                                               RenderGraph::TextureBoundaryState{RenderGraph::TextureBoundary::Undefined},
         payload->local_light_pdf_initialized ? RenderGraph::QueueRole::Graphics :
                                                RenderGraph::QueueRole::None,
         payload->local_light_pdf_initialized ? RenderGraph::AccessMode::Read : RenderGraph::AccessMode::None
@@ -649,71 +538,71 @@ bool PrepareLightPass::AddPasses(
     graph.AddRecordPass(
         "RT.PrepareLights.UploadInputs",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
                 .Read(frame_setup_ready);
             if (!payload->primitive_to_light.empty()) {
-                builder.Write(primitive_to_light, RenderGraph::BufferState::TransferDestination);
+                builder.Write(primitive_to_light, RenderGraph::BufferAccessType::TransferDestination);
             }
             if (!payload->tasks.empty() || !payload->tasks_initialized) {
-                builder.Write(tasks, RenderGraph::BufferState::TransferDestination);
+                builder.Write(tasks, RenderGraph::BufferAccessType::TransferDestination);
             }
             if (!payload->primitive_light_infos.empty() || !payload->primitive_lights_initialized) {
-                builder.Write(primitive_lights, RenderGraph::BufferState::TransferDestination);
+                builder.Write(primitive_lights, RenderGraph::BufferAccessType::TransferDestination);
             }
         },
         [this, payload](CommandList& cmd_list) {
             ScopedGpuMarker marker(cmd_list, "Pass: RT Prepare Lights Upload", GpuMarkerPalette::Transfer());
             RecordUploads(cmd_list, payload);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.AddRecordPass(
         "RT.PrepareLights.ClearOutputs",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Copy)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
                 .Read(frame_setup_ready)
-                .Write(light_mapping, RenderGraph::BufferState::TransferDestination)
-                .Write(local_light_pdf, RenderGraph::TextureState::TransferDestination);
+                .Write(light_mapping, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(local_light_pdf, RenderGraph::TextureAccessType::TransferDestination);
             if (payload->reset_light_history) {
-                builder.Write(light_data, RenderGraph::BufferState::TransferDestination);
+                builder.Write(light_data, RenderGraph::BufferAccessType::TransferDestination);
             }
         },
         [this, payload](CommandList& cmd_list) {
             ScopedGpuMarker marker(cmd_list, "Pass: RT Prepare Lights Clear", GpuMarkerPalette::Transfer());
             RecordClears(cmd_list, payload);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     if (payload->dispatch_light_count != 0) {
         graph.AddRecordPass(
             "RT.PrepareLights.Dispatch",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                     .Read(frame_setup_ready)
-                    .Read(tasks, RenderGraph::BufferState::ShaderResource)
-                    .ReadWrite(light_data, RenderGraph::BufferState::UnorderedAccess)
-                    .ReadWrite(light_mapping, RenderGraph::BufferState::UnorderedAccess)
+                    .Read(tasks, RenderGraph::BufferAccessType::ShaderRead)
+                    .ReadWrite(light_data, RenderGraph::BufferAccessType::Storage)
+                    .ReadWrite(light_mapping, RenderGraph::BufferAccessType::Storage)
                     .ReadWrite(
                         local_light_pdf,
-                        RenderGraph::TextureState::UnorderedAccess,
+                        RenderGraph::TextureAccessType::Storage,
                         RenderGraph::TextureRange::Mips(0, 1)
                     );
                 if (!payload->primitive_light_infos.empty()) {
-                    builder.Read(primitive_lights, RenderGraph::BufferState::ShaderResource);
+                    builder.Read(primitive_lights, RenderGraph::BufferAccessType::ShaderRead);
                 }
                 if (payload->reads_scene_geometry) {
-                    builder.Read(primitive_buf, RenderGraph::BufferState::ShaderResource)
-                        .Read(instance_buf, RenderGraph::BufferState::ShaderResource)
-                        .Read(material_buf, RenderGraph::BufferState::ShaderResource)
-                        .Read(position_buf, RenderGraph::BufferState::ShaderResource)
-                        .Read(index_buf, RenderGraph::BufferState::ShaderResource);
+                    builder.Read(primitive_buf, RenderGraph::BufferAccessType::ShaderRead)
+                        .Read(instance_buf, RenderGraph::BufferAccessType::ShaderRead)
+                        .Read(material_buf, RenderGraph::BufferAccessType::ShaderRead)
+                        .Read(position_buf, RenderGraph::BufferAccessType::ShaderRead)
+                        .Read(index_buf, RenderGraph::BufferAccessType::ShaderRead);
                     if (texcoord0_buf.IsValid()) {
-                        builder.Read(texcoord0_buf, RenderGraph::BufferState::ShaderResource);
+                        builder.Read(texcoord0_buf, RenderGraph::BufferAccessType::ShaderRead);
                     }
                     for (const auto texture : material_textures) {
-                        builder.Read(texture, RenderGraph::TextureState::Sampled);
+                        builder.Read(texture, RenderGraph::TextureAccessType::Sampled);
                     }
                 }
             },
@@ -723,7 +612,7 @@ bool PrepareLightPass::AddPasses(
                 );
                 RecordDispatch(cmd_list, payload);
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
 
@@ -731,16 +620,16 @@ bool PrepareLightPass::AddPasses(
         graph.AddRecordPass(
             std::format("RT.PrepareLights.GenerateMips.{}", dispatch.source_mip),
             [=](RenderGraph::PassBuilder& builder) {
-                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
-                        .Read(frame_setup_ready)
-                        .Read(
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                    .Read(frame_setup_ready)
+                    .Read(
                         local_light_pdf,
-                        RenderGraph::TextureState::UnorderedAccess,
+                        RenderGraph::TextureAccessType::Storage,
                         RenderGraph::TextureRange::Mips(dispatch.source_mip, 1)
                     )
                     .Write(
                         local_light_pdf,
-                        RenderGraph::TextureState::UnorderedAccess,
+                        RenderGraph::TextureAccessType::Storage,
                         RenderGraph::TextureRange::Mips(dispatch.source_mip + 1, dispatch.bound_mip_count - 1)
                     );
             },
@@ -750,19 +639,19 @@ bool PrepareLightPass::AddPasses(
                 );
                 RecordGenerateMips(cmd_list, payload, dispatch);
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
 
     graph.Export(
         tasks,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         primitive_lights,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

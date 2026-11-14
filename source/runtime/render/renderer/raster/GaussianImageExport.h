@@ -1,4 +1,5 @@
 #pragma once
+#include "rendergraph/RenderGraph.h"
 #include "rhi/RHICommand.h"
 #include "scene/gaussian/GaussianRenderSettings.h"
 #include <filesystem>
@@ -9,6 +10,14 @@ class RENDER_API GaussianImageExport {
 public:
     void Request(
         CommandList&                 commands,
+        TextureView                  linear_display,
+        BufferView                   frame_status,
+        uint2                        resolution,
+        const std::filesystem::path& path,
+        uint64                       request_id
+    );
+    RenderGraph::PassHandle AddToGraph(
+        RenderGraph&                 graph,
         TextureView                  linear_display,
         BufferView                   frame_status,
         uint2                        resolution,

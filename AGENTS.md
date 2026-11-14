@@ -1,5 +1,17 @@
 # MoerEngine — Project Guidelines
 
+## Analysis, Design & Optimization Principles
+
+Start from real constraints and derive the necessary mechanisms. Distinguish complexity imposed by hardware, API contracts, concurrency and resource lifetimes from complexity introduced by our own design choices.
+
+- Establish the logical model first: who owns each resource, who uses it, which dependencies matter, when use ends, and who permits reuse or destruction.
+- Give each state, object, abstraction and synchronization mechanism a concrete responsibility. "Convenient to manage", "safer" or "UE does it this way" is not sufficient justification; identify the actual condition it guarantees.
+- Before adding machinery to handle a complication, reconsider the design choice that created it. Question whether duplicated state, copying, rebuilding or a separate lifecycle is necessary at all.
+- Prefer fewer independent states and clearer ownership. Reuse existing submission, pooling and completion mechanisms where their guarantees fit; judge simplification by the logical model, not just line count.
+- When removing a mechanism, explicitly answer: **Who now guarantees the condition it used to guarantee?** Distinguish reuse of an existing guarantee, transfer to a coarser boundary, and an accidentally lost guarantee. Explain the cost of moving responsibility; preserve required correctness and synchronization.
+- Keep request outcomes, accepted work, execution completion and resource reclamation conditions distinct whenever their meanings differ.
+- Explain analysis and design documents through the evolution of the model: original coupling, reason for change, new responsibility boundaries and tradeoffs. Keep commit chronology, runtime logs and detailed validation procedures out of that narrative unless requested.
+
 ## Build & Run
 
 ```
@@ -21,6 +33,15 @@ just clean          # Remove build/ and target/
 - Set `default_render_method = "Raster"` when working on the raster pipeline, and set `default_render_method = "Raytracing"` when working on the ray tracing pipeline.
 - After starting the editor with `just r`, allow up to one minute for the engine to finish loading so startup errors, validation errors, and obvious runtime regressions have time to surface.
 
+## Design and Explanation Principles
+
+- 从少数真实约束推导设计。解释机制时先说明约束来源，区分 API/硬件的强制要求、业务与并发/生命周期要求，以及当前实现自行选择的组织方式或性能优化。
+- 始终追问：我们是在解决原本存在的问题，还是在解决上一个抽象引入的问题？不能用“现有类需要这个字段/接口”证明该抽象本身必要；应说明删去机制后，哪个实际场景会违反哪条约束。
+- 每个状态应有明确含义、所有者和有效期；每个机制应有具体责任。新增状态、缓存、包装层或同步机制前，检查能否从已有信息推导、复用现有机制，或在更粗的生命周期边界统一管理。
+- 整理复杂度时明确区分三种情况：归入已有机制；转移到更粗且安全的生命周期边界；补齐此前遗漏的真实约束。不要预设所有复杂度都能删除，也不要仅靠新增抽象掩盖问题。
+- 回答按“真实约束 → 最简可行模型 → 当前设计选择及代价 → 可简化之处”展开。命名与函数抽取应让这些关系更清楚；成熟引擎的做法只能作为参考，不能代替必要性论证。
+- 详细判断方法见 [从真实约束推导设计](docs/DEVELOPMENT.md#从真实约束推导设计)。
+
 ## Architecture Overview
 
 ```
@@ -33,7 +54,7 @@ source/
   runtime/
     core/                        # Math, containers, platform, logging, task graph
       include/math/              #   Vector, Matrix (Base.h, Matrix.h)
-      include/misc/              #   Traits.h (C++ ↔ HLSL type aliases: float3, uint4, float4x4)
+      include/misc/              #   Types.h (fixed-width integers), Traits.h (C++ ↔ HLSL types)
     Engine.cpp/h                 # Engine init/loop
     render/
       renderer/
@@ -57,12 +78,34 @@ source/
         RHI.h, RHIResource.h     #   Core types (BufferRef, TextureRef, EBufferUsageFlags)
         RHICommon.h              #   Enums (EBufferUsageFlags, EPixelFormat, etc.)
         RHICommand.h             #   Command list / draw dispatching
-        vulkan/                  #   Vulkan backend
-          VulkanDevice.cpp/h     #     Pipeline creation, descriptor set layout, reflection
-          VulkanQueue.cpp/h      #     Command submission, draw/dispatch recording
-          VulkanRHIResource.cpp/h #    Buffer/Texture creation, enum translation
-          VulkanDescriptor.cpp/h #    Descriptor pool & set management
-        d3d12/                   #   D3D12 backend (partial)
+        executor/                #   Submission admission, ordered work queue and backend dispatch
+          RHIExecutor.cpp/h      #     Public entry points, batch publication and lifecycle
+          testing/               #     Executor test hooks, separate from the public API
+        backends/                #   Graphics API implementations
+          vulkan/                  #   Vulkan backend
+            VulkanDevice.cpp/h     #     Device setup, capabilities and resource entry points
+            VulkanDeviceInitialization.cpp/h # Native feature queries and device creation with local chains
+            VulkanPipelineCreation.cpp # Shader reflection, native pipeline construction
+            VulkanQueue.cpp/h      #     Queue reservation, native submission and completion handoff
+            VulkanCommandRecorder.cpp/h # Recording workspaces and reusable Context pools
+            VulkanCommandRecording.cpp # RHI command replay into Vulkan command buffers
+            VulkanCopyCommandRecording.cpp # Copy command validation and recording
+            VulkanSubmission.h     #     Owning packets shared by recording, submission and completion
+            VulkanQueueCompletion.cpp # GPU completion, callbacks and resource retirement
+            VulkanQueuePresentation.cpp # Present source contracts and swapchain presentation
+            VulkanQueueInternal.cpp/h # Shared queue dependency and failure publication helpers
+            VulkanNativeQueue.cpp  #     Native queue submits, waits/signals and labels
+            VulkanCopyQueue.cpp    #     Copy queue submission and completion
+            VulkanCommandProfiler.cpp/h # GPU timestamps and CPU recording profiles
+            VulkanRHIResource.cpp/h #    Buffer/Texture ownership and view caches
+            VulkanEnumTranslator.cpp/h # RHI-to-Vulkan enum and pixel-format mapping
+            VulkanPipeline.cpp/h   #     Pipeline layout and binding metadata
+            VulkanBindlessArray.cpp/h #   Bindless updates and slot retirement
+            VulkanRaytracingResource.cpp/h # BLAS/TLAS resources and scene updates
+            VulkanTimeline.cpp/h   #     GPU semaphore and host completion state
+            VulkanDescriptor.cpp/h #    Descriptor byte cache and GPU descriptor storage
+          metal/                   #   Metal backend
+          d3d12/                   #   D3D12 backend (partial)
       shader/
         ShaderPipeline.h         # ★ Pipeline class macros (DEFINE_SHADER_CONSTANT, etc.)
         ShaderCompiler.cpp/h     #   DXC invocation, SPIR-V generation
@@ -112,6 +155,11 @@ shaders/                                # HLSL shader sources
 
 ## Key Patterns
 
+### Fixed-Width Integer Types
+- Engine-owned C++ uses `uint8` / `uint16` / `uint32` / `uint64` and `int8` / `int16` / `int32` / `int64` from `misc/Types.h`; qualify them with `Moer::` outside the namespace. Use `std::atomic<uint32>` and corresponding fixed-width aliases for atomic integers.
+- Preserve semantic types such as `size_t`, `uintptr_t`, and `VkDeviceSize`, third-party/generated code, and CUDA interop type contracts.
+- HLSL and shared C++/HLSL headers retain `uint`; `misc/Traits.h` provides the C++ compatibility alias. New C++-only code uses `uint32`.
+
 ### Bindless Architecture
 All resources go through a unified bindless heap. Shaders declare `BINDLESS_BINDINGS(BufferSpace, TextureSpace, SamplerSpace, AccelSpace)` and access resources by uint handles via `ArrayBuffer(handle).Load<T>()` and `TextureHandle(handle).Sample2D<T>()`.
 
@@ -122,8 +170,9 @@ Files in `shaderheaders/shared/` use `#ifdef __cplusplus` guards:
 - Both sides see the same struct layout. **Alignment must be manually kept in sync** (see pitfalls below).
 
 ### Vulkan Header Contract
-- Vulkan RHI code gets Vulkan declarations through `rhi/vulkan/VulkanCommon.h`; do not include `<volk.h>`, `<vulkan/vulkan_core.h>`, or platform Vulkan headers directly in the Render module.
+- Vulkan RHI code gets Vulkan declarations through `rhi/backends/vulkan/VulkanCommon.h`; do not include `<volk.h>`, `<vulkan/vulkan_core.h>`, or platform Vulkan headers directly in the Render module.
 - Targets that expose or consume Vulkan types must link `Moer::VulkanHeaders`. It propagates `VK_NO_PROTOTYPES`, the active Vulkan platform macro, the required include paths, and the Volk dependency.
+- Keep Vulkan macro definitions in CMake. `VulkanCommon.h` checks the build contract and includes Volk; it does not supply fallback definitions or query policy types.
 - `source/profile/VkLayer.cpp` is a standalone Vulkan layer and is the intentional exception to the Render-module rule.
 - After changing the Vulkan include contract, build `TestVulkanHeaderContract` and run the `VulkanHeaderContract` CTest.
 
@@ -182,7 +231,7 @@ Vulkan push constants are limited to 128 bytes on most hardware. Keep pass param
 | `float3`  | `Vector3f` (12B, union of 3 floats) | 12 | 4 |
 | `float4`  | `Vector4f` (16B) | 16 | 4 |
 | `float4x4`| `Matrix4x4f` (64B, union of 4×Vector4f) | 64 | 4 |
-| `uint`    | `uint32_t` | 4 | 4 |
+| `uint`    | `uint32` | 4 | 4 |
 | `uint4`   | `Vector4ui` | 16 | 4 |
 
 Note: C++ side has **no implicit padding** (all 4-byte aligned). But **HLSL ConstantBuffer (std140) adds padding** to arrays of scalars — always use vector types for arrays in shared structs.

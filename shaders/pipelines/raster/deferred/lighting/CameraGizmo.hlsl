@@ -282,7 +282,14 @@ CameraGizmoVSOutput CameraGizmoIconVS(uint icon_vertex_id) {
     return output;
 }
 
-CameraGizmoVSOutput CameraGizmoVS(uint vertex_id : SV_VertexID) {
+CameraGizmoVSOutput CameraGizmoVS(uint vertex_id : SV_VertexID
+#if DXIL
+    , int base_vertex : SV_StartVertexLocation
+#endif
+) {
+#if DXIL
+    vertex_id = uint(int(vertex_id) + base_vertex);
+#endif
     if (vertex_id < CAMERA_GIZMO_FRUSTUM_VERTEX_COUNT) {
         return CameraGizmoLineVS(vertex_id);
     }

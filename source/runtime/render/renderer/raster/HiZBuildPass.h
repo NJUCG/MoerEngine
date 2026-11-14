@@ -2,6 +2,7 @@
 #pragma once
 
 #include "RasterResource.h"
+#include "misc/Types.h"
 #include "rendergraph/RenderGraph.h"
 #include "shader/ShaderPipeline.h"
 #include "shader/ShaderResourceManager.h"
@@ -62,7 +63,7 @@ public:
             return parameters;
         }
 
-        const uint mip_count = context.textures.hiz_current.tex->GetNumMips();
+        const uint32 mip_count = context.textures.hiz_current.tex->GetNumMips();
         if (mip_count == 0) {
             return parameters;
         }
@@ -80,7 +81,7 @@ public:
             .is_mip0          = true,
         });
 
-        for (uint mip = 1; mip < mip_count; ++mip) {
+        for (uint32 mip = 1; mip < mip_count; ++mip) {
             parameters.dispatches.emplace_back(MipDispatch{
                 .source = parameters.destination_owner->GetView(static_cast<uint8>(mip - 1), 1),
                 .destination = parameters.destination_owner->GetView(static_cast<uint8>(mip), 1),
@@ -92,43 +93,23 @@ public:
         return parameters;
     }
 
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
-        if (parameters.IsEmpty()) {
-            return;
-        }
-
-        // mip 0 复制深度，后续每次 dispatch 将当前层级的每个 2x2 区域归约到下一个 mip。
-        auto dispatch_build = [&](TextureView source_view,
-                                  TextureView destination_view,
-                                  const uint2 source_size,
-                                  const uint2 destination_size,
-                                  bool        is_mip0) {
-            HiZBuildParam param{};
-            param.src_size = source_size;
-            param.dst_size = destination_size;
-            param.is_mip0  = is_mip0 ? 1u : 0u;
-
-            cmd_list.Compute(pipeline, param, source_view, destination_view)
-                .Dispatch(
-                    uint3((destination_size.x + 7) / 8, (destination_size.y + 7) / 8, 1),
-                    "Build Hi-Z"
-                );
-        };
-
-        cmd_list.PushScopeWithTimeScope("Build Hi-Z");
-        for (const MipDispatch& dispatch : parameters.dispatches) {
-            dispatch_build(
-                dispatch.source,
-                dispatch.destination,
-                dispatch.source_size,
-                dispatch.destination_size,
-                dispatch.is_mip0
-            );
-        }
-        cmd_list.PopScopeWithTimeScope();
+    void RecordMip(CommandList& cmd_list, const RecordParameters& parameters, uint32 mip) {
+        const MipDispatch& dispatch = parameters.dispatches.at(mip);
+        HiZBuildParam param{};
+        param.src_size = dispatch.source_size;
+        param.dst_size = dispatch.destination_size;
+        param.is_mip0 = dispatch.is_mip0 ? 1u : 0u;
+        cmd_list.Compute(pipeline, param, dispatch.source, dispatch.destination)
+            .Dispatch(uint3((param.dst_size.x + 7) / 8, (param.dst_size.y + 7) / 8, 1), "Build Hi-Z");
     }
 
-    RenderGraph::PreparedPassHandle AddToGraph(
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        for (uint32 mip = 0; mip < parameters.dispatches.size(); ++mip) {
+            RecordMip(cmd_list, parameters, mip);
+        }
+    }
+
+    void AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
         GraphResources resources

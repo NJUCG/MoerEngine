@@ -1,6 +1,6 @@
 #include "profile/ProfileDumpCodec.h"
-
 #include "misc/Crc32.h"
+#include "misc/Types.h"
 
 #include <bit>
 #include <limits>
@@ -11,20 +11,20 @@ namespace Moer::ProfileDump {
 
 namespace {
 
-constexpr std::uint64_t    kFnvOffsetBasis   = 14695981039346656037ull;
-constexpr std::uint64_t    kFnvPrime         = 1099511628211ull;
+constexpr uint64           kFnvOffsetBasis   = 14695981039346656037ull;
+constexpr uint64           kFnvPrime         = 1099511628211ull;
 constexpr std::string_view kSchemaHashDomain = "moer.profile.schema.v3";
-constexpr std::size_t      kHeaderCrcBytes   = kPacketHeaderBytes - sizeof(std::uint32_t);
+constexpr std::size_t      kHeaderCrcBytes   = kPacketHeaderBytes - sizeof(uint32);
 constexpr std::size_t      kRecordPrefixBytes =
-    sizeof(std::uint64_t) + sizeof(std::uint64_t) + sizeof(std::uint32_t);
-constexpr std::size_t kLossPayloadBytes         = sizeof(std::uint64_t) * 4 + sizeof(std::uint32_t);
-constexpr std::size_t kSessionBeginPayloadBytes = sizeof(std::uint64_t) * 2;
-constexpr std::size_t kSessionEndPayloadBytes   = sizeof(std::uint64_t) * 3;
+    sizeof(uint64) + sizeof(uint64) + sizeof(uint32);
+constexpr std::size_t kLossPayloadBytes         = sizeof(uint64) * 4 + sizeof(uint32);
+constexpr std::size_t kSessionBeginPayloadBytes = sizeof(uint64) * 2;
+constexpr std::size_t kSessionEndPayloadBytes   = sizeof(uint64) * 3;
 
 static_assert(kPacketHeaderBytes == 32);
 static_assert(kHeaderCrcBytes == 28);
-static_assert(sizeof(float) == sizeof(std::uint32_t));
-static_assert(sizeof(double) == sizeof(std::uint64_t));
+static_assert(sizeof(float) == sizeof(uint32));
+static_assert(sizeof(double) == sizeof(uint64));
 static_assert(std::numeric_limits<float>::is_iec559);
 static_assert(std::numeric_limits<double>::is_iec559);
 
@@ -49,30 +49,30 @@ bool IsValidPacketType(PacketType _type) noexcept {
 
 template<typename T>
     requires(std::is_unsigned_v<T>)
-void AppendLittleEndian(Array<std::uint8_t>& _output, T _value) {
+void AppendLittleEndian(Array<uint8>& _output, T _value) {
     for (std::size_t byte_index = 0; byte_index < sizeof(T); ++byte_index) {
-        _output.emplace_back(static_cast<std::uint8_t>(_value & T{0xff}));
+        _output.emplace_back(static_cast<uint8>(_value & T{0xff}));
         _value >>= 8;
     }
 }
 
 template<typename T>
     requires(std::is_signed_v<T>)
-void AppendLittleEndian(Array<std::uint8_t>& _output, T _value) {
+void AppendLittleEndian(Array<uint8>& _output, T _value) {
     using UnsignedT = std::make_unsigned_t<T>;
     AppendLittleEndian(_output, std::bit_cast<UnsignedT>(_value));
 }
 
-void AppendFloat(Array<std::uint8_t>& _output, float _value) {
-    AppendLittleEndian(_output, std::bit_cast<std::uint32_t>(_value));
+void AppendFloat(Array<uint8>& _output, float _value) {
+    AppendLittleEndian(_output, std::bit_cast<uint32>(_value));
 }
 
-void AppendFloat(Array<std::uint8_t>& _output, double _value) {
-    AppendLittleEndian(_output, std::bit_cast<std::uint64_t>(_value));
+void AppendFloat(Array<uint8>& _output, double _value) {
+    AppendLittleEndian(_output, std::bit_cast<uint64>(_value));
 }
 
 bool CanEncodeU32Length(std::size_t _size) noexcept {
-    return _size <= std::numeric_limits<std::uint32_t>::max();
+    return _size <= std::numeric_limits<uint32>::max();
 }
 
 bool CanGrowPayload(
@@ -85,14 +85,14 @@ bool CanGrowPayload(
            CanEncodeU32Length(_current_size + _additional_size);
 }
 
-void AppendString(Array<std::uint8_t>& _output, std::string_view _value) {
-    AppendLittleEndian(_output, static_cast<std::uint32_t>(_value.size()));
+void AppendString(Array<uint8>& _output, std::string_view _value) {
+    AppendLittleEndian(_output, static_cast<uint32>(_value.size()));
     _output.insert(_output.end(), _value.begin(), _value.end());
 }
 
 class ByteReader {
 public:
-    explicit ByteReader(std::span<const std::uint8_t> _bytes) noexcept : m_bytes(_bytes) {}
+    explicit ByteReader(std::span<const uint8> _bytes) noexcept : m_bytes(_bytes) {}
 
     template<typename T>
         requires(std::is_unsigned_v<T>)
@@ -123,7 +123,7 @@ public:
     }
 
     bool ReadFloat(float& _value) noexcept {
-        std::uint32_t bits = 0;
+        uint32 bits = 0;
         if (!ReadLittleEndian(bits)) {
             return false;
         }
@@ -132,7 +132,7 @@ public:
     }
 
     bool ReadFloat(double& _value) noexcept {
-        std::uint64_t bits = 0;
+        uint64 bits = 0;
         if (!ReadLittleEndian(bits)) {
             return false;
         }
@@ -141,7 +141,7 @@ public:
     }
 
     DecodeStatus ReadString(ProfileString& _value, const CodecLimits& _limits) {
-        std::uint32_t length = 0;
+        uint32 length = 0;
         if (!ReadLittleEndian(length)) {
             return DecodeStatus::MalformedPayload;
         }
@@ -157,7 +157,7 @@ public:
         return DecodeStatus::Ok;
     }
 
-    bool ReadSpan(std::size_t _size, std::span<const std::uint8_t>& _value) noexcept {
+    bool ReadSpan(std::size_t _size, std::span<const uint8>& _value) noexcept {
         if (_size > Remaining()) {
             return false;
         }
@@ -175,13 +175,13 @@ public:
     }
 
 private:
-    std::span<const std::uint8_t> m_bytes{};
+    std::span<const uint8>        m_bytes{};
     std::size_t                   m_offset{0};
 };
 
 class StableHasher {
 public:
-    void AppendByte(std::uint8_t _value) noexcept {
+    void AppendByte(uint8 _value) noexcept {
         m_hash ^= _value;
         m_hash *= kFnvPrime;
     }
@@ -190,24 +190,24 @@ public:
         requires(std::is_unsigned_v<T>)
     void AppendLittleEndian(T _value) noexcept {
         for (std::size_t byte_index = 0; byte_index < sizeof(T); ++byte_index) {
-            AppendByte(static_cast<std::uint8_t>(_value & T{0xff}));
+            AppendByte(static_cast<uint8>(_value & T{0xff}));
             _value >>= 8;
         }
     }
 
     void AppendString(std::string_view _value) noexcept {
-        AppendLittleEndian(static_cast<std::uint32_t>(_value.size()));
+        AppendLittleEndian(static_cast<uint32>(_value.size()));
         for (const char character : _value) {
-            AppendByte(static_cast<std::uint8_t>(static_cast<unsigned char>(character)));
+            AppendByte(static_cast<uint8>(static_cast<unsigned char>(character)));
         }
     }
 
-    [[nodiscard]] std::uint64_t Finish() const noexcept {
+    [[nodiscard]] uint64 Finish() const noexcept {
         return m_hash;
     }
 
 private:
-    std::uint64_t m_hash{kFnvOffsetBasis};
+    uint64 m_hash{kFnvOffsetBasis};
 };
 
 bool HasDuplicateFieldNames(const SchemaDescriptor& _schema) noexcept {
@@ -225,8 +225,8 @@ bool IsSchemaDescriptorHashable(const SchemaDescriptor& _schema) noexcept {
     if (_schema.name.empty() || _schema.event_type.empty() || !IsValidEventKind(_schema.kind) ||
         !IsValidChannel(_schema.channel) || !CanEncodeU32Length(_schema.name.size()) ||
         !CanEncodeU32Length(_schema.event_type.size()) ||
-        _schema.fields.size() > std::numeric_limits<std::uint16_t>::max() ||
-        _schema.fields.size() > std::numeric_limits<std::uint32_t>::max()) {
+        _schema.fields.size() > std::numeric_limits<uint16>::max() ||
+        _schema.fields.size() > std::numeric_limits<uint32>::max()) {
         return false;
     }
 
@@ -241,7 +241,7 @@ bool IsSchemaDescriptorHashable(const SchemaDescriptor& _schema) noexcept {
 EncodeStatus ValidateSchemaForEncoding(const SchemaDescriptor& _schema, const CodecLimits& _limits) noexcept {
     if (_schema.name.empty() || _schema.event_type.empty() || !IsValidEventKind(_schema.kind) ||
         !IsValidChannel(_schema.channel) || _schema.fields.size() > _limits.max_fields ||
-        _schema.fields.size() > std::numeric_limits<std::uint16_t>::max() ||
+        _schema.fields.size() > std::numeric_limits<uint16>::max() ||
         HasDuplicateFieldNames(_schema)) {
         return EncodeStatus::InvalidSchema;
     }
@@ -263,7 +263,7 @@ EncodeStatus ValidateSchemaForEncoding(const SchemaDescriptor& _schema, const Co
     return EncodeStatus::Ok;
 }
 
-std::uint32_t ComputeCrc32(std::span<const std::uint8_t> _bytes) noexcept {
+uint32 ComputeCrc32(std::span<const uint8> _bytes) noexcept {
     return crc32_fast(_bytes.data(), _bytes.size());
 }
 
@@ -277,7 +277,7 @@ bool HoldsFieldValue(const FieldValueView& _value) noexcept {
 }
 
 EncodeStatus AppendFieldValue(
-    Array<std::uint8_t>&  _encoded,
+    Array<uint8>&         _encoded,
     const SchemaField&    _field,
     const FieldValueView& _value,
     const CodecLimits&    _limits
@@ -290,28 +290,28 @@ EncodeStatus AppendFieldValue(
             _encoded.emplace_back(std::get<bool>(_value) ? 1u : 0u);
             return EncodeStatus::Ok;
         case FieldType::Int32:
-            if (!HoldsFieldValue<std::int32_t>(_value)) {
+            if (!HoldsFieldValue<int32>(_value)) {
                 return EncodeStatus::ValueTypeMismatch;
             }
-            AppendLittleEndian(_encoded, std::get<std::int32_t>(_value));
+            AppendLittleEndian(_encoded, std::get<int32>(_value));
             return EncodeStatus::Ok;
         case FieldType::UInt32:
-            if (!HoldsFieldValue<std::uint32_t>(_value)) {
+            if (!HoldsFieldValue<uint32>(_value)) {
                 return EncodeStatus::ValueTypeMismatch;
             }
-            AppendLittleEndian(_encoded, std::get<std::uint32_t>(_value));
+            AppendLittleEndian(_encoded, std::get<uint32>(_value));
             return EncodeStatus::Ok;
         case FieldType::Int64:
-            if (!HoldsFieldValue<std::int64_t>(_value)) {
+            if (!HoldsFieldValue<int64>(_value)) {
                 return EncodeStatus::ValueTypeMismatch;
             }
-            AppendLittleEndian(_encoded, std::get<std::int64_t>(_value));
+            AppendLittleEndian(_encoded, std::get<int64>(_value));
             return EncodeStatus::Ok;
         case FieldType::UInt64:
-            if (!HoldsFieldValue<std::uint64_t>(_value)) {
+            if (!HoldsFieldValue<uint64>(_value)) {
                 return EncodeStatus::ValueTypeMismatch;
             }
-            AppendLittleEndian(_encoded, std::get<std::uint64_t>(_value));
+            AppendLittleEndian(_encoded, std::get<uint64>(_value));
             return EncodeStatus::Ok;
         case FieldType::Float32:
             if (!HoldsFieldValue<float>(_value)) {
@@ -348,7 +348,7 @@ DecodeStatus DecodeFieldValue(
 ) {
     switch (_field.type) {
         case FieldType::Bool: {
-            std::uint8_t value = 0;
+            uint8 value = 0;
             if (!_reader.ReadLittleEndian(value) || value > 1) {
                 return DecodeStatus::MalformedPayload;
             }
@@ -356,7 +356,7 @@ DecodeStatus DecodeFieldValue(
             return DecodeStatus::Ok;
         }
         case FieldType::Int32: {
-            std::int32_t value = 0;
+            int32 value = 0;
             if (!_reader.ReadLittleEndian(value)) {
                 return DecodeStatus::MalformedPayload;
             }
@@ -364,7 +364,7 @@ DecodeStatus DecodeFieldValue(
             return DecodeStatus::Ok;
         }
         case FieldType::UInt32: {
-            std::uint32_t value = 0;
+            uint32 value = 0;
             if (!_reader.ReadLittleEndian(value)) {
                 return DecodeStatus::MalformedPayload;
             }
@@ -372,7 +372,7 @@ DecodeStatus DecodeFieldValue(
             return DecodeStatus::Ok;
         }
         case FieldType::Int64: {
-            std::int64_t value = 0;
+            int64 value = 0;
             if (!_reader.ReadLittleEndian(value)) {
                 return DecodeStatus::MalformedPayload;
             }
@@ -380,7 +380,7 @@ DecodeStatus DecodeFieldValue(
             return DecodeStatus::Ok;
         }
         case FieldType::UInt64: {
-            std::uint64_t value = 0;
+            uint64 value = 0;
             if (!_reader.ReadLittleEndian(value)) {
                 return DecodeStatus::MalformedPayload;
             }
@@ -418,7 +418,7 @@ DecodeStatus DecodeFieldValue(
 
 } // namespace
 
-std::uint64_t ComputeSchemaHash(const SchemaDescriptor& _schema) noexcept {
+uint64 ComputeSchemaHash(const SchemaDescriptor& _schema) noexcept {
     if (!IsSchemaDescriptorHashable(_schema)) {
         return 0;
     }
@@ -427,13 +427,13 @@ std::uint64_t ComputeSchemaHash(const SchemaDescriptor& _schema) noexcept {
     hasher.AppendString(kSchemaHashDomain);
     hasher.AppendString(_schema.name);
     hasher.AppendString(_schema.event_type);
-    hasher.AppendByte(static_cast<std::uint8_t>(_schema.kind));
-    hasher.AppendByte(static_cast<std::uint8_t>(_schema.channel));
+    hasher.AppendByte(static_cast<uint8>(_schema.kind));
+    hasher.AppendByte(static_cast<uint8>(_schema.channel));
     hasher.AppendLittleEndian(_schema.schema_version);
-    hasher.AppendLittleEndian(static_cast<std::uint32_t>(_schema.fields.size()));
+    hasher.AppendLittleEndian(static_cast<uint32>(_schema.fields.size()));
     for (const SchemaField& field : _schema.fields) {
         hasher.AppendString(field.name);
-        hasher.AppendByte(static_cast<std::uint8_t>(field.type));
+        hasher.AppendByte(static_cast<uint8>(field.type));
     }
     return hasher.Finish();
 }
@@ -441,7 +441,7 @@ std::uint64_t ComputeSchemaHash(const SchemaDescriptor& _schema) noexcept {
 EncodeStatus EncodeSchemaPayload(
     const SchemaDescriptor& _schema,
     const CodecLimits&      _limits,
-    Array<std::uint8_t>&    _payload
+    Array<uint8>&           _payload
 ) {
     _payload.clear();
     const EncodeStatus validation = ValidateSchemaForEncoding(_schema, _limits);
@@ -450,9 +450,9 @@ EncodeStatus EncodeSchemaPayload(
     }
 
     std::size_t encoded_size =
-        sizeof(std::uint64_t) + sizeof(std::uint32_t) + sizeof(std::uint8_t) * 2 + sizeof(std::uint16_t);
+        sizeof(uint64) + sizeof(uint32) + sizeof(uint8) * 2 + sizeof(uint16);
     const auto include_string = [&](std::string_view text) {
-        const std::size_t additional_size = sizeof(std::uint32_t) + text.size();
+        const std::size_t additional_size = sizeof(uint32) + text.size();
         if (!CanGrowPayload(encoded_size, additional_size, _limits)) {
             return false;
         }
@@ -463,26 +463,26 @@ EncodeStatus EncodeSchemaPayload(
         return EncodeStatus::PayloadTooLarge;
     }
     for (const SchemaField& field : _schema.fields) {
-        if (!CanGrowPayload(encoded_size, sizeof(std::uint8_t), _limits)) {
+        if (!CanGrowPayload(encoded_size, sizeof(uint8), _limits)) {
             return EncodeStatus::PayloadTooLarge;
         }
-        encoded_size += sizeof(std::uint8_t);
+        encoded_size += sizeof(uint8);
         if (!include_string(field.name)) {
             return EncodeStatus::PayloadTooLarge;
         }
     }
 
-    Array<std::uint8_t> encoded;
+    Array<uint8> encoded;
     encoded.reserve(encoded_size);
     AppendLittleEndian(encoded, ComputeSchemaHash(_schema));
     AppendLittleEndian(encoded, _schema.schema_version);
-    encoded.emplace_back(static_cast<std::uint8_t>(_schema.kind));
-    encoded.emplace_back(static_cast<std::uint8_t>(_schema.channel));
-    AppendLittleEndian(encoded, static_cast<std::uint16_t>(_schema.fields.size()));
+    encoded.emplace_back(static_cast<uint8>(_schema.kind));
+    encoded.emplace_back(static_cast<uint8>(_schema.channel));
+    AppendLittleEndian(encoded, static_cast<uint16>(_schema.fields.size()));
     AppendString(encoded, _schema.name);
     AppendString(encoded, _schema.event_type);
     for (const SchemaField& field : _schema.fields) {
-        encoded.emplace_back(static_cast<std::uint8_t>(field.type));
+        encoded.emplace_back(static_cast<uint8>(field.type));
         AppendString(encoded, field.name);
     }
 
@@ -495,12 +495,12 @@ EncodeStatus EncodeSchemaPayload(
 }
 
 EncodeStatus EncodeRecordPayload(
-    std::uint64_t                   _schema_hash,
-    std::uint64_t                   _sequence,
+    uint64                          _schema_hash,
+    uint64                          _sequence,
     std::span<const SchemaField>    _fields,
     std::span<const FieldValueView> _values,
     const CodecLimits&              _limits,
-    Array<std::uint8_t>&            _payload
+    Array<uint8>&                   _payload
 ) {
     _payload.clear();
     if (_schema_hash == 0) {
@@ -513,7 +513,7 @@ EncodeStatus EncodeRecordPayload(
         return EncodeStatus::PayloadTooLarge;
     }
 
-    Array<std::uint8_t> encoded_values;
+    Array<uint8> encoded_values;
     encoded_values.reserve(_limits.max_packet_payload_bytes < 128 ? _limits.max_packet_payload_bytes : 128);
     for (std::size_t field_index = 0; field_index < _fields.size(); ++field_index) {
         if (!IsValidFieldType(_fields[field_index].type)) {
@@ -522,17 +522,17 @@ EncodeStatus EncodeRecordPayload(
         std::size_t encoded_field_size = 0;
         switch (_fields[field_index].type) {
             case FieldType::Bool:
-                encoded_field_size = sizeof(std::uint8_t);
+                encoded_field_size = sizeof(uint8);
                 break;
             case FieldType::Int32:
             case FieldType::UInt32:
             case FieldType::Float32:
-                encoded_field_size = sizeof(std::uint32_t);
+                encoded_field_size = sizeof(uint32);
                 break;
             case FieldType::Int64:
             case FieldType::UInt64:
             case FieldType::Float64:
-                encoded_field_size = sizeof(std::uint64_t);
+                encoded_field_size = sizeof(uint64);
                 break;
             case FieldType::String:
                 if (HoldsFieldValue<std::string_view>(_values[field_index])) {
@@ -540,7 +540,7 @@ EncodeStatus EncodeRecordPayload(
                     if (!CanEncodeU32Length(text.size()) || text.size() > _limits.max_string_bytes) {
                         return EncodeStatus::StringTooLarge;
                     }
-                    encoded_field_size = sizeof(std::uint32_t) + text.size();
+                    encoded_field_size = sizeof(uint32) + text.size();
                 }
                 break;
         }
@@ -553,7 +553,7 @@ EncodeStatus EncodeRecordPayload(
             return status;
         }
         if (encoded_values.size() > _limits.max_packet_payload_bytes ||
-            encoded_values.size() > std::numeric_limits<std::uint32_t>::max()) {
+            encoded_values.size() > std::numeric_limits<uint32>::max()) {
             return EncodeStatus::PayloadTooLarge;
         }
     }
@@ -563,18 +563,18 @@ EncodeStatus EncodeRecordPayload(
         return EncodeStatus::PayloadTooLarge;
     }
 
-    Array<std::uint8_t> encoded;
+    Array<uint8> encoded;
     encoded.reserve(kRecordPrefixBytes + encoded_values.size());
     AppendLittleEndian(encoded, _schema_hash);
     AppendLittleEndian(encoded, _sequence);
-    AppendLittleEndian(encoded, static_cast<std::uint32_t>(encoded_values.size()));
+    AppendLittleEndian(encoded, static_cast<uint32>(encoded_values.size()));
     encoded.insert(encoded.end(), encoded_values.begin(), encoded_values.end());
     _payload = std::move(encoded);
     return EncodeStatus::Ok;
 }
 
-void EncodeLossPayload(const LossNotice& _loss, Array<std::uint8_t>& _payload) {
-    Array<std::uint8_t> encoded;
+void EncodeLossPayload(const LossNotice& _loss, Array<uint8>& _payload) {
+    Array<uint8> encoded;
     encoded.reserve(kLossPayloadBytes);
     AppendLittleEndian(encoded, _loss.first_sequence);
     AppendLittleEndian(encoded, _loss.last_sequence);
@@ -584,16 +584,16 @@ void EncodeLossPayload(const LossNotice& _loss, Array<std::uint8_t>& _payload) {
     _payload = std::move(encoded);
 }
 
-void EncodeSessionBeginPayload(const SessionBeginInfo& _session, Array<std::uint8_t>& _payload) {
-    Array<std::uint8_t> encoded;
+void EncodeSessionBeginPayload(const SessionBeginInfo& _session, Array<uint8>& _payload) {
+    Array<uint8> encoded;
     encoded.reserve(kSessionBeginPayloadBytes);
     AppendLittleEndian(encoded, _session.generation);
     AppendLittleEndian(encoded, _session.started_unix_ns);
     _payload = std::move(encoded);
 }
 
-void EncodeSessionEndPayload(const SessionEndInfo& _session, Array<std::uint8_t>& _payload) {
-    Array<std::uint8_t> encoded;
+void EncodeSessionEndPayload(const SessionEndInfo& _session, Array<uint8>& _payload) {
+    Array<uint8> encoded;
     encoded.reserve(kSessionEndPayloadBytes);
     AppendLittleEndian(encoded, _session.generation);
     AppendLittleEndian(encoded, _session.records_written);
@@ -602,11 +602,11 @@ void EncodeSessionEndPayload(const SessionEndInfo& _session, Array<std::uint8_t>
 }
 
 EncodeStatus WrapPacket(
-    PacketType                    _type,
-    std::uint64_t                 _packet_index,
-    std::span<const std::uint8_t> _payload,
-    const CodecLimits&            _limits,
-    Array<std::uint8_t>&          _packet
+    PacketType             _type,
+    uint64                 _packet_index,
+    std::span<const uint8> _payload,
+    const CodecLimits&     _limits,
+    Array<uint8>&          _packet
 ) {
     if (!IsValidPacketType(_type)) {
         _packet.clear();
@@ -617,17 +617,17 @@ EncodeStatus WrapPacket(
         return EncodeStatus::PayloadTooLarge;
     }
 
-    Array<std::uint8_t> encoded;
+    Array<uint8> encoded;
     encoded.reserve(kPacketHeaderBytes + _payload.size());
     AppendLittleEndian(encoded, kPacketMagic);
     AppendLittleEndian(encoded, kWireVersion);
     AppendLittleEndian(encoded, kPacketHeaderBytes);
-    AppendLittleEndian(encoded, static_cast<std::uint16_t>(_type));
-    AppendLittleEndian(encoded, std::uint16_t{0});
-    AppendLittleEndian(encoded, static_cast<std::uint32_t>(_payload.size()));
+    AppendLittleEndian(encoded, static_cast<uint16>(_type));
+    AppendLittleEndian(encoded, uint16{0});
+    AppendLittleEndian(encoded, static_cast<uint32>(_payload.size()));
     AppendLittleEndian(encoded, _packet_index);
     AppendLittleEndian(encoded, ComputeCrc32(_payload));
-    AppendLittleEndian(encoded, ComputeCrc32(std::span<const std::uint8_t>(encoded.data(), kHeaderCrcBytes)));
+    AppendLittleEndian(encoded, ComputeCrc32(std::span<const uint8>(encoded.data(), kHeaderCrcBytes)));
     encoded.insert(encoded.end(), _payload.begin(), _payload.end());
 
     _packet = std::move(encoded);
@@ -635,10 +635,10 @@ EncodeStatus WrapPacket(
 }
 
 DecodeStatus DecodePacket(
-    std::span<const std::uint8_t> _input,
-    const CodecLimits&            _limits,
-    PacketView&                   _packet,
-    std::size_t&                  _consumed
+    std::span<const uint8> _input,
+    const CodecLimits&     _limits,
+    PacketView&            _packet,
+    std::size_t&           _consumed
 ) noexcept {
     _consumed = 0;
     _packet   = {};
@@ -649,7 +649,7 @@ DecodeStatus DecodePacket(
 
     ByteReader    reader(_input.first(kPacketHeaderBytes));
     PacketHeader  header{};
-    std::uint16_t packet_type = 0;
+    uint16        packet_type = 0;
     if (!reader.ReadLittleEndian(header.magic) || !reader.ReadLittleEndian(header.wire_version) ||
         !reader.ReadLittleEndian(header.header_bytes) || !reader.ReadLittleEndian(packet_type) ||
         !reader.ReadLittleEndian(header.flags) || !reader.ReadLittleEndian(header.payload_bytes) ||
@@ -686,7 +686,7 @@ DecodeStatus DecodePacket(
         return DecodeStatus::NeedMoreData;
     }
 
-    const std::span<const std::uint8_t> payload = _input.subspan(kPacketHeaderBytes, payload_size);
+    const std::span<const uint8> payload = _input.subspan(kPacketHeaderBytes, payload_size);
     if (ComputeCrc32(payload) != header.payload_crc32) {
         return DecodeStatus::ChecksumMismatch;
     }
@@ -707,10 +707,10 @@ DecodeSchemaPayload(const PacketView& _packet, const CodecLimits& _limits, Schem
     }
 
     ByteReader       reader(_packet.payload);
-    std::uint64_t    encoded_hash    = 0;
-    std::uint8_t     encoded_kind    = 0;
-    std::uint8_t     encoded_channel = 0;
-    std::uint16_t    field_count     = 0;
+    uint64           encoded_hash    = 0;
+    uint8            encoded_kind    = 0;
+    uint8            encoded_channel = 0;
+    uint16           field_count     = 0;
     SchemaDescriptor decoded{};
     if (!reader.ReadLittleEndian(encoded_hash) || !reader.ReadLittleEndian(decoded.schema_version) ||
         !reader.ReadLittleEndian(encoded_kind) || !reader.ReadLittleEndian(encoded_channel) ||
@@ -740,8 +740,8 @@ DecodeSchemaPayload(const PacketView& _packet, const CodecLimits& _limits, Schem
     }
 
     decoded.fields.reserve(field_count);
-    for (std::uint16_t field_index = 0; field_index < field_count; ++field_index) {
-        std::uint8_t encoded_type = 0;
+    for (uint16 field_index = 0; field_index < field_count; ++field_index) {
+        uint8        encoded_type = 0;
         SchemaField  field{};
         if (!reader.ReadLittleEndian(encoded_type)) {
             return DecodeStatus::MalformedPayload;
@@ -791,7 +791,7 @@ DecodeStatus DecodeRecordPayload(
 
     ByteReader    reader(_packet.payload);
     DecodedRecord decoded{};
-    std::uint32_t value_bytes = 0;
+    uint32        value_bytes = 0;
     if (!reader.ReadLittleEndian(decoded.schema_hash) || !reader.ReadLittleEndian(decoded.sequence) ||
         !reader.ReadLittleEndian(value_bytes)) {
         return DecodeStatus::MalformedPayload;
@@ -800,7 +800,7 @@ DecodeStatus DecodeRecordPayload(
         return DecodeStatus::UnknownSchema;
     }
 
-    std::span<const std::uint8_t> encoded_values;
+    std::span<const uint8> encoded_values;
     if (!reader.ReadSpan(value_bytes, encoded_values) || !reader.AtEnd()) {
         return DecodeStatus::MalformedPayload;
     }
@@ -839,11 +839,11 @@ DecodeStatus DecodeLossPayload(const PacketView& _packet, LossNotice& _loss) noe
         return DecodeStatus::MalformedPayload;
     }
 
-    constexpr std::uint32_t known_reason_mask = static_cast<std::uint32_t>(LossReason::Oversized) |
-                                                static_cast<std::uint32_t>(LossReason::QueueFull) |
-                                                static_cast<std::uint32_t>(LossReason::StaleGeneration) |
-                                                static_cast<std::uint32_t>(LossReason::AfterShutdown) |
-                                                static_cast<std::uint32_t>(LossReason::SinkFault);
+    constexpr uint32 known_reason_mask = static_cast<uint32>(LossReason::Oversized) |
+                                         static_cast<uint32>(LossReason::QueueFull) |
+                                         static_cast<uint32>(LossReason::StaleGeneration) |
+                                         static_cast<uint32>(LossReason::AfterShutdown) |
+                                         static_cast<uint32>(LossReason::SinkFault);
     if (decoded.record_count == 0 || decoded.first_sequence > decoded.last_sequence ||
         decoded.record_count - 1 > decoded.last_sequence - decoded.first_sequence ||
         decoded.reason_mask == 0 || (decoded.reason_mask & ~known_reason_mask) != 0) {

@@ -1,6 +1,8 @@
 #ifndef MOER_ANTIALIASPASS_H
 #define MOER_ANTIALIASPASS_H
 
+#include "misc/Types.h"
+
 // 提供时序抗锯齿 Pass 和逐帧相机抖动。
 
 #include "RaytracingGraphResources.h"
@@ -56,13 +58,6 @@ public:
 
     AntialiasPass(RenderDevice& device, class ShaderManager& manager, CreateInfo info);
 
-    void Process(
-        CommandList& _cmd_list,
-        Params       _params,
-        bool         _prev_view_valid,
-        TextureRef   _input,
-        TextureRef   _output
-    );
     void RebindResources(const CreateInfo& info);
     bool AddPasses(
         RenderGraph&                 graph,
@@ -76,7 +71,6 @@ public:
     void   CommitAcceptedFrame();
     void   SetJitter(EJitter _jitter_mode);
     float2 GetPixelOffset() const;
-    bool   IsHistoryReadyForGraph() const;
 
 private:
     struct SetupInput {
@@ -96,7 +90,7 @@ private:
         DEFINE_RG_BUFFER_ACCESS(
             constants,
             RenderGraph::AccessMode::Write,
-            RenderGraph::BufferState::TransferDestination
+            RenderGraph::BufferAccessType::TransferDestination
         );
         SharedPtr<RecordingOwner> owner{};
         RGPreparedValue<PreparedCommand> command{};
@@ -108,32 +102,32 @@ private:
         DEFINE_RG_BUFFER_ACCESS(
             constants,
             RenderGraph::AccessMode::Read,
-            RenderGraph::BufferState::ShaderResource
+            RenderGraph::BufferAccessType::ShaderRead
         );
         DEFINE_RG_TEXTURE_ACCESS(
             hdr_color,
             RenderGraph::AccessMode::Read,
-            RenderGraph::TextureState::Sampled
+            RenderGraph::TextureAccessType::Sampled
         );
         DEFINE_RG_TEXTURE_ACCESS(
             motion,
             RenderGraph::AccessMode::Read,
-            RenderGraph::TextureState::Sampled
+            RenderGraph::TextureAccessType::Sampled
         );
         DEFINE_RG_TEXTURE_ACCESS(
             feedback_read,
             RenderGraph::AccessMode::Read,
-            RenderGraph::TextureState::Sampled
+            RenderGraph::TextureAccessType::Sampled
         );
         DEFINE_RG_TEXTURE_ACCESS(
             resolved_color,
             RenderGraph::AccessMode::Write,
-            RenderGraph::TextureState::UnorderedAccess
+            RenderGraph::TextureAccessType::Storage
         );
         DEFINE_RG_TEXTURE_ACCESS(
             feedback_write,
             RenderGraph::AccessMode::Write,
-            RenderGraph::TextureState::UnorderedAccess
+            RenderGraph::TextureAccessType::Storage
         );
         SharedPtr<RecordingOwner> owner{};
         RGPreparedValue<PreparedCommand> command{};
@@ -172,16 +166,13 @@ private:
         const RecordResources& resources
     );
 
-    uint    frame_idx   = 0;
+    uint32  frame_idx   = 0;
     float2  jitter      = float2(0.f);
     EJitter jitter_mode = EJitter::MSAA;
 
     TextureRef motion;
     TextureRef feedback_color_ping;
     TextureRef feedback_color_pong;
-    TextureRef feedback_slot_zero;
-    TextureRef feedback_slot_one;
-    uint8      initialized_history_mask = 0;
 
     SharedPtr<RecordingOwner> recording_owner;
 };

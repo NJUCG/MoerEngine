@@ -1,7 +1,12 @@
 #pragma once
 
 #include "AssetTool.h"
+#include "misc/Types.h"
+#include "renderer/common/GraphResourceBoundary.h"
 #include "rhi/RHIResource.h"
+
+#include <algorithm>
+#include <bit>
 
 namespace Moer::Render::Raster {
 
@@ -16,7 +21,7 @@ namespace Moer::Render::Raster {
 // Full-resolution only textures
 #define RASTER_TEXTURES_TABLE                                                                                   \
     X(TexHandle, base_color, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))           \
-    X(TexHandle, normal, Tex2DTag, TexConfig::Default(PF_A2R10G10B10_UNORM_PACK32).Usage(E_SAMPLED_COLOR))      \
+    X(TexHandle, normal, Tex2DTag, TexConfig::Default(PF_A2B10G10R10_UNORM_PACK32).Usage(E_SAMPLED_COLOR))      \
     X(TexHandle, metal_rough_ao, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))       \
     X(TexHandle, shadow_mask, Tex2DTag, TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR))                 \
     X(TexHandle, lighting_output, Tex2DTag, TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))  \
@@ -39,7 +44,7 @@ namespace Moer::Render::Raster {
       TexConfig::Default(PF_B10G11R11_UFLOAT_PACK32)                                                            \
           .Usage(E_SAMPLED_COLOR)                                                                               \
           .Mips(6)                                                                                              \
-          .IndivisualMips()                                                                                     \
+          .IndividualMips()                                                                                     \
           .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(TexHandle,                                                                                                \
       bloom_upsample_chain,                                                                                     \
@@ -47,14 +52,14 @@ namespace Moer::Render::Raster {
       TexConfig::Default(PF_B10G11R11_UFLOAT_PACK32)                                                            \
           .Usage(E_SAMPLED_COLOR)                                                                               \
           .Mips(6)                                                                                              \
-          .IndivisualMips()                                                                                     \
+          .IndividualMips()                                                                                     \
           .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(TexHandle, tonemapping_output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))    \
     X(TexHandle,                                                                                                \
       output,                                                                                                   \
       Tex2DTag,                                                                                                 \
       TexConfig::Default(PF_R8G8B8A8_SRGB)                                                                      \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::PRESENTATION_SOURCE |                                    \
+          .Usage(E_SAMPLED_COLOR |                                                                             \
                  ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST)                           \
           .OutputSize())                                                                                        \
     X(DepthBufferWithHandle,                                                                                    \
@@ -102,29 +107,37 @@ namespace Moer::Render::Raster {
 // Textures that also have a half-resolution (size/2) variant (NAME_half)
 // Used for AO half-resolution mode
 #define RASTER_TEXTURES_TABLE_DOWNSAMPLED                                                          \
+    X(TexHandle, ao_indirect, Tex2DTag,                                                            \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))                             \
+    X(TexHandle, ao_history_geometry, Tex2DTag,                                                    \
+      TexConfig::Default(PF_R32G32B32A32_UINT)                                                     \
+          .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS))               \
+    X(TexHandle, ao_history_geometry_1, Tex2DTag,                                                  \
+      TexConfig::Default(PF_R32G32B32A32_UINT)                                                     \
+          .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS))               \
     X(TexHandle,                                                                                   \
       ao_output_ambient_only,                                                                      \
       Tex2DTag,                                                                                    \
       TexConfig::Default(PF_R8_UNORM)                                                              \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).DownSampled())            \
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                          \
     X(TexHandle,                                                                                   \
       ao_output_ambient_only_1,                                                                    \
       Tex2DTag,                                                                                    \
       TexConfig::Default(PF_R8_UNORM)                                                              \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).DownSampled())            \
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                          \
     X(TexHandle,                                                                                   \
       ao_denoiser_accumulate,                                                                      \
       Tex2DTag,                                                                                    \
-      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR).DownSampled())                        \
+      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR))                                      \
     X(TexHandle,                                                                                   \
       ao_denoiser_accumulate_1,                                                                    \
       Tex2DTag,                                                                                    \
-      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR).DownSampled())                        \
+      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR))                                      \
     X(TexHandle,                                                                                   \
       camera_motion_vector,                                                                        \
       Tex2DTag,                                                                                    \
       TexConfig::Default(PF_R16G16_SFLOAT)                                                         \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).DownSampled())
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))
 
 struct RasterTextures {
     // Full-resolution textures
@@ -141,23 +154,15 @@ struct RasterTextures {
     TextureWithHandle hiz_current;
     TextureWithHandle hiz_previous;
 
-    static uint GetHiZMipCount(const uint2& size) {
-        uint max_dim   = size.x > size.y ? size.x : size.y;
-        uint mip_count = 1;
-
-        while (max_dim > 1) {
-            max_dim >>= 1;
-            mip_count++;
-        }
-
-        return mip_count;
+    static uint32 GetHiZMipCount(const uint2& size) {
+        return std::bit_width(std::max({1u, size.x, size.y}));
     }
 
     static TexConfig CreateHiZConfig(const uint2& size) {
         TexConfig cfg = TexConfig::Default(PF_R16_SFLOAT)
                             .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS)
                             .Mips(GetHiZMipCount(size))
-                            .IndivisualMips()
+                            .IndividualMips()
                             .SamplerConfig(SF_NEAREST, SAM_CLAMP_TO_EDGE);
         return cfg;
     }
@@ -205,6 +210,30 @@ struct RasterTextures {
             AssetTool::CreateRasterResource<Tex2DTag>(
                 hiz_previous, device, "hiz_previous", scene_size, hiz_cfg, false
             );
+        }
+        Array<TextureRef> initialized;
+#define X(TYPE, NAME, TEXTYPE, CONFIG)                                                               \
+    {                                                                                                \
+        const TexConfig cfg = (CONFIG);                                                              \
+        if (!cfg.is_asset && (cfg.b_output_size ? create_output_resources : create_scene_resources)) \
+            initialized.emplace_back(NAME.tex->GetView().GetTexture());                              \
+    }
+        RASTER_TEXTURES_TABLE
+        RASTER_TEXTURES_TABLE_DOWNSAMPLED
+#undef X
+        if (create_scene_resources) {
+#define X(TYPE, NAME, TEXTYPE, CONFIG) initialized.emplace_back(NAME##_half.tex->GetView().GetTexture());
+            RASTER_TEXTURES_TABLE_DOWNSAMPLED
+#undef X
+            initialized.emplace_back(hiz_current.tex);
+            initialized.emplace_back(hiz_previous.tex);
+        }
+        std::erase_if(initialized, [&](const auto& texture) {
+            return texture.Get() == output.tex.Get();
+        });
+        InitializeGraphicsTextures(initialized);
+        if (create_output_resources) {
+            InitializeGraphicsTexture(output.tex, RenderGraph::TextureAccessType::TransferSource);
         }
     }
 

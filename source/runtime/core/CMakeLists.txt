@@ -23,6 +23,10 @@ else()
     add_library(${target_name} STATIC ${core_headers} ${core_sources} ${core_private_headers})
 endif()
 add_library(Moer::Core ALIAS ${target_name})
+target_compile_definitions(${target_name} PUBLIC MOER_RDG_DIAGNOSTICS=$<BOOL:${MOER_RDG_DIAGNOSTICS}>)
+if(MOER_RDG_DIAGNOSTICS)
+    target_sources(${target_name} PRIVATE "${moer_source_dir}/test/diagnostics/RdgDiagnostics.cpp")
+endif()
 
 set_target_properties(${target_name} PROPERTIES FOLDER "runtime")
 

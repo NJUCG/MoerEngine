@@ -1,6 +1,9 @@
 // 负责 Dear ImGui 上下文、GPU 资源、绘制数据复制以及多视口交换链的完整后端流程。
 
 #include "DearImGuiRenderer.h"
+#include "misc/Types.h"
+#include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraphUpload.h"
 
 #include "GLFW/glfw3.h"
 #include "IconsFontAwesome6.h"
@@ -13,7 +16,7 @@
 #include "misc/MMemory.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -50,10 +53,10 @@ struct GuiViewportData;
 
 void InitializeGuiPlatformInterface();
 bool RefreshGuiViewportPresentation(
-    ImGuiViewport*                      viewport,
-    Moer::Render::GuiViewportData&      viewport_data,
-    Moer::Render::RenderDevice&         device,
-    uint32_t                            frames_in_flight
+    ImGuiViewport*                 viewport,
+    Moer::Render::GuiViewportData& viewport_data,
+    Moer::Render::RenderDevice&    device,
+    uint32                         frames_in_flight
 );
 void RenderGuiDrawPacket(
     const UiViewportDrawPacket& _draw_packet,
@@ -68,10 +71,10 @@ namespace Moer::Render {
 struct ImGuiDrawArgument {
     ImVec2 min_xy;
     ImVec2 max_xy;
-    uint   image_handle;
-    uint   padding;
-    uint   padding2;
-    uint   padding3;
+    uint32 image_handle;
+    uint32 padding;
+    uint32 padding2;
+    uint32 padding3;
 };
 
 enum class EFontType {
@@ -119,9 +122,9 @@ struct GuiViewportRenderResources final : UiViewportRenderResources {
 
     Array<GuiFrameRenderBuffers> render_buffers;
 
-    uint64_t frame_index = 0;
+    uint64 frame_index = 0;
 
-    explicit GuiViewportRenderResources(uint32_t _frame_in_flight) :
+    explicit GuiViewportRenderResources(uint32 _frame_in_flight) :
         presentation_feedback_mailbox(
             MakeShared<PresentFeedbackMailbox>()
         ),
@@ -144,15 +147,15 @@ struct GuiViewportRenderResources final : UiViewportRenderResources {
                presentation_feedback_mailbox->HasPendingRecovery();
     }
 
-    uint64_t GetPendingRecordingSlot() const noexcept override {
+    uint64 GetPendingRecordingSlot() const noexcept override {
         return frame_index;
     }
 
-    bool IsPendingRecordingSlot(uint64_t slot) const noexcept override {
+    bool IsPendingRecordingSlot(uint64 slot) const noexcept override {
         return slot == frame_index;
     }
 
-    void CommitRecordingSlot(uint64_t slot) noexcept override {
+    void CommitRecordingSlot(uint64 slot) noexcept override {
         assert(slot == frame_index);
         if (slot == frame_index) {
             ++frame_index;
@@ -167,10 +170,10 @@ struct GuiViewportData {
     WindowFrameSnapshot                   latest_window_frame;
     bool                                  presentation_refresh_pending = true;
 
-    uint32_t        viewport_index = 0;
-    static uint32_t viewport_count;
+    uint32        viewport_index = 0;
+    static uint32 viewport_count;
 
-    explicit GuiViewportData(uint32_t _frame_in_flight) :
+    explicit GuiViewportData(uint32 _frame_in_flight) :
         render_resources(MakeShared<GuiViewportRenderResources>(_frame_in_flight)),
         viewport_index(viewport_count++) {}
     ~GuiViewportData() {
@@ -183,7 +186,7 @@ struct ImGuiData {
     UnorderedMap<EPixelFormat, GuiPipeline> pipelines_by_format;
 
     TextureRef font_texture;
-    uint32_t frames_in_flight;
+    uint32     frames_in_flight;
 
     ImGuiRenderBackend* render_backend = nullptr;
 };
@@ -305,14 +308,14 @@ static void LoadImGuiLayout(ImGuiIO& _io, std::string& _owned_ini_filename) {
     ImGui::SaveIniSettingsToDisk(_io.IniFilename);
 }
 
-static uint UploadFontAtlasAndCreatePipelines(
+static uint32 UploadFontAtlasAndCreatePipelines(
     ImGuiRenderBackend& _backend,
     ImGuiData*          _backend_data,
     int                 _width,
     int                 _height,
     Array<byte>         _font_pixels
 ) {
-    uint font_texture_handle = 0;
+    uint32 font_texture_handle = 0;
     RunRenderThreadControlAndWait(
         [&_backend,
          _backend_data,
@@ -351,7 +354,9 @@ static uint UploadFontAtlasAndCreatePipelines(
                 Extent2D(_width, _height), PF_R8G8B8A8_UNORM, ETextureUsageFlags::SAMPLED
             );
             CommandList cmd_list;
-            cmd_list.CopyFrom(std::move(font_pixels), font_texture);
+            RecordNewGraphicsTextureUpload(
+                cmd_list, std::span<const byte>(font_pixels.data(), font_pixels.size()), font_texture
+            );
 
             RHIExecutor::Get().Submit(
                 EQueueType::Graphics,
@@ -388,7 +393,7 @@ ImGuiRenderBackend::ImGuiRenderBackend(RenderDevice& _device) : device(_device) 
     LoadImGuiLayout(io, imgui_ini_filename);
 
     const auto&    config              = Moer::ConfigManager::GetInstance().GetConfig();
-    const uint32_t frames_in_flight    = config.engine.rhi.max_frame_in_flight;
+    const uint32   frames_in_flight           = config.engine.rhi.max_frame_in_flight;
     auto*          render_backend_data = MoerNew(ImGuiData)();
     render_backend_data->frames_in_flight     = frames_in_flight;
     render_backend_data->render_backend       = this;
@@ -401,7 +406,7 @@ ImGuiRenderBackend::ImGuiRenderBackend(RenderDevice& _device) : device(_device) 
 
     ImGui::GetMainViewport()->RendererUserData = MoerNew(GuiViewportData)(frames_in_flight);
 
-    uint8_t* font_atlas_pixels = nullptr;
+    uint8*   font_atlas_pixels = nullptr;
     int      font_atlas_width  = 0;
     int      font_atlas_height = 0;
     // 字体图集必须在创建首帧 GPU 资源前同步生成，避免首帧引用尚未就绪的纹理。
@@ -411,7 +416,7 @@ ImGuiRenderBackend::ImGuiRenderBackend(RenderDevice& _device) : device(_device) 
     Array<byte> font_pixels(font_byte_size);
     std::memcpy(font_pixels.data(), font_atlas_pixels, font_byte_size);
 
-    const uint font_texture_handle = UploadFontAtlasAndCreatePipelines(
+    const uint32 font_texture_handle = UploadFontAtlasAndCreatePipelines(
         *this, render_backend_data, font_atlas_width, font_atlas_height, std::move(font_pixels)
     );
     io.Fonts->SetTexID(font_texture_handle);
@@ -462,7 +467,7 @@ void ImGuiRenderBackend::RegisterImage(Texture* _texture, Sampler _sampler) {
     RunRenderThreadControlAndWait([this, texture, _sampler]() {
         auto iter = registered_images.try_emplace(texture.Get(), 0);
         if (iter.second) {
-            uint handle =
+            uint32 handle =
                 bindless_array->AllocateTexture(texture->GetView(0, texture->GetNumMips()), _sampler);
             iter.first->second = handle;
         }
@@ -527,7 +532,7 @@ CaptureViewportDrawPacket(ImDrawData* _draw_data, GuiViewportData* _viewport_dat
     size_t vertex_offset       = 0;
     size_t index_offset        = 0;
     uint32 total_command_count = 0;
-    for (int32_t list_index = 0; list_index < _draw_data->CmdListsCount; ++list_index) {
+    for (int32 list_index = 0; list_index < _draw_data->CmdListsCount; ++list_index) {
         const ImDrawList* draw_list = _draw_data->CmdLists[list_index];
         std::memcpy(
             packet.vertices.data() + vertex_offset,
@@ -547,7 +552,7 @@ CaptureViewportDrawPacket(ImDrawData* _draw_data, GuiViewportData* _viewport_dat
     packet.commands.reserve(total_command_count);
     uint32 global_vertex_offset = 0;
     uint32 global_index_offset  = 0;
-    for (int32_t list_index = 0; list_index < _draw_data->CmdListsCount; ++list_index) {
+    for (int32 list_index = 0; list_index < _draw_data->CmdListsCount; ++list_index) {
         const ImDrawList* draw_list = _draw_data->CmdLists[list_index];
         for (const ImDrawCmd& draw_command : draw_list->CmdBuffer) {
             if (draw_command.UserCallback != nullptr) {
@@ -644,6 +649,33 @@ UiDrawFramePacket ImGuiRenderBackend::CaptureDrawFrame() {
     return frame;
 }
 
+Array<TextureRef> ImGuiRenderBackend::CollectSampledTextures(const UiDrawFramePacket& frame) const {
+    Array<TextureRef> textures;
+    const auto        collect = [&](const UiViewportDrawPacket& viewport) {
+        for (const auto& command : viewport.commands) {
+            const auto found =
+                std::find_if(registered_images.begin(), registered_images.end(), [&](const auto& image) {
+                    return image.second == command.texture_handle;
+                });
+            if (found == registered_images.end()) {
+                throw std::logic_error("UI draw references an unregistered image");
+            }
+            if (std::none_of(textures.begin(), textures.end(), [&](const auto& texture) {
+                    return texture.Get() == found->first;
+                })) {
+                textures.emplace_back(found->first);
+            }
+        }
+    };
+    collect(frame.main_viewport);
+    for (const auto& viewport : frame.platform_viewports) {
+        if (IsUiViewportPresentationCurrent(viewport)) {
+            collect(viewport);
+        }
+    }
+    return textures;
+}
+
 void ImGuiRenderBackend::RenderGUI(
     CommandList&           _cmd_list,
     const TextureView&     _main_framebuffer,
@@ -725,7 +757,7 @@ TextureRef ImGuiRenderBackend::GetWindowFrameBuffer(void* _window) {
 
 } // namespace Moer::Render
 
-uint32_t GuiViewportData::viewport_count = 0;
+uint32 GuiViewportData::viewport_count = 0;
 
 static void EnsureGuiRenderBufferCapacity(
     GuiFrameRenderBuffers& _buffers,
@@ -897,23 +929,68 @@ void RenderGuiDrawPacket(
     Array<MeshDrawData> draw_meshes;
     BuildGuiDrawBatch(_draw_packet, render_buffers, arguments, draw_meshes);
     auto constant = CreateGuiProjection(_draw_packet);
-    UploadGuiDrawData(_cmd_list, _draw_packet, arguments, render_buffers);
-
-    assert(_backend_data.pipelines_by_format.contains(_framebuffer.format) && "Unsupported GUI format");
-    _cmd_list
-        .Gfx(
-            _backend_data.pipelines_by_format[_framebuffer.format],
-            render_buffers.argument_buffer,
-            _render_backend.bindless_array,
-            constant
-        )
-        .Draw(
-            "ImGui Draws",
-            {0, 0, draw_width, draw_height},
-            std::move(draw_meshes),
-            ColorAttachment(_framebuffer.GetTexture(), EAttachmentAction::AC_LOAD_STORE)
-        );
-
+    auto record_draw = [&](CommandList& commands) {
+        assert(_backend_data.pipelines_by_format.contains(_framebuffer.format) && "Unsupported GUI format");
+        commands
+            .Gfx(
+                _backend_data.pipelines_by_format[_framebuffer.format],
+                render_buffers.argument_buffer,
+                _render_backend.bindless_array,
+                constant
+            )
+            .Draw(
+                "ImGui Draws",
+                {0, 0, draw_width, draw_height},
+                std::move(draw_meshes),
+                ColorAttachment(_framebuffer.GetTexture(), EAttachmentAction::AC_LOAD_STORE)
+            );
+    };
+    if (_cmd_list.GetResourceStateOwnership() != ERHIResourceStateOwnership::Compiled) {
+        UploadGuiDrawData(_cmd_list, _draw_packet, arguments, render_buffers);
+        record_draw(_cmd_list);
+        return;
+    }
+    // The parent pass owns image access. This small graph owns only the UI's
+    // private upload-ring buffers and leaves them at their documented read states.
+    RenderGraph graph("UI.PrivateBuffers", RenderGraph::QueueTopology::FromRHI());
+    const auto  import = [&](const char* name, const BufferRef& buffer, RenderGraph::BufferAccessType state) {
+        auto handle = graph.ImportBuffer(name, buffer, {.byte_size = buffer->GetByteSize()});
+        graph.SetInitialState(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        graph.Export(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        return handle;
+    };
+    const auto vertex =
+        import("Vertices", render_buffers.vertex_buffer, RenderGraph::BufferAccessType::VertexBuffer);
+    const auto index = import("Indices", render_buffers.index_buffer, RenderGraph::BufferAccessType::IndexBuffer);
+    const auto args =
+        import("Arguments", render_buffers.argument_buffer, RenderGraph::BufferAccessType::ShaderRead);
+    graph.AddRecordPass(
+        "UI.Upload",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(vertex, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(index, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(args, RenderGraph::BufferAccessType::TransferDestination);
+        },
+        [&](CommandList& commands) {
+            UploadGuiDrawData(commands, _draw_packet, arguments, render_buffers);
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    graph.AddRecordPass(
+        "UI.Draw",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(vertex, RenderGraph::BufferAccessType::VertexBuffer)
+                .Read(index, RenderGraph::BufferAccessType::IndexBuffer)
+                .Read(args, RenderGraph::BufferAccessType::ShaderRead)
+                .SideEffect();
+        },
+        record_draw,
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(_cmd_list, false)) {
+        throw std::runtime_error("UI private graph failed: " + graph.GetCompileError());
+    }
 }
 
 void GuiCreateWindow(ImGuiViewport* _viewport);
@@ -944,8 +1021,8 @@ bool CreateOrResizeViewportResources(
     const SharedPtr<GuiViewportRenderResources>& _resources,
     SwapchainSurfaceInfo                         _surface_info,
     WindowFrameSnapshot                          _window_frame,
-    uint32_t                                     _frame_in_flight,
-    uint32_t                                     _viewport_index
+    uint32                                       _frame_in_flight,
+    uint32                                       _viewport_index
 ) {
     assert(_resources);
     assert(!IsRenderThreadRunning() || IsCurrentlyRenderThread());
@@ -972,7 +1049,6 @@ bool CreateOrResizeViewportResources(
                         .usage =
                             ETextureUsageFlags::COLOR_ATTACHMENT |
                             ETextureUsageFlags::SAMPLED |
-                            ETextureUsageFlags::PRESENTATION_SOURCE |
                             ETextureUsageFlags::TRANSFER_SRC |
                             ETextureUsageFlags::TRANSFER_DST,
                     },
@@ -1011,7 +1087,7 @@ bool CreateOrResizeViewportResources(
 void ReleaseViewportResources(
     RenderDevice&                                _device,
     const SharedPtr<GuiViewportRenderResources>& _resources,
-    uint32_t                                     _viewport_index
+    uint32                                       _viewport_index
 ) {
     if (!_resources) {
         return;
@@ -1073,10 +1149,10 @@ ImGuiRenderBackend::~ImGuiRenderBackend() {
 }
 
 bool RefreshGuiViewportPresentation(
-    ImGuiViewport*    viewport,
-    GuiViewportData&  viewport_data,
-    RenderDevice&     device,
-    uint32_t          frames_in_flight
+    ImGuiViewport*   viewport,
+    GuiViewportData& viewport_data,
+    RenderDevice&    device,
+    uint32           frames_in_flight
 ) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
 

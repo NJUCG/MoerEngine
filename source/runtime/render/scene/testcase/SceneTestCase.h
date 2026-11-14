@@ -7,22 +7,22 @@
 #include "scene/Scene.h"
 #include "scene/testcase/SceneTestCaseId.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <string>
 #include <string_view>
 
 namespace Moer {
 
 struct SceneTestCaseContext {
-    std::uint64_t frame_index          = 0;
+    uint64        frame_index          = 0;
     float         elapsed_time_seconds = 0.f;
 };
 
 struct SceneTestCaseRunResult {
     ESceneTestCaseId test_case_id = ESceneTestCaseId::None;
     std::string      case_name;
-    std::uint64_t    begin_frame = 0;
-    std::uint64_t    end_frame   = 0;
+    uint64           begin_frame = 0;
+    uint64           end_frame   = 0;
     bool             passed      = false;
     std::string      failure_summary;
 };

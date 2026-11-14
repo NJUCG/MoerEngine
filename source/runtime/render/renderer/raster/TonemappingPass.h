@@ -3,6 +3,7 @@
 #include <bit>
 
 #include "math/Function.h"
+#include "misc/Types.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -14,7 +15,6 @@
 
 namespace Moer::Render::Raster {
 
-// 注意，ComputePipeline不支持隐式LOD采样，所以没法使用Bindless
 class TonemappingHistogramPipeline : public ComputePipeline {
 public:
     DEFINE_COMPUTE_PIPELINE_CLASS(TonemappingHistogramPipeline);
@@ -75,34 +75,39 @@ public:
         uint3                            histogram_groups{};
     };
 
-    TonemappingPass(RasterContext& context) {
+    TonemappingPass(RasterContext& context) :
+        TonemappingPass(
+            context.device,
+            context.manager,
+            context.textures.tonemapping_output.tex->GetFormat()
+        ) {}
+
+    TonemappingPass(RenderDevice& device, ShaderManager& manager, EPixelFormat output_format) {
         GfxPsoCreateInfo pso_full_screen_info(
-            RHIRasterizeInfo::Preset(),
-            {},
-            {RHIColorAttachmentInfo::Preset(context.textures.tonemapping_output.tex->GetFormat())}
+            RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(output_format)}
         );
 
         // Pipeline
-        tonemapping_pipeline = context.manager.Raster()
+        tonemapping_pipeline = manager.Raster()
                                    .Vertex("core/utils/FullScreenQuad.hlsl")
                                    .Pixel("pipelines/postprocess/color/Tonemapping.hlsl")
                                    .Build<TonemappingPipeline>(std::move(pso_full_screen_info));
 
-        tonemapping_histogram_pipeline = context.manager.Compute<TonemappingHistogramPipeline>(
+        tonemapping_histogram_pipeline = manager.Compute<TonemappingHistogramPipeline>(
             "pipelines/postprocess/color/TonemappingHistogram.hlsl"
         );
 
-        tonemapping_exposure_pipeline = context.manager.Compute<TonemappingExposurePipeline>(
+        tonemapping_exposure_pipeline = manager.Compute<TonemappingExposurePipeline>(
             "pipelines/postprocess/color/TonemappingExposure.hlsl"
         );
 
         // Buffer
-        histogram_buffer = context.device.CreateBuffer<uint>(
+        histogram_buffer = device.CreateBuffer<uint32>(
             "raster histogram buffer",
             TONEMAPPING_HISTOGRAM_BIN_COUNT,
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER
         );
-        exposure_buffer = context.device.CreateBuffer<uint>(
+        exposure_buffer = device.CreateBuffer<uint32>(
             "raster exposure buffer",
             1,
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TEXTURE_BUFFER |
@@ -110,11 +115,9 @@ public:
         );
     }
 
-    [[nodiscard]] RecordParameters Prepare(
-        const RasterContext& context,
-        const RasterConfig&  ui_config,
-        TextureWithHandle    input_image
-    ) const {
+    [[nodiscard]] RecordParameters
+    Prepare(const RasterContext& context, const RasterConfig& ui_config, TextureWithHandle input_image)
+        const {
         RecordParameters parameters{};
         parameters.input     = std::move(input_image);
         parameters.output    = context.textures.tonemapping_output;
@@ -171,13 +174,18 @@ public:
         return parameters;
     }
 
-    RenderGraph::PreparedPassHandle AddToGraph(
-        RenderGraph& graph,
+    void AddToGraph(
+        RenderGraph&         graph,
         const RasterContext& context,
-        const RasterConfig& ui_config,
-        TextureWithHandle input_image,
-        GraphResources resources
+        const RasterConfig&  ui_config,
+        TextureWithHandle    input_image,
+        GraphResources       resources
     );
+
+    /** The same four GPU stages can be embedded in a frame graph or executed
+     *  as an isolated compiled graph with explicit import/export boundaries. */
+    RENDER_API RenderGraph::PassHandle
+    AddRecordPasses(RenderGraph& graph, GraphResources resources, RGPreparedValue<RecordParameters> prepared);
 
     [[nodiscard]] const BufferRef& GetHistogramBuffer() const {
         return histogram_buffer;
@@ -189,59 +197,51 @@ public:
 
     // Restore neutral exposure before the next adaptation step.
     void ResetExposure(CommandList& cmd_list) {
-        cmd_list.ClearResource(exposure_buffer->GetView(), std::bit_cast<uint32_t>(1.0f));
+        cmd_list.ClearResource(exposure_buffer->GetView(), std::bit_cast<uint32>(1.0f));
+    }
+
+    void RecordClear(CommandList& cmd_list, const RecordParameters& parameters) {
+        cmd_list.ClearResource(parameters.histogram->GetView(), 0);
+    }
+
+    void RecordHistogram(CommandList& cmd_list, const RecordParameters& parameters) {
+        cmd_list
+            .Compute(
+                tonemapping_histogram_pipeline, parameters.shader, parameters.input.tex, parameters.histogram
+            )
+            .Dispatch(parameters.histogram_groups, "Tonemapping Histogram Pass");
+    }
+
+    void RecordExposure(CommandList& cmd_list, const RecordParameters& parameters) {
+        cmd_list
+            .Compute(
+                tonemapping_exposure_pipeline, parameters.shader, parameters.histogram, parameters.exposure
+            )
+            .Dispatch(uint3(1, 1, 1), "Tonemapping Exposure Pass");
+    }
+
+    void RecordTonemapping(CommandList& cmd_list, const RecordParameters& parameters) {
+        cmd_list
+            .Gfx(
+                tonemapping_pipeline,
+                parameters.shader,
+                parameters.input.tex,
+                parameters.exposure,
+                parameters.histogram
+            )
+            .Draw(
+                "Tonemapping Pass",
+                parameters.output.GetRect2D(),
+                std::move(RasterTool::GetFullScreenDrawDatas()),
+                ColorAttachment(parameters.output.tex)
+            );
     }
 
     void Record(CommandList& cmd_list, const RecordParameters& parameters) {
-        // Reset
-        {
-            cmd_list.ClearResource(parameters.histogram->GetView(), 0);
-            // 需要last_exposure，所以不能清零
-            // cmd_list.ClearResource(parameters.exposure->GetView(), 0);
-        }
-
-        // Histogram Pass
-        {
-            cmd_list.Compute(
-                        tonemapping_histogram_pipeline,
-                        parameters.shader,
-                        parameters.input.tex,
-                        parameters.histogram
-                    )
-                .Dispatch(
-                    parameters.histogram_groups,
-                    "Tonemapping Histogram Pass"
-                );
-        }
-
-        // Exposure Pass
-        {
-            cmd_list.Compute(
-                        tonemapping_exposure_pipeline,
-                        parameters.shader,
-                        parameters.histogram,
-                        parameters.exposure
-                    )
-                .Dispatch(uint3(1, 1, 1), "Tonemapping Exposure Pass");
-        }
-
-        // Tonemapping Pass
-        {
-            cmd_list
-                .Gfx(
-                    tonemapping_pipeline,
-                    parameters.shader,
-                    parameters.input.tex,
-                    parameters.exposure,
-                    parameters.histogram
-                )
-                .Draw(
-                    "Tonemapping Pass",
-                    parameters.output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.output.tex)
-                );
-        }
+        RecordClear(cmd_list, parameters);
+        RecordHistogram(cmd_list, parameters);
+        RecordExposure(cmd_list, parameters);
+        RecordTonemapping(cmd_list, parameters);
     }
 
     TextureWithHandle

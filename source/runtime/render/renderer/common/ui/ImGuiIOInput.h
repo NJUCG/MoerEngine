@@ -3,7 +3,7 @@
 #include "RenderAPI.h"
 #include "window/WindowInput.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 
 namespace Moer::Render {
 
@@ -16,6 +16,6 @@ namespace Moer::Render {
  * if they ever need the data.
  */
 [[nodiscard]] RENDER_API WindowInputSourceSnapshot
-CaptureImGuiIOInput(uint64_t capture_sequence);
+CaptureImGuiIOInput(uint64 capture_sequence);
 
 } // namespace Moer::Render

@@ -2,7 +2,7 @@
 
 [[vk::binding(0, 0)]] Texture2D src_color : register(t0);
 [[vk::binding(1, 0)]] SamplerState spl : register(s0);
-[[vk::binding(2, 0)]] RWTexture2D<float4> dst_color : register(u1);
+[[vk::binding(2, 0), vk::image_format("rgba16f")]] RWTexture2D<float4> dst_color : register(u1);
 
 [numthreads(256, 1, 1)] void main(uint2 gid
                                   : SV_GroupID, uint tid

@@ -1,3 +1,7 @@
+#include "misc/Types.h"
+#if MOER_VULKAN_TEST_SUPPORT
+#include "vulkan/VulkanFaultInjection.h"
+#endif
 #include "Engine.h"
 #include "EngineConsoleControl.h"
 
@@ -18,7 +22,6 @@
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
 #include "window/WindowContext.h"
-
 
 // Editor
 #include "renderer/common/RuntimeAssets.h"
@@ -52,13 +55,13 @@ namespace {
 
 using ThreadProfileClock = std::chrono::steady_clock;
 
-constexpr std::uint64_t kProfileCaptureValidationMinGpuFrames = 4;
-constexpr std::uint64_t kProfileCaptureValidationMaxGtTicks   = 60000;
+constexpr uint64 kProfileCaptureValidationMinGpuFrames = 4;
+constexpr uint64 kProfileCaptureValidationMaxGtTicks   = 60000;
 constexpr auto kProfileCaptureValidationTimeout = std::chrono::seconds(180);
 
 [[nodiscard]] bool ProfileDumpTerminalIsClean(
     const ProfileDump::RuntimeStats& _stats,
-    std::uint64_t                    _generation
+    uint64                           _generation
 ) noexcept {
     return _stats.state == ProfileDump::RuntimeState::Stopped &&
            _stats.last_fault == ProfileDump::RuntimeFault::None &&
@@ -241,25 +244,12 @@ StartupCVarOverrides ParseStartupCVarOverrides(int argc, const char** argv) {
 EngineConsoleStartupConfig MakeConsoleStartupConfig(const Config::GlobalConfig& config) {
     return {
         .render_thread = config.engine.threading.render_thread,
-        .rhi_thread = config.engine.threading.rhi_thread,
-        .rhi_bypass = config.engine.threading.rhi_bypass,
         .profile_logging = config.engine.threading.profile_logging,
-        .parallel_recording = config.engine.threading.parallel_recording,
-        .parallel_record_workers = config.engine.threading.parallel_record_workers,
-        .parallel_record_verify = config.engine.threading.parallel_record_verify,
-        .parallel_record_profile = config.engine.threading.parallel_record_profile,
-        .parallel_record_min_work_units_per_job =
-            config.engine.threading.parallel_record_min_work_units_per_job,
         .configured_submission_batch_window = config.engine.threading.submission_batch_window,
-        .rhi_heartbeat_enabled = config.engine.threading.rhi_heartbeat_enabled,
-        .rhi_heartbeat_stall_timeout_ms = config.engine.threading.rhi_heartbeat_stall_timeout_ms,
-        .rhi_heartbeat_poll_interval_ms = config.engine.threading.rhi_heartbeat_poll_interval_ms,
         .max_frame_lag = config.engine.threading.max_frame_lag,
         .max_frames_in_flight = config.engine.rhi.max_frame_in_flight,
-        .raster_rdg_enabled = config.engine.render.raster.render_graph,
         .raster_rdg_debug_dump = config.engine.render.raster.render_graph_debug_dump,
         .raster_rdg_parallel_recording = config.engine.render.raster.render_graph_parallel_recording,
-        .raytracing_rdg_enabled = config.engine.render.raytracing.render_graph,
         .raytracing_rdg_debug_dump = config.engine.render.raytracing.render_graph_debug_dump,
         .raytracing_rdg_parallel_recording =
             config.engine.render.raytracing.render_graph_parallel_recording,
@@ -270,109 +260,17 @@ void LogCVarOverrideIssue(const CVar::OverrideIssueView& issue, void*) {
     LOG_ERROR("[Config][CVar] {}: {}", issue.name, issue.detail);
 }
 
-uint64_t ParseVulkanPresentSubmitFaultTrigger(int argc, const char** argv) {
-    constexpr std::string_view argument_name = "--vulkan-fault-inject";
-    constexpr std::string_view prefix        = "--vulkan-fault-inject=";
-    constexpr std::string_view point_prefix  = "present-submit@";
-
-    std::optional<std::string_view> specification;
+void ValidateFaultInjectionArguments(int argc, const char** argv) {
+#if MOER_VULKAN_TEST_SUPPORT
+    Render::VulkanFaultInjection::ValidateCommandLine(argc, argv);
+#else
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument = argv[index];
-        std::optional<std::string_view> candidate;
-        if (argument == argument_name) {
-            if (index + 1 >= argc) {
-                throw std::invalid_argument("--vulkan-fault-inject requires <point>@<positive-count>");
-            }
-            candidate = std::string_view(argv[++index]);
-        } else if (argument.starts_with(prefix)) {
-            candidate = argument.substr(prefix.size());
+        if (argument == "--vulkan-fault-inject" || argument.starts_with("--vulkan-fault-inject=")) {
+            throw std::invalid_argument("Vulkan fault injection requires MOER_VULKAN_TEST_SUPPORT=ON");
         }
-
-        if (!candidate.has_value()) {
-            continue;
-        }
-        if (specification.has_value()) {
-            throw std::invalid_argument("--vulkan-fault-inject may be specified only once");
-        }
-        specification = *candidate;
     }
-
-    if (!specification.has_value()) {
-        return 0;
-    }
-    if (!specification->starts_with(point_prefix)) {
-        throw std::invalid_argument(
-            "unsupported Vulkan fault point; expected present-submit@<positive-count>"
-        );
-    }
-
-    const std::string_view count_text = specification->substr(point_prefix.size());
-    uint64_t               count      = 0;
-    const auto [end, error] = std::from_chars(
-        count_text.data(), count_text.data() + count_text.size(), count
-    );
-    if (count_text.empty() || error != std::errc{} || end != count_text.data() + count_text.size() ||
-        count == 0) {
-        throw std::invalid_argument(
-            "Vulkan fault trigger count must be a positive integer: present-submit@<positive-count>"
-        );
-    }
-    return count;
-}
-
-uint64_t ParseParallelRecordWorkerThrowTrigger(int argc, const char** argv) {
-    constexpr std::string_view argument_name = "--parallel-record-fault-inject";
-    constexpr std::string_view prefix        = "--parallel-record-fault-inject=";
-    constexpr std::string_view point_prefix  = "worker-throw@";
-
-    std::optional<std::string_view> specification;
-    for (int index = 1; index < argc; ++index) {
-        const std::string_view argument = argv[index];
-        std::optional<std::string_view> candidate;
-        if (argument == argument_name) {
-            if (index + 1 >= argc) {
-                throw std::invalid_argument(
-                    "--parallel-record-fault-inject requires worker-throw@<positive-count>"
-                );
-            }
-            candidate = std::string_view(argv[++index]);
-        } else if (argument.starts_with(prefix)) {
-            candidate = argument.substr(prefix.size());
-        }
-
-        if (!candidate.has_value()) {
-            continue;
-        }
-        if (specification.has_value()) {
-            throw std::invalid_argument(
-                "--parallel-record-fault-inject may be specified only once"
-            );
-        }
-        specification = *candidate;
-    }
-
-    if (!specification.has_value()) {
-        return 0;
-    }
-    if (!specification->starts_with(point_prefix)) {
-        throw std::invalid_argument(
-            "unsupported parallel-record fault point; expected worker-throw@<positive-count>"
-        );
-    }
-
-    const std::string_view count_text = specification->substr(point_prefix.size());
-    uint64_t               count      = 0;
-    const auto [end, error] = std::from_chars(
-        count_text.data(), count_text.data() + count_text.size(), count
-    );
-    if (count_text.empty() || error != std::errc{} || end != count_text.data() + count_text.size() ||
-        count == 0) {
-        throw std::invalid_argument(
-            "parallel-record worker fault trigger must be a positive integer: "
-            "worker-throw@<positive-count>"
-        );
-    }
-    return count;
+#endif
 }
 
 bool ParseThreadingRendererSwitchValidation(int argc, const char** argv) {
@@ -512,7 +410,7 @@ ERenderMethod ParseDefaultRenderMethod(std::string_view render_method_name) {
 template<typename PrepareFunction, typename RenderFunction, typename ApplyFunction, typename StopFunction>
 void RunBoundedRenderLoop(
     RenderThreadService& service,
-    uint                 max_frame_lag,
+    uint32               max_frame_lag,
     bool                 profile_logging,
     PrepareFunction      prepare_frame,
     RenderFunction       render_frame,
@@ -609,8 +507,7 @@ Engine::Engine() {}
 
 void Engine::ValidateCommandLine(int argc, const char** argv) {
     (void)ParseStartupCVarOverrides(argc, argv);
-    (void)ParseVulkanPresentSubmitFaultTrigger(argc, argv);
-    (void)ParseParallelRecordWorkerThrowTrigger(argc, argv);
+    ValidateFaultInjectionArguments(argc, argv);
     const bool renderer_switch_validation =
         ParseThreadingRendererSwitchValidation(argc, argv);
     const bool raster_lifecycle_validation =
@@ -990,7 +887,7 @@ void Engine::TickProfileCaptureLifecycleValidation(Render::ProfileCaptureTickRes
         const auto live_generation_matches = [this](
                                                  const Render::ProfileCaptureControllerSnapshot& snapshot,
                                                  const Render::RenderProfileCaptureStats&        stats,
-                                                 std::uint64_t                                   generation
+                                                 uint64                                          generation
                                              ) noexcept {
             return generation != 0 && snapshot.state == Render::ProfileCaptureControllerState::Running &&
                    snapshot.owns_runtime && snapshot.cpu_producer_active && snapshot.gpu_session_active &&
@@ -1314,16 +1211,14 @@ void Engine::Init(
     startup_config = m_console_control->CaptureStartupConfig();
     m_thread_profile_logging = startup_config.profile_logging;
     m_raster_graph_config = {
-        .enabled            = startup_config.raster_rdg_enabled,
         .debug_dump         = startup_config.raster_rdg_debug_dump,
         .parallel_recording = startup_config.raster_rdg_parallel_recording,
     };
     m_raytracing_graph_config = {
-        .enabled            = startup_config.raytracing_rdg_enabled,
         .debug_dump         = startup_config.raytracing_rdg_debug_dump,
         .parallel_recording = startup_config.raytracing_rdg_parallel_recording,
     };
-    const uint submission_batch_window = RHISubmissionPipelinePolicy::ClampBatchWindow(
+    const uint32 submission_batch_window = RHISubmissionPipelinePolicy::ClampBatchWindow(
         startup_config.configured_submission_batch_window
     );
     if (submission_batch_window != startup_config.configured_submission_batch_window) {
@@ -1333,10 +1228,11 @@ void Engine::Init(
             submission_batch_window
         );
     }
-    const uint64_t vulkan_present_submit_fault_trigger =
-        ParseVulkanPresentSubmitFaultTrigger(argc, argv);
-    const uint64_t parallel_record_worker_throw_trigger =
-        ParseParallelRecordWorkerThrowTrigger(argc, argv);
+#if MOER_VULKAN_TEST_SUPPORT
+    Render::VulkanFaultInjection::ConfigureFromCommandLine(argc, argv);
+#else
+    ValidateFaultInjectionArguments(argc, argv);
+#endif
     const bool renderer_switch_validation_enabled =
         ParseThreadingRendererSwitchValidation(argc, argv);
     const bool raster_lifecycle_validation_enabled =
@@ -1414,31 +1310,17 @@ void Engine::Init(
 
     LOG_INFO("[Threading] GameThread id = {}", GetGameThreadId());
     LOG_INFO(
-        "[Threading] render_thread={}, rhi_thread={}, rhi_bypass={}, max_frame_lag={}, "
-        "profile_logging={}, parallel_recording={}, parallel_record_workers={}, "
-        "parallel_record_verify={}, parallel_record_profile={}, "
-        "parallel_record_min_work_units_per_job={}, submission_batch_window={}, "
-        "rhi_heartbeat_enabled={}, rhi_heartbeat_stall_timeout_ms={}, "
-        "rhi_heartbeat_poll_interval_ms={}",
+        "[Threading] render_thread={}, max_frame_lag={}, "
+        "profile_logging={}, submission_batch_window={}",
         startup_config.render_thread,
-        startup_config.rhi_thread,
-        startup_config.rhi_bypass,
         startup_config.max_frame_lag,
         startup_config.profile_logging,
-        startup_config.parallel_recording,
-        startup_config.parallel_record_workers,
-        startup_config.parallel_record_verify,
-        startup_config.parallel_record_profile,
-        startup_config.parallel_record_min_work_units_per_job,
-        submission_batch_window,
-        startup_config.rhi_heartbeat_enabled,
-        startup_config.rhi_heartbeat_stall_timeout_ms,
-        startup_config.rhi_heartbeat_poll_interval_ms
+        submission_batch_window
     );
 
     if (startup_config.render_thread) {
         report_startup("Starting render thread", "Creating the configured render-thread service");
-        m_max_frame_lag = std::min(startup_config.max_frame_lag, uint{1});
+        m_max_frame_lag = std::min(startup_config.max_frame_lag, uint32{1});
         if (startup_config.max_frame_lag > 1) {
             LOG_WARNING(
                 "[Threading] max_frame_lag={} exceeds the validated range; clamping to 1.",
@@ -1490,25 +1372,7 @@ void Engine::Init(
                 .rhi_type        = rhi_type,
                 .name            = "MoerEngine",
                 .rhi_api_version = config.engine.rhi.api_version,
-                .rhi_thread              = startup_config.rhi_thread,
-                .rhi_bypass              = startup_config.rhi_bypass,
-                .thread_profile_logging  = startup_config.profile_logging,
-                .parallel_recording      = startup_config.parallel_recording,
-                .parallel_record_workers = startup_config.parallel_record_workers,
-                .parallel_record_verify  = startup_config.parallel_record_verify,
-                .parallel_record_profile = startup_config.parallel_record_profile,
-                .parallel_record_min_work_units_per_job =
-                    startup_config.parallel_record_min_work_units_per_job,
                 .submission_batch_window = submission_batch_window,
-                .rhi_heartbeat_enabled =
-                    startup_config.rhi_heartbeat_enabled,
-                .rhi_heartbeat_stall_timeout_ms =
-                    startup_config.rhi_heartbeat_stall_timeout_ms,
-                .rhi_heartbeat_poll_interval_ms =
-                    startup_config.rhi_heartbeat_poll_interval_ms,
-                .parallel_record_worker_throw_trigger =
-                    parallel_record_worker_throw_trigger,
-                .vulkan_present_submit_fault_trigger = vulkan_present_submit_fault_trigger,
             }
         )
     );
@@ -1679,7 +1543,7 @@ void Engine::Run(const EngineHooks& hooks) {
 
         LOG_INFO(
             "Selecting Render Method : {}",
-            k_render_method_names[static_cast<uint>(selected_render_method)]
+            k_render_method_names[static_cast<uint32>(selected_render_method)]
         );
 
         auto create_renderer = [this, runtime_hooks, selected_render_method]() {
@@ -1706,7 +1570,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 MOER_ASSERT(
                     false,
                     "Unknown render method during renderer creation: {}",
-                    static_cast<std::uint32_t>(
+                    static_cast<uint32>(
                         m_editor_config->selected_render_method
                     )
                 );
@@ -1795,7 +1659,7 @@ void Engine::Run(const EngineHooks& hooks) {
                 MOER_ASSERT(
                     false,
                     "Unknown render method during renderer shutdown: {}",
-                    static_cast<std::uint32_t>(
+                    static_cast<uint32>(
                         m_editor_config->selected_render_method
                     )
                 );
@@ -1854,7 +1718,7 @@ void Engine::Run(const EngineHooks& hooks) {
 void Engine::TickRendererSwitchValidation(Scene& scene) {
     assert(IsCurrentlyGameThread());
 
-    constexpr uint k_stable_ready_gt_frames = 12;
+    constexpr uint32 k_stable_ready_gt_frames = 12;
 
     ERenderMethod expected_render_method = ERenderMethod::Raster;
     switch (m_renderer_switch_validation_stage) {
@@ -1875,8 +1739,8 @@ void Engine::TickRendererSwitchValidation(Scene& scene) {
     if (m_editor_config->selected_render_method != expected_render_method) {
         LOG_ERROR(
             "[ThreadingValidation][RendererSwitch][Error] Expected renderer {}, observed {}.",
-            k_render_method_names[static_cast<uint>(expected_render_method)],
-            k_render_method_names[static_cast<uint>(m_editor_config->selected_render_method)]
+            k_render_method_names[static_cast<uint32>(expected_render_method)],
+            k_render_method_names[static_cast<uint32>(m_editor_config->selected_render_method)]
         );
         m_renderer_switch_validation_stage = ERendererSwitchValidationStage::Failed;
         m_renderer_switch_validation_reload_requested = false;
@@ -1943,7 +1807,7 @@ void Engine::TickRendererSwitchValidation(Scene& scene) {
 
 void Engine::TickRasterLifecycleValidation(Scene& scene) {
     assert(IsCurrentlyGameThread());
-    constexpr uint k_stable_ready_gt_frames = 12;
+    constexpr uint32 k_stable_ready_gt_frames = 12;
 
     if (!m_raster_lifecycle_validation_enabled) {
         return;
@@ -2008,7 +1872,7 @@ Engine::RequestProfileCaptureStart(Render::ProfileCaptureStartOptions options) n
 }
 
 Render::ProfileCaptureRequestSubmission
-Engine::RequestProfileCaptureStop(std::uint64_t expected_generation) noexcept {
+Engine::RequestProfileCaptureStop(uint64 expected_generation) noexcept {
     if (!m_profile_capture_controller) {
         return {
             .result = Render::ProfileCaptureSubmitResult::AdmissionClosed,

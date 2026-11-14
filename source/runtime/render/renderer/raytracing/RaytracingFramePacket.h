@@ -2,6 +2,7 @@
 
 #include "RaytracingConfig.h"
 #include "RaytracingSceneFrameSnapshot.h"
+#include "misc/Types.h"
 #include "renderer/Renderer.h"
 #include "renderer/SceneRenderExtent.h"
 #include "rhi/RHICommand.h"
@@ -56,10 +57,10 @@ struct RaytracingFrameFeedback {
     uint64 rt_instance_revision      = 0;
     uint64 current_tlas_revision     = 0;
     uint64 previous_tlas_revision    = 0;
-    uint configured_local_light_sample_mode    = s_di_local_light_sample_mode_uniform;
-    uint effective_local_light_sample_mode     = s_di_local_light_sample_mode_uniform;
+    uint32 configured_local_light_sample_mode    = s_di_local_light_sample_mode_uniform;
+    uint32 effective_local_light_sample_mode     = s_di_local_light_sample_mode_uniform;
     bool adaptive_local_light_fallback_applied = false;
-    uint local_light_count                     = 0;
+    uint32 local_light_count                     = 0;
 };
 
 } // namespace Moer::Render::Raytracing

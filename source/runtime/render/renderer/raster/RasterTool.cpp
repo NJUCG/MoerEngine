@@ -1,18 +1,20 @@
 // 实现各独立 Raster Pass 共用的小型工具函数。
-#include "RasterTool.h"
 
+#include "RasterTool.h"
 #include "RasterConfig.h"
 #include "log/LogSystem.h"
 #include "misc/Timer.h"
+#include "misc/Types.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "scene/Scene.h"
 
 #include <cassert>
 #include <source_location>
 #include <span>
 #include <sstream>
+#include <stdexcept>
 
 namespace Moer::Render::Raster {
 
@@ -72,12 +74,6 @@ static_assert(s_point_shadow_face_marker_names.size() == CUBE_FACE_Num);
 static_assert(s_point_shadow_culling_scope_names.size() == CUBE_FACE_Num);
 static_assert(s_point_shadow_draw_scope_names.size() == CUBE_FACE_Num);
 
-std::string BuildDebugLogSiteKey(std::source_location location) {
-    std::ostringstream stream;
-    stream << location.file_name() << ':' << location.line();
-    return stream.str();
-}
-
 double FindGpuTime(const ProfileData& profile_data, std::string_view name) {
     for (const auto& entry : profile_data.gpu_entries) {
         if (entry.name == name) {
@@ -117,60 +113,67 @@ std::string_view RasterTool::GetGeometryDrawProfileScopeName() {
 }
 
 // 返回某个级联阴影的可视 marker 名称。
-std::string_view RasterTool::GetCsmShadowCascadeMarkerName(uint cascade_index) {
+std::string_view RasterTool::GetCsmShadowCascadeMarkerName(uint32 cascade_index) {
     assert(cascade_index < CSM_MAX_CASCADES);
     return s_csm_shadow_cascade_marker_names[cascade_index];
 }
 
 // 返回某个级联阴影视锥剔除 dispatch 使用的 profiling scope 名称。
-std::string_view RasterTool::GetCsmShadowCullingProfileScopeName(uint cascade_index) {
+std::string_view RasterTool::GetCsmShadowCullingProfileScopeName(uint32 cascade_index) {
     assert(cascade_index < CSM_MAX_CASCADES);
     return s_csm_shadow_culling_scope_names[cascade_index];
 }
 
-std::string_view RasterTool::GetCsmShadowDrawProfileScopeName(uint cascade_index) {
+std::string_view RasterTool::GetCsmShadowDrawProfileScopeName(uint32 cascade_index) {
     assert(cascade_index < CSM_MAX_CASCADES);
     return s_csm_shadow_draw_scope_names[cascade_index];
 }
 
-std::string_view RasterTool::GetPointShadowFaceMarkerName(uint face) {
+std::string_view RasterTool::GetPointShadowFaceMarkerName(uint32 face) {
     assert(face < CUBE_FACE_Num);
     return s_point_shadow_face_marker_names[face];
 }
 
-std::string_view RasterTool::GetPointShadowCullingProfileScopeName(uint face) {
+std::string_view RasterTool::GetPointShadowCullingProfileScopeName(uint32 face) {
     assert(face < CUBE_FACE_Num);
     return s_point_shadow_culling_scope_names[face];
 }
 
-std::string_view RasterTool::GetPointShadowDrawProfileScopeName(uint face) {
+std::string_view RasterTool::GetPointShadowDrawProfileScopeName(uint32 face) {
     assert(face < CUBE_FACE_Num);
     return s_point_shadow_draw_scope_names[face];
 }
 
-void RasterTool::LogDebugEverySeconds(
-    std::string_view     message,
+bool RasterTool::ShouldLogDebugEverySeconds(
     double               seconds,
     std::source_location location
 ) {
+#if SPDLOG_ACTIVE_LEVEL > SPDLOG_LEVEL_DEBUG
+    (void)seconds;
+    (void)location;
+    return false;
+#else
+    const auto* logger = spdlog::default_logger_raw();
+    if (!logger->should_log(spdlog::level::debug) && !logger->should_backtrace()) {
+        return false;
+    }
     if (seconds <= 0.0) {
-        LOG_DEBUG("{}", message);
-        return;
+        return true;
     }
 
     static UnorderedMap<std::string, LoopedTimer> s_debug_log_timers;
 
-    const std::string site_key = BuildDebugLogSiteKey(location);
-    auto [timer_it, inserted]  = s_debug_log_timers.try_emplace(site_key, seconds, true);
-    if (inserted || timer_it->second.Tick()) {
-        LOG_DEBUG("{}", message);
-    }
+    std::ostringstream site_key;
+    site_key << location.file_name() << ':' << location.line();
+    auto timer_it = s_debug_log_timers.try_emplace(site_key.str(), seconds, true).first;
+    return timer_it->second.Tick();
+#endif
 }
 
 // 按固定时间间隔输出 raster GPU profiling 汇总，避免把 profiler 状态放进 renderer。
 void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config) {
     const auto profile_data = gfx_queue.GetProfilerEntry();
-    if (profile_data.gpu_entries.empty()) {
+    if (profile_data.gpu_entries.empty() || !ShouldLogDebugEverySeconds(1.0)) {
         return;
     }
 
@@ -231,7 +234,7 @@ void RasterTool::TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig
                << " ratio=" << culling_stats.GetCullingRatio() * 100.0f << "%";
     }
 
-    LogDebugEverySeconds(stream.str(), 1.0);
+    LOG_DEBUG("{}", stream.str());
 }
 
 // 执行 Scene 同步阶段积累的 copy/gfx command list。
@@ -243,15 +246,12 @@ void RasterTool::ExecuteScenePendingCommands(
     assert(!IsRenderThreadInitialized() || IsCurrentlyRenderThread());
     (void)gfx_queue;
 
-    (void)device;
+    auto accepted = device.CreateFence();
+    commands.Signal(accepted, 1);
     const bool modern_graphics_profiling =
-        commands.gfx_queue_cmd_list.HasGpuScopeRecorder() ||
-        commands.gfx_queue_cmd_list
-            .IsLegacyGpuProfilingSuppressedForGeneration();
-    Array<RHIBackendSubmissionBatchEntry> submissions{};
-    submissions.emplace_back(EQueueType::Copy, commands.copy_queue_cmd_list.Submit());
-    CmdSubmit graphics_submit =
-        commands.gfx_queue_cmd_list.Submit();
+        commands.HasGpuScopeRecorder() || commands.IsLegacyGpuProfilingSuppressedForGeneration();
+    Array<RHISubmissionRequest>           submissions{};
+    CmdSubmit                             graphics_submit = commands.Submit();
     if (!modern_graphics_profiling) {
         graphics_submit.TickProfiling();
     }
@@ -263,6 +263,9 @@ void RasterTool::ExecuteScenePendingCommands(
         ERHIExecSubmitFlags::FlushGPU
     );
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!accepted->WaitSubmitted(1)) {
+        throw std::runtime_error("Compiled scene update was rejected before native submission");
+    }
 }
 
 } // namespace Moer::Render::Raster

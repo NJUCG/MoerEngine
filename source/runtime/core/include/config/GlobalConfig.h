@@ -3,6 +3,7 @@
 
 #include "API_Macro.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 
 // TODO: 后续可根据 MoerEngine.toml 自动生成本文件及其加载代码。
 
@@ -17,14 +18,14 @@ namespace Moer::Config {
 struct CORE_API GlobalConfig {
 
     struct Editor {
-        uint width;
-        uint height;
+        uint32 width;
+        uint32 height;
         bool fullscreen;
         bool vsync;
 
         bool  lock_frame_rate;
-        uint  fps;
-        uint  max_fps;
+        uint32 fps;
+        uint32 max_fps;
         float font_size;
 
         std::string preset_imgui_config_path;
@@ -33,19 +34,9 @@ struct CORE_API GlobalConfig {
     struct Engine {
         struct Threading {
             bool render_thread           = false;
-            bool rhi_thread              = false;
-            bool rhi_bypass              = true;
             bool profile_logging         = false;
-            bool parallel_recording      = false;
-            uint parallel_record_workers = 0;
-            bool parallel_record_verify  = false;
-            bool parallel_record_profile = false;
-            uint parallel_record_min_work_units_per_job = 8;
-            uint submission_batch_window = 2;
-            bool rhi_heartbeat_enabled = false;
-            uint rhi_heartbeat_stall_timeout_ms = 5000;
-            uint rhi_heartbeat_poll_interval_ms = 1000;
-            uint max_frame_lag           = 0;
+            uint32 submission_batch_window = 2;
+            uint32 max_frame_lag           = 0;
         } threading;
 
         struct ProfileDump {
@@ -57,7 +48,7 @@ struct CORE_API GlobalConfig {
         struct RHI {
             std::string type;
             std::string api_version;
-            uint        max_frame_in_flight;
+            uint32      max_frame_in_flight;
         } rhi;
 
         struct Render {
@@ -66,13 +57,11 @@ struct CORE_API GlobalConfig {
             struct Raster {
                 bool enable_shadow;
                 bool low_quality_mode;
-                bool render_graph;
                 bool render_graph_debug_dump;
                 bool render_graph_parallel_recording;
             } raster;
 
             struct Raytracing {
-                bool render_graph;
                 bool render_graph_debug_dump;
                 bool render_graph_parallel_recording;
             } raytracing;
@@ -88,8 +77,8 @@ struct CORE_API GlobalConfig {
         struct Remote {
             bool        enable;
             std::string bind_address;
-            uint        http_port;
-            uint        websocket_port;
+            uint32      http_port;
+            uint32      websocket_port;
         } remote;
 
     } engine;

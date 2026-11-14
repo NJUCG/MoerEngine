@@ -1,5 +1,5 @@
 #include "rhi/RHIThreadOwnership.h"
-
+#include "misc/Types.h"
 #include <cassert>
 #include <stdexcept>
 #include <string>
@@ -9,7 +9,7 @@ namespace Moer::Render {
 namespace {
 
 thread_local ERHIThreadRole g_rhi_thread_role = ERHIThreadRole::Unknown;
-thread_local uint32_t       g_rhi_command_access_restriction_depth = 0;
+thread_local uint32         g_rhi_command_access_restriction_depth = 0;
 
 } // namespace
 

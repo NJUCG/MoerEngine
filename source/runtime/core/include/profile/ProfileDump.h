@@ -4,15 +4,15 @@
 #include "API_Macro.h"
 #include "profile/ProfileDumpCodec.h"
 
+#include "misc/Types.h"
 #include <cstddef>
-#include <cstdint>
 #include <filesystem>
 #include <span>
 #include <string>
 
 namespace Moer::ProfileDump {
 
-enum class RuntimeState : std::uint8_t {
+enum class RuntimeState : uint8 {
     Stopped = 0,
     Starting,
     Running,
@@ -20,7 +20,7 @@ enum class RuntimeState : std::uint8_t {
     Faulted,
 };
 
-enum class StartResult : std::uint8_t {
+enum class StartResult : uint8 {
     Started = 0,
     AlreadyRunning,
     Busy,
@@ -31,14 +31,14 @@ enum class StartResult : std::uint8_t {
     ResourceExhausted,
 };
 
-enum class FlushResult : std::uint8_t {
+enum class FlushResult : uint8 {
     Completed = 0,
     NothingPending,
     Rejected,
     Faulted,
 };
 
-enum class CrashFlushResult : std::uint8_t {
+enum class CrashFlushResult : uint8 {
     Completed = 0,
     NotRunning,
     Faulted,
@@ -46,13 +46,13 @@ enum class CrashFlushResult : std::uint8_t {
     TimedOut,
 };
 
-enum class ShutdownResult : std::uint8_t {
+enum class ShutdownResult : uint8 {
     Completed = 0,
     AlreadyStopped,
     Faulted,
 };
 
-enum class SchemaStatus : std::uint8_t {
+enum class SchemaStatus : uint8 {
     Registered = 0,
     AlreadyRegistered,
     NotRunning,
@@ -62,7 +62,7 @@ enum class SchemaStatus : std::uint8_t {
     HashCollision,
 };
 
-enum class EmitStatus : std::uint8_t {
+enum class EmitStatus : uint8 {
     Accepted = 0,
     Disabled,
     InvalidHandle,
@@ -74,7 +74,7 @@ enum class EmitStatus : std::uint8_t {
     SinkFault,
 };
 
-enum class RuntimeFault : std::uint8_t {
+enum class RuntimeFault : uint8 {
     None = 0,
     OpenTempFile,
     WritePacket,
@@ -105,8 +105,8 @@ struct RuntimeConfig {
 };
 
 struct SchemaHandle {
-    std::uint64_t hash{0};
-    std::uint64_t generation{0};
+    uint64 hash{0};
+    uint64 generation{0};
 
     [[nodiscard]] explicit operator bool() const noexcept {
         return hash != 0 && generation != 0;
@@ -123,32 +123,32 @@ struct SchemaRegistration {
 struct RuntimeStats {
     RuntimeState  state{RuntimeState::Stopped};
     RuntimeFault  last_fault{RuntimeFault::None};
-    std::uint64_t generation{0};
+    uint64        generation{0};
 
-    std::uint64_t records_committed{0};
-    std::uint64_t records_enqueued{0};
-    std::uint64_t records_written{0};
-    std::uint64_t records_dropped_stopped{0};
-    std::uint64_t records_dropped_stale_generation{0};
-    std::uint64_t records_dropped_oversized{0};
-    std::uint64_t records_dropped_queue_full{0};
-    std::uint64_t records_dropped_after_fault{0};
+    uint64 records_committed{0};
+    uint64 records_enqueued{0};
+    uint64 records_written{0};
+    uint64 records_dropped_stopped{0};
+    uint64 records_dropped_stale_generation{0};
+    uint64 records_dropped_oversized{0};
+    uint64 records_dropped_queue_full{0};
+    uint64 records_dropped_after_fault{0};
 
-    std::uint64_t chunks_enqueued{0};
-    std::uint64_t chunks_written{0};
-    std::uint64_t chunks_dropped{0};
+    uint64 chunks_enqueued{0};
+    uint64 chunks_written{0};
+    uint64 chunks_dropped{0};
 
-    std::uint64_t resident_chunks{0};
-    std::uint64_t resident_records{0};
-    std::uint64_t resident_bytes{0};
-    std::uint64_t high_water_chunks{0};
-    std::uint64_t high_water_records{0};
-    std::uint64_t high_water_bytes{0};
+    uint64 resident_chunks{0};
+    uint64 resident_records{0};
+    uint64 resident_bytes{0};
+    uint64 high_water_chunks{0};
+    uint64 high_water_records{0};
+    uint64 high_water_bytes{0};
 
-    std::uint64_t file_bytes_written{0};
-    std::uint64_t flush_completed{0};
-    std::uint64_t flush_failed{0};
-    std::uint64_t io_faults{0};
+    uint64 file_bytes_written{0};
+    uint64 flush_completed{0};
+    uint64 flush_failed{0};
+    uint64 io_faults{0};
 };
 
 [[nodiscard]] CORE_API StartResult Start(const RuntimeConfig& _config) noexcept;
@@ -176,7 +176,7 @@ Emit(SchemaHandle _schema, std::span<const FieldValueView> _values) noexcept;
 // no longer than _timeout_ms. The method is therefore best-effort and never
 // promises a process-wide instantaneous snapshot.
 [[nodiscard]] CORE_API CrashFlushResult
-FlushCrashPublishedPrefix(std::uint32_t _timeout_ms) noexcept;
+FlushCrashPublishedPrefix(uint32 _timeout_ms) noexcept;
 
 // Process-owner finalization. Closes admission, waits for already-accepted
 // Emit calls, harvests all registered live TLS shards, drains the writer, and
@@ -185,7 +185,7 @@ FlushCrashPublishedPrefix(std::uint32_t _timeout_ms) noexcept;
 [[nodiscard]] CORE_API ShutdownResult Shutdown() noexcept;
 
 [[nodiscard]] CORE_API RuntimeState GetRuntimeState() noexcept;
-[[nodiscard]] CORE_API std::uint64_t GetRuntimeGeneration() noexcept;
+[[nodiscard]] CORE_API uint64       GetRuntimeGeneration() noexcept;
 [[nodiscard]] CORE_API RuntimeStats GetRuntimeStats() noexcept;
 
 } // namespace Moer::ProfileDump

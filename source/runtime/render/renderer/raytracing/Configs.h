@@ -1,6 +1,8 @@
 #ifndef MOER_RAYTRACING_CONFIGS_H
 #define MOER_RAYTRACING_CONFIGS_H
 
+#include "misc/Types.h"
+
 // ReSTIR DI 重要性采样的 CPU 侧配置与帧状态。
 
 #include "misc/Traits.h"
@@ -11,9 +13,9 @@
 // 共享 Shader 参数类型将重要性采样上下文定义在 Moer::Render 中。
 namespace Moer::Render {
 
-static constexpr uint s_num_restirdi_reservoir_buffer = 3;
+static constexpr uint32 s_num_restirdi_reservoir_buffer = 3;
 
-inline static uint JenkinsHash(uint _key) {
+inline static uint32 JenkinsHash(uint32 _key) {
     _key = (_key + 0x7ed55d16) + (_key << 12);
     _key = (_key ^ 0xc761c23c) ^ (_key >> 19);
     _key = (_key + 0x165667b1) + (_key << 5);
@@ -24,7 +26,7 @@ inline static uint JenkinsHash(uint _key) {
 }
 
 // 保留旧拼写，避免仍依赖该工具函数的外部调用方立即失效。
-[[deprecated("Use JenkinsHash instead")]] inline static uint JekinsHash(uint _key) {
+[[deprecated("Use JenkinsHash instead")]] inline static uint32 JekinsHash(uint32 _key) {
     return JenkinsHash(_key);
 }
 
@@ -32,30 +34,30 @@ class SimpleSegmentAllocator {
 public:
     SimpleSegmentAllocator();
 
-    uint Allocate(uint _size_elements);
-    uint GetTotalSize() const;
+    uint32 Allocate(uint32 _size_elements);
+    uint32 GetTotalSize() const;
 
 private:
-    uint total_element_count;
+    uint32 total_element_count;
 };
 
 struct GridConfig {
     uint3 grid_size{16};
-    uint  grid_mode = s_di_local_light_sample_mode_power_ris;
+    uint32 grid_mode = s_di_local_light_sample_mode_power_ris;
     // 旧字段已公开，保留为唯一存储；新代码通过正确拼写的访问器读写。
-    uint light_per_ceil = 512;
+    uint32 light_per_ceil = 512;
 
-    uint GetLightsPerCell() const {
+    uint32 GetLightsPerCell() const {
         return light_per_ceil;
     }
 
-    void SetLightsPerCell(uint lights_per_cell) {
+    void SetLightsPerCell(uint32 lights_per_cell) {
         light_per_ceil = lights_per_cell;
     }
 };
 
 struct GridRuntimeConfig {
-    uint num_light_slot;
+    uint32 num_light_slot;
 };
 
 struct GridChangeableConfig {
@@ -63,24 +65,24 @@ struct GridChangeableConfig {
     float3 center    = float3(0.f);
 
     float grid_jitter            = 1.f;
-    uint  num_grid_build_samples = 8;
+    uint32 num_grid_build_samples = 8;
 };
 
 using GridChangableConfig [[deprecated("Use GridChangeableConfig instead")]] = GridChangeableConfig;
 
 struct BufferSegmentParam {
-    uint tile_size;
-    uint tile_count;
+    uint32 tile_size;
+    uint32 tile_count;
 };
 
 namespace DI {
 struct ReSTIRDIConfig {
-    uint neighbor_offset_cnt = 8092;
-    uint render_width        = 0;
-    uint render_height       = 0;
+    uint32 neighbor_offset_cnt = 8092;
+    uint32 render_width        = 0;
+    uint32 render_height       = 0;
 };
 struct ReSTIRDIRuntimeConfig {
-    uint                      resample_mode;
+    uint32                    resample_mode;
     DI::ReservoirBufferParams reservoir_buffer_params;
     DI::CommonParams          common_params;
 };
@@ -148,7 +150,7 @@ struct ImportanceSamplingParams {
     GridConfig grid_config{};
     uint2      render_size;
 
-    uint neighbor_offset_cnt = 8092;
+    uint32 neighbor_offset_cnt = 8092;
 };
 
 using ImportantSamplingParams [[deprecated("Use ImportanceSamplingParams instead")]] =
@@ -194,7 +196,7 @@ struct ImportanceSamplingContext {
         return di_buffer_indices;
     }
 
-    uint GetNeighborOffsetCnt() const {
+    uint32 GetNeighborOffsetCnt() const {
         return restir_di_config.neighbor_offset_cnt;
     }
     DI::RISBufferSegmentParams& GetLocalLightRISBufferParams() {
@@ -218,10 +220,10 @@ struct ImportanceSamplingContext {
     }
 
     static DI::LightBufferParams BuildLightBufferParams(
-        uint frame_offset,
-        uint num_finite_lights,
-        uint num_infinite_primitive_lights,
-        uint num_environment_lights
+        uint32 frame_offset,
+        uint32 num_finite_lights,
+        uint32 num_infinite_primitive_lights,
+        uint32 num_environment_lights
     );
 
     void CommitAcceptedLightBufferParams(const DI::LightBufferParams& params) noexcept {
@@ -243,7 +245,7 @@ struct ImportanceSamplingContext {
         ComputeGridLightSlotCnt();
     }
 
-    void SetReSTIRDIInitialSampleMode(uint _sample_mode) {
+    void SetReSTIRDIInitialSampleMode(uint32 _sample_mode) {
         di_initial_sample_params.local_light_sample_mode = _sample_mode;
     }
 
@@ -266,10 +268,10 @@ struct ImportanceSamplingContext {
 
     // PrepareLightPass 确定每帧光源布局后更新。
     void SetLightBufferParams(
-        uint _frame_offset,
-        uint _num_finit_lights,
-        uint _num_infinit_prim_lights,
-        uint _num_env_lights
+        uint32 _frame_offset,
+        uint32 _num_finit_lights,
+        uint32 _num_infinit_prim_lights,
+        uint32 _num_env_lights
     );
 
     GridConfig GetGridConfig() const {
@@ -304,16 +306,16 @@ struct ImportanceSamplingContext {
         return segment_allocator;
     }
 
-    uint GetFrameIdx() const {
+    uint32 GetFrameIdx() const {
         return frame_idx;
     }
 
-    void TickFrame(uint _frame_idx);
+    void TickFrame(uint32 _frame_idx);
 
 private:
     void ComputeGridLightSlotCnt();
     void UpdateReSTIRDIBufferIndices();
-    void AdvanceFrameIdx(uint _frame_idx);
+    void AdvanceFrameIdx(uint32 _frame_idx);
 
 private:
     DI::ReSTIRDIInitialSampleParams    di_initial_sample_params;
@@ -337,12 +339,12 @@ private:
 
     SimpleSegmentAllocator segment_allocator;
 
-    uint grid_cell_offset = 0;
+    uint32 grid_cell_offset = 0;
 
-    uint frame_idx = 0;
+    uint32 frame_idx = 0;
 
-    uint di_last_frame_output_reservoir    = 0;
-    uint di_current_frame_output_reservoir = 0;
+    uint32 di_last_frame_output_reservoir    = 0;
+    uint32 di_current_frame_output_reservoir = 0;
 };
 
 } // namespace Moer::Render

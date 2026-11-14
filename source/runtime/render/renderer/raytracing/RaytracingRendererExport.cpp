@@ -1,8 +1,10 @@
 #include "RaytracingRenderer.h"
+#include "misc/Types.h"
+#include "rendergraph/RenderGraphUpload.h"
 
 #include "RTResource.h"
 #include "RaytracingExportSubmission.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "taskgraph/TaskGraph.h"
 
 #include <stb/stb_image_write.h>
@@ -64,7 +66,7 @@ bool RaytracingRenderer::DumpTextureToFile(
     const uint3 resolution = frame_resources.ldr_color->GetExtent();
     switch (config.output_texture) {
         case EOT_LDR:
-            size = sizeof(uint) * resolution.x * resolution.y;
+            size = sizeof(uint32) * resolution.x * resolution.y;
             file_name += suffix;
             file_name += ".png";
             break;
@@ -93,17 +95,36 @@ bool RaytracingRenderer::DumpTextureToFile(
                 EGpuMarkerMode::Timestamp :
                 EGpuMarkerMode::Label
         );
-        if (config.output_texture == EOT_LDR) {
-            readback = command_list.Readback(
-                frame_resources.ldr_color->GetView(),
-                "RaytracingExportLdrReadback"
-            );
-        } else {
-            readback = command_list.Readback(
-                frame_resources.resolved_color->GetView(),
-                "RaytracingExportHdrReadback"
-            );
-        }
+        const TextureRef texture =
+            config.output_texture == EOT_LDR ? frame_resources.ldr_color : frame_resources.resolved_color;
+        RenderGraph graph("Raytracing.Export", RenderGraph::QueueTopology::FromRHI());
+        const auto  image = graph.ImportTexture("Source", texture, {});
+        graph.SetInitialState(
+            image,
+            RenderGraph::TextureAccessType::Sampled,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+        graph.Export(
+            image,
+            RenderGraph::TextureAccessType::Sampled,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+        graph.AddRecordPass(
+            "Readback",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(image, RenderGraph::TextureAccessType::TransferSource)
+                    .SideEffect()
+                    .TranslateSerialControl();
+            },
+            [texture, &readback](CommandList& list) {
+                readback = list.Readback(texture->GetView(), "RaytracingExportReadback");
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        RecordGraphicsUploadGraph(graph, command_list);
     }
     if (!readback.Valid()) {
         return false;
@@ -165,9 +186,9 @@ bool RaytracingRenderer::DumpTextureToFile(
                 static_cast<size_t>(resolution.x) *
                 static_cast<size_t>(resolution.y);
             if (hdr) {
-                constexpr uint range_count = 8;
+                constexpr uint32 range_count = 8;
                 Array<float4>  copy_back_data_f4(pixel_count);
-                ParallelFor(range_count, [&](uint index) {
+                ParallelFor(range_count, [&](uint32 index) {
                     const size_t begin =
                         pixel_count * index / range_count;
                     const size_t end =
@@ -191,8 +212,8 @@ bool RaytracingRenderer::DumpTextureToFile(
                     reinterpret_cast<float*>(copy_back_data_f4.data())
                 );
             } else {
-                constexpr uint range_count = 8;
-                ParallelFor(range_count, [&](uint index) {
+                constexpr uint32 range_count = 8;
+                ParallelFor(range_count, [&](uint32 index) {
                     const size_t begin =
                         pixel_count * index / range_count;
                     const size_t end =

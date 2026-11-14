@@ -1,6 +1,8 @@
 #ifndef MOER_SHADER_UTILS_H
 #define MOER_SHADER_UTILS_H
 
+#include "misc/Types.h"
+
 // Raytracing 渲染器共用的计算与全屏辅助函数。
 
 #include "PixelFormat.h"
@@ -17,7 +19,7 @@ class ShaderManager;
 
 namespace Moer::Render::Raytracing {
 
-static constexpr uint s_max_mip_levels = 14;
+static constexpr uint32 s_max_mip_levels = 14;
 
 // 该管线虽未被当前帧流程调用，但仍是可供工具代码使用的 GPU 生成接口。
 class GenLowDiscrepancyPipeline : public ComputePipeline {

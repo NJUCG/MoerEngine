@@ -1,4 +1,5 @@
-﻿#include "AntiAliasPass.h"
+#include "AntiAliasPass.h"
+#include "misc/Types.h"
 // 实现时序解析与确定性抖动序列。
 
 #include "rhi/RHIResource.h"
@@ -29,12 +30,9 @@ void AntialiasPass::RebindResources(const CreateInfo& info) {
     motion              = info.motion;
     feedback_color_ping = info.feedback_color_ping;
     feedback_color_pong = info.feedback_color_pong;
-    feedback_slot_zero  = info.feedback_color_ping;
-    feedback_slot_one   = info.feedback_color_pong;
 
     frame_idx                = 0;
     jitter                   = float2(0.f);
-    initialized_history_mask = 0;
 }
 
 AntialiasPass::SetupInput AntialiasPass::CaptureSetupInput(
@@ -136,38 +134,6 @@ void AntialiasPass::RecordTAA(
         .Dispatch(command.dispatch_groups, "TAAPass");
 }
 
-void AntialiasPass::Process(
-    CommandList& cmd_list,
-    Params       params,
-    bool         prev_view_valid,
-    TextureRef   input,
-    TextureRef   output
-) {
-    const PreparedCommand command = Prepare(
-        CaptureSetupInput(params, prev_view_valid, input, output)
-    );
-    const RecordResources resources =
-        CaptureResources(std::move(input), std::move(output));
-    const auto owner = recording_owner;
-
-    cmd_list.PushScopeWithTimeScope("AntiAliasPass");
-    RecordConstantsUpload(cmd_list, *owner, command);
-    RecordTAA(cmd_list, *owner, command, resources);
-    // Normalize the legacy write side through a sampled-read barrier before
-    // the command-list tracker restores its preferred GENERAL layout. This
-    // gives linear and graph frames the same external SRV/read boundary and
-    // preserves graph -> linear transitions on boundary frames.
-    cmd_list.TextureBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Compute,
-        Array<ReadTexture>{
-            {resources.feedback_write->GetView(), ETextureState::SAMPLE}
-        }
-    );
-    cmd_list.PopScopeWithTimeScope();
-}
-
 bool AntialiasPass::AddPasses(
     RenderGraph&                 graph,
     const RTGraphFrameResources& graph_resources,
@@ -216,13 +182,13 @@ bool AntialiasPass::AddPasses(
         ImportRTGraphBuffer(graph, "RT.AntiAlias.constants", owner->constants);
     graph.SetInitialState(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.SetInitialState(
         graph_resources.resolved_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -233,7 +199,7 @@ bool AntialiasPass::AddPasses(
         // histories to the same SRV/read boundary.
         graph.SetInitialState(
             feedback,
-            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -258,7 +224,7 @@ bool AntialiasPass::AddPasses(
         [](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                 RenderGraph::QueueRole::Graphics,
-                RenderGraph::PipelineType::Copy
+                RenderGraph::GpuWorkType::Transfer
             );
         },
         [](CommandList& cmd_list, const UploadGraphParameters& parameters) {
@@ -273,7 +239,7 @@ bool AntialiasPass::AddPasses(
                 parameters.command.Get()
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     DispatchGraphParameters dispatch_parameters{};
@@ -292,7 +258,7 @@ bool AntialiasPass::AddPasses(
         [](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                 RenderGraph::QueueRole::Graphics,
-                RenderGraph::PipelineType::Compute
+                RenderGraph::GpuWorkType::Compute
             );
         },
         [](CommandList& cmd_list, const DispatchGraphParameters& parameters) {
@@ -309,26 +275,26 @@ bool AntialiasPass::AddPasses(
                 parameters.resources
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(
         graph_resources.resolved_color,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     for (const auto feedback : {feedback_read, feedback_write}) {
         graph.Export(
             feedback,
-            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
     }
     graph.Export(
         constants,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -336,11 +302,6 @@ bool AntialiasPass::AddPasses(
 }
 
 void AntialiasPass::CommitAcceptedFrame() {
-    if (feedback_color_pong.Get() == feedback_slot_zero.Get()) {
-        initialized_history_mask |= uint8(0b01);
-    } else if (feedback_color_pong.Get() == feedback_slot_one.Get()) {
-        initialized_history_mask |= uint8(0b10);
-    }
     frame_idx++;
 
     if (jitter_mode == EJitter::R2) {
@@ -354,16 +315,12 @@ void AntialiasPass::CommitAcceptedFrame() {
     std::swap(feedback_color_ping, feedback_color_pong);
 }
 
-bool AntialiasPass::IsHistoryReadyForGraph() const {
-    return initialized_history_mask == uint8(0b11);
-}
-
 namespace {
 
-float VanderCorput(uint _idx, uint _base) {
+float VanderCorput(uint32 _idx, uint32 _base) {
     float v = 0.f;
     float f = 1.f / _base;
-    uint  i = _idx;
+    uint32 i = _idx;
     while (i > 0) {
         v += (i % _base) * f;
         i /= _base;
@@ -391,7 +348,7 @@ float2 AntialiasPass::GetPixelOffset() const {
             return offsets[frame_idx % 8];
         }
         case EJitter::Halton: {
-            const uint idx = (frame_idx % 16) + 1;
+            const uint32 idx = (frame_idx % 16) + 1;
             return float2(VanderCorput(idx, 2), VanderCorput(idx, 3)) - 0.5f;
         }
         case EJitter::R2: {

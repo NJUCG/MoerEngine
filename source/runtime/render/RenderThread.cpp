@@ -1,6 +1,7 @@
 #include "RenderThread.h"
 #include "Core.h"
 #include "log/LogSystem.h"
+#include "misc/Types.h"
 #include "platform/Platform.h"
 #include "rhi/RHI.h"
 #include "taskgraph/GraphTask.h"
@@ -14,7 +15,7 @@ namespace Moer {
 Runnable*            g_render_thread_runnable   = nullptr;
 RunnableThread*      g_render_thread            = nullptr;
 Event*               g_render_suspend_end_event = nullptr;
-std::atomic_uint32_t g_render_thread_suspending;
+std::atomic<uint32>  g_render_thread_suspending;
 
 void RenderThreadMain(Event* _is_bound_to_taskgraph_event) {
     TaskGraph::GetInterface().AttachToNameThread(EThread::ERenderThread);
@@ -47,7 +48,7 @@ public:
     virtual void Init() override {
         ThreadManager::SetRenderThreadID(Platform::GetCurrentThreadID());
     }
-    virtual uint32_t Run() override {
+    virtual uint32 Run() override {
 
         RenderThreadMain(is_bound_to_taskgraph_event);
 
@@ -303,7 +304,7 @@ void RenderThreadFence::Wait() {
         {
             EventRef event{};
 
-            static uint32_t wait_recursive_counter = 0;
+            static uint32 wait_recursive_counter = 0;
 
             wait_recursive_counter++;
             //already called

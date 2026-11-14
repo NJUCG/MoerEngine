@@ -3,11 +3,11 @@
 
 #include "RHI.h"
 #include "RHICommandDrawData.h"
-#include "RHIIO.h"
 #include "RenderAPI.h"
 #include "math/Base.h"
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHICompletion.h"
 #include "rhi/RHIGpuScope.h"
@@ -16,8 +16,8 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHISubmissionTopology.h"
 #include "shader/ShaderPipeline.h"
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
@@ -77,14 +77,14 @@ inline float4 Scope() noexcept {
 }
 } // namespace GpuMarkerPalette
 
-enum class EGpuMarkerMode : uint8_t {
+enum class EGpuMarkerMode : uint8 {
     Label,
     Timestamp,
 };
 
 struct Command {
 public:
-    enum class EType : uint8_t {
+    enum class EType : uint8 {
         UploadBuffer,
         CopyBackBuffer,
         BufferToBuffer,
@@ -107,16 +107,34 @@ public:
         Query,
         Scope,
         Custom,
+        ResourceAccessScope,
         Count
     };
 
     static constexpr std::array<std::string_view, static_cast<size_t>(EType::Count)> typenames = {
-        "UploadBuffer",    "CopyBackBuffer",      "BufferToBuffer", "BufferToTexture",
-        "TextureToBuffer", "UploadTexture",       "TextureToTexture", "CopyBackTexture",
-        "ShaderDispatch",  "BuildAccel",          "BuildTLAS",      "TraceRay",
-        "Barrier",         "QueueTransfer",       "SetDrawState",   "SetGeometryPassDrawState",
-        "MultiDraw",       "UpdateBindlessArray", "ClearResource",  "Query",
-        "Scope",           "Custom"
+        "UploadBuffer",
+        "CopyBackBuffer",
+        "BufferToBuffer",
+        "BufferToTexture",
+        "TextureToBuffer",
+        "UploadTexture",
+        "TextureToTexture",
+        "CopyBackTexture",
+        "ShaderDispatch",
+        "BuildAccel",
+        "BuildTLAS",
+        "TraceRay",
+        "Barrier",
+        "QueueTransfer",
+        "SetDrawState",
+        "SetGeometryPassDrawState",
+        "MultiDraw",
+        "UpdateBindlessArray",
+        "ClearResource",
+        "Query",
+        "Scope",
+        "Custom",
+        "ResourceAccessScope"
     };
 
 private:
@@ -135,7 +153,7 @@ public:
     CachedArgumentReferencesAreValid(size_t) const noexcept {
         return true;
     }
-    virtual void RebaseCachedArgumentReferences(uint) noexcept {}
+    virtual void RebaseCachedArgumentReferences(uint32) noexcept {}
 
 public:
     EType Type() const {
@@ -160,8 +178,8 @@ struct IndirectDrawParam {
     std::optional<BufferView> count_buffer;
 
     //when count_buffer is not null, count is the max count of draw calls
-    uint count;
-    uint stride;
+    uint32 count;
+    uint32 stride;
 };
 
 using TDrawParam = std::variant<Array<SingleDrawParam>, IndirectDrawParam>;
@@ -170,7 +188,7 @@ struct MeshDrawData {
     // vtx_views的数量与顺序应该在外部代码进行维护！MeshDrawData没有任何保护措施！
     // 关于内部顺序：buffer顺序应当按照EVertexAttributes枚举值的顺序排列。例如，PositionBuffer应该在NormalBuffer之前。（最自然的顺序）
     Array<VertexBuffer>             vtx_views;
-    std::variant<IndexBuffer, uint> idx_view = 0u;
+    std::variant<IndexBuffer, uint32> idx_view = 0u;
 
     Array<SingleDrawParam>           draw_params;
     std::optional<IndirectDrawParam> indirect_draw_param;
@@ -215,16 +233,16 @@ public:
         vtx_views.assign(_vtx_views.begin(), _vtx_views.end());
     }
 
-    MeshDrawData(std::span<VertexBuffer> _vtx_views, uint _index_cnt) : idx_view(_index_cnt) {
+    MeshDrawData(std::span<VertexBuffer> _vtx_views, uint32 _index_cnt) : idx_view(_index_cnt) {
         vtx_views.assign(_vtx_views.begin(), _vtx_views.end());
     }
 
     void EmplaceDrawIndexed(
-        uint _first_index,
-        uint _index_cnt,
-        uint _first_vertex,
-        uint _first_instance,
-        uint _instance_cnt = 1
+        uint32 _first_index,
+        uint32 _index_cnt,
+        uint32 _first_vertex,
+        uint32 _first_instance,
+        uint32 _instance_cnt = 1
     ) {
 
         draw_params.emplace_back(
@@ -232,21 +250,21 @@ public:
         );
     }
 
-    void DrawIndirect(BufferView _buffer, uint _count, uint _stride) {
+    void DrawIndirect(BufferView _buffer, uint32 _count, uint32 _stride) {
         indirect_draw_param = IndirectDrawParam{_buffer, std::nullopt, _count, _stride};
     }
 
-    void DrawIndirect(BufferView _buffer, BufferView _count_buffer, uint _max_cnt, uint _stride) {
+    void DrawIndirect(BufferView _buffer, BufferView _count_buffer, uint32 _max_cnt, uint32 _stride) {
         indirect_draw_param = IndirectDrawParam{_buffer, _count_buffer, _max_cnt, _stride};
     }
 
-    void EmplaceDraw(uint _vertex_cnt, uint _first_vertex, uint _first_instance, uint _instance_cnt = 1) {
+    void EmplaceDraw(uint32 _vertex_cnt, uint32 _first_vertex, uint32 _first_instance, uint32 _instance_cnt = 1) {
 
         draw_params.emplace_back(
             SingleDrawParam{_vertex_cnt, _instance_cnt, 0, _first_vertex, _first_instance}
         );
     }
-    void Reserve(uint _size) {
+    void Reserve(uint32 _size) {
         draw_params.reserve(_size);
     }
 };
@@ -259,12 +277,12 @@ struct DispatchMeshData {
         return DispatchMeshData{_group_count};
     }
 
-    static DispatchMeshData DispatchIndirect(BufferView _buffer, uint _count, uint _stride) {
+    static DispatchMeshData DispatchIndirect(BufferView _buffer, uint32 _count, uint32 _stride) {
         return DispatchMeshData{IndirectDrawParam{_buffer, std::nullopt, _count, _stride}};
     }
 
     static DispatchMeshData
-    DispatchIndirectCount(BufferView _buffer, BufferView _count_buffer, uint _max_cnt, uint _stride) {
+    DispatchIndirectCount(BufferView _buffer, BufferView _count_buffer, uint32 _max_cnt, uint32 _stride) {
         return DispatchMeshData{IndirectDrawParam{_buffer, _count_buffer, _max_cnt, _stride}};
     }
 };
@@ -280,18 +298,25 @@ enum class ERHIProfilingPhase : uint8 {
     End,
 };
 
-// Selects the owner of resource-state lifetime across one immutable submit.
-// BackendTracked preserves the legacy behavior: the backend infers command
-// states and restores resources to their preferred state at submit end.
-// Explicit is used by an upper-level compiler (for example RDG): barriers in
-// the command stream are authoritative and the backend must not append a
-// restore-to-preferred-state epilogue.
+// Resource dependency contract for one immutable submit. Vulkan requires
+// Compiled: command order, ranges and complete src/dst barriers come from the
+// caller (normally RDG). BackendTracked is retained for other RHI backends;
+// Vulkan rejects it before native recording.
 enum class ERHIResourceStateOwnership : uint8 {
     BackendTracked,
-    Explicit,
+    Compiled,
+};
+
+// One recording generation owns its direct resources and any opaque owners
+// supplied by custom commands / bindless users. Sealed submissions share this
+// immutable payload when split; retirement owns it through all callback tiers.
+struct RHICommandLifetime {
+    UnorderedMap<RHIResource*, CountableRef<RHIResource>> resources;
+    Array<std::shared_ptr<const void>>                    owners;
 };
 
 struct CmdSubmit {
+    std::shared_ptr<const RHICommandLifetime> lifetime;
     Array<UniquePtr<Command>>        cmds;
     Array<std::function<void(void)>> callbacks;
     Array<std::function<void(void)>> success_callbacks;
@@ -355,7 +380,7 @@ struct CmdSubmit {
     }
 
     bool HasExplicitResourceStateOwnership() const noexcept {
-        return resource_state_ownership == ERHIResourceStateOwnership::Explicit;
+        return resource_state_ownership != ERHIResourceStateOwnership::BackendTracked;
     }
 
     CmdSubmit&& DeleteResources() {
@@ -408,6 +433,7 @@ struct CmdSubmit {
     }
 
     CmdSubmit(CmdSubmit&& _other) noexcept {
+        lifetime              = std::move(_other.lifetime);
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
         success_callbacks  = std::move(_other.success_callbacks);
@@ -449,7 +475,8 @@ struct CmdSubmit {
             std::move(cmds),
             std::move(callbacks),
             std::move(success_callbacks),
-            std::move(cached_args)
+            std::move(cached_args),
+            std::move(lifetime)
         );
         replaced.gpu_completion_tokens =
             std::move(gpu_completion_tokens);
@@ -474,6 +501,7 @@ struct CmdSubmit {
         replaced.debug_label = std::move(debug_label);
         replaced.debug_label_color = debug_label_color;
 
+        lifetime              = std::move(_other.lifetime);
         cmds               = std::move(_other.cmds);
         callbacks          = std::move(_other.callbacks);
         success_callbacks  = std::move(_other.success_callbacks);
@@ -543,6 +571,7 @@ struct CmdSubmit {
     }
 
     ~CmdSubmit() {
+        auto                      rejected_lifetime = std::move(lifetime);
         Array<UniquePtr<Command>> rejected_cmds =
             std::move(cmds);
         Array<std::function<void(void)>> rejected_callbacks =
@@ -716,11 +745,13 @@ struct CmdSubmit {
         NotifyPendingQueries(batch);
     }
     CmdSubmit(
-        Array<UniquePtr<Command>>&&        _cmds,
-        Array<std::function<void(void)>>&& _callbacks,
-        Array<std::function<void(void)>>&& _success_callbacks,
-        TCachedArgArray&&                  _cached_args
+        Array<UniquePtr<Command>>&&               _cmds,
+        Array<std::function<void(void)>>&&        _callbacks,
+        Array<std::function<void(void)>>&&        _success_callbacks,
+        TCachedArgArray&&                         _cached_args,
+        std::shared_ptr<const RHICommandLifetime> _lifetime = {}
     ) noexcept :
+        lifetime(std::move(_lifetime)),
         cmds(std::move(_cmds)),
         callbacks(std::move(_callbacks)),
         success_callbacks(std::move(_success_callbacks)),
@@ -786,17 +817,35 @@ struct BarrierState {
     }
 };
 
-inline constexpr bool BarrierStateWrites(const BarrierState& _state) {
-    return (_state.access & ERHIAccessFlags::SHADER_WRITE) != ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::COLOR_ATTACHMENT_WRITE) !=
-               ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::DEPTH_STENCIL_WRITE) !=
-               ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::TRANSFER_WRITE) != ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::MEMORY_WRITE) != ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::CPU_WRITE_BIT) != ERHIAccessFlags::UNDEFINED ||
-           (_state.access & ERHIAccessFlags::UNORDERED_ACCESS_VIEW) !=
-               ERHIAccessFlags::UNDEFINED;
+// One declared GPU access. The views borrow resources retained by CommandList;
+// the same declaration describes direct, bindless and external consumers.
+struct RHIResourceAccess {
+    std::variant<TextureView, BufferView> resource;
+    BarrierState                          state{};
+    ETextureAspectFlags                   texture_aspects{ETextureAspectFlags::NONE};
+};
+
+// Delimits one compiled recording scope. This is validation metadata, not a
+// native command or an implicit transition. An end marker has begin == false.
+struct ResourceAccessScopeCmd final : Command {
+    Array<RHIResourceAccess> accesses;
+    bool                     begin;
+    ResourceAccessScopeCmd(std::span<const RHIResourceAccess> values, bool begin_scope, std::string_view label) :
+        Command(EType::ResourceAccessScope, label),
+        accesses(values.begin(), values.end()),
+        begin(begin_scope) {}
+    EQueueType GetQueueType() const override {
+        return EQueueType::Ignore;
+    }
+};
+
+inline constexpr bool BarrierStateWrites(const BarrierState& state) {
+    constexpr auto writes = ERHIAccessFlags::SHADER_WRITE | ERHIAccessFlags::COLOR_ATTACHMENT_WRITE |
+                            ERHIAccessFlags::DEPTH_STENCIL_WRITE | ERHIAccessFlags::TRANSFER_WRITE | ERHIAccessFlags::MEMORY_WRITE |
+                            ERHIAccessFlags::CPU_WRITE_BIT | ERHIAccessFlags::UNORDERED_ACCESS_VIEW |
+                            ERHIAccessFlags::TRANSFORM_FEEDBACK_WRITE_BIT_EXT | ERHIAccessFlags::TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT |
+                            ERHIAccessFlags::COMMAND_PREPROCESS_WRITE_BIT_NV | ERHIAccessFlags::ACCELERATION_STRUCTURE_WRITE_BIT;
+    return (state.access & writes) != ERHIAccessFlags::UNDEFINED;
 }
 
 enum class EBarrierQueueTransferPhase : uint8 {
@@ -814,6 +863,10 @@ struct BarrierQueueTransfer {
     EBarrierQueueTransferPhase phase{EBarrierQueueTransferPhase::None};
     EQueueType                 src_queue{EQueueType::Ignore};
     EQueueType                 dst_queue{EQueueType::Ignore};
+    // The unrecorded endpoint is an external API on the same physical device.
+    // Its resource allocation and semaphore protocol belong to the interop
+    // owner; Ignore alone never denotes an external endpoint.
+    bool external{false};
 
     [[nodiscard]] static constexpr BarrierQueueTransfer Release(
         EQueueType _src_queue,
@@ -835,6 +888,14 @@ struct BarrierQueueTransfer {
             .src_queue = _src_queue,
             .dst_queue = _dst_queue,
         };
+    }
+
+    [[nodiscard]] static constexpr BarrierQueueTransfer ReleaseToExternal(EQueueType queue) {
+        return {EBarrierQueueTransferPhase::Release, queue, EQueueType::Ignore, true};
+    }
+
+    [[nodiscard]] static constexpr BarrierQueueTransfer AcquireFromExternal(EQueueType queue) {
+        return {EBarrierQueueTransferPhase::Acquire, EQueueType::Ignore, queue, true};
     }
 
     friend bool operator==(const BarrierQueueTransfer&, const BarrierQueueTransfer&) = default;
@@ -1013,7 +1074,7 @@ public:
 
         DrawDispatcher(RasterPipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
 
-        DrawDispatcher& SetViewMask(uint32_t mask) {
+        DrawDispatcher& SetViewMask(uint32 mask) {
             view_mask = mask;
             return *this;
         }
@@ -1071,7 +1132,7 @@ public:
         void Draw(
             Rect2D                   _rect,
             std::span<VertexBuffer>  _vtx,
-            uint                     _vtx_cnt,
+            uint32                   _vtx_cnt,
             Array<SingleDrawParam>&& _mesh_data,
             DepthAttachment          _depth,
             TRenderTarget&&... _render_targets
@@ -1196,7 +1257,7 @@ public:
             std::string_view         _name,
             Rect2D                   _rect,
             std::span<VertexBuffer>  _vtx,
-            uint                     _vtx_cnt,
+            uint32                   _vtx_cnt,
             Array<SingleDrawParam>&& _mesh_data,
             DepthAttachment          _depth,
             TRenderTarget&&... _render_targets
@@ -1218,7 +1279,7 @@ public:
             std::string_view         _name,
             Rect2D                   _rect,
             std::span<VertexBuffer>  _vtx,
-            uint                     _vtx_cnt,
+            uint32                   _vtx_cnt,
             Array<SingleDrawParam>&& _mesh_data,
             TRenderTarget&&... _render_targets
         ) {
@@ -1260,8 +1321,8 @@ public:
             std::span<VertexBuffer> _vtx,
             IndexBuffer             _idx,
             BufferView              _indirect_buffer,
-            uint                    _count,
-            uint                    _stride,
+            uint32                  _count,
+            uint32                  _stride,
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info(
@@ -1285,8 +1346,8 @@ public:
             std::span<VertexBuffer> _vtx,
             IndexBuffer             _idx,
             BufferView              _indirect_buffer,
-            uint                    _count,
-            uint                    _stride,
+            uint32                  _count,
+            uint32                  _stride,
             DepthAttachment         _depth,
             TRenderTarget&&... _render_targets
         ) {
@@ -1310,8 +1371,8 @@ public:
             IndexBuffer             _idx,
             BufferView              _indirect_buffer,
             BufferView              _count_buffer,
-            uint                    _stride,
-            uint                    _max_cnt,
+            uint32                  _stride,
+            uint32                  _max_cnt,
             DepthAttachment         _depth,
             TRenderTarget&&... _render_targets
         ) {
@@ -1335,8 +1396,8 @@ public:
             IndexBuffer             _idx,
             BufferView              _indirect_buffer,
             BufferView              _count_buffer,
-            uint                    _max_cnt,
-            uint                    _stride,
+            uint32                  _max_cnt,
+            uint32                  _stride,
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info(
@@ -1357,11 +1418,11 @@ public:
             std::string_view        _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
-            uint                    _vtx_cnt,
+            uint32                  _vtx_cnt,
             BufferView              _indirect_buffer,
             BufferView              _count_buffer,
-            uint                    _max_cnt,
-            uint                    _stride,
+            uint32                  _max_cnt,
+            uint32                  _stride,
             DepthAttachment         _depth,
             TRenderTarget&&... _render_targets
         ) {
@@ -1381,11 +1442,11 @@ public:
             std::string_view        _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
-            uint                    _vtx_cnt,
+            uint32                  _vtx_cnt,
             BufferView              _indirect_buffer,
             BufferView              _count_buffer,
-            uint                    _max_cnt,
-            uint                    _stride,
+            uint32                  _max_cnt,
+            uint32                  _stride,
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info(
@@ -1406,10 +1467,10 @@ public:
             std::string_view        _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
-            uint                    _vtx_cnt,
+            uint32                  _vtx_cnt,
             BufferView              _indirect_buffer,
-            uint                    _count,
-            uint                    _stride,
+            uint32                  _count,
+            uint32                  _stride,
             TRenderTarget&&... _render_targets
         ) {
             RenderPassInfo pass_info(
@@ -1430,10 +1491,10 @@ public:
             std::string_view        _name,
             Rect2D                  _rect,
             std::span<VertexBuffer> _vtx,
-            uint                    _vtx_cnt,
+            uint32                  _vtx_cnt,
             BufferView              _indirect_buffer,
-            uint                    _count,
-            uint                    _stride,
+            uint32                  _count,
+            uint32                  _stride,
             DepthAttachment         _depth,
             TRenderTarget&&... _render_targets
         ) {
@@ -1453,7 +1514,7 @@ public:
         ArrayArguments  args;
 
     private:
-        uint32_t        view_mask = 0;
+        uint32          view_mask = 0;
         TCachedArgArray args_cache;
     };
 
@@ -1480,7 +1541,7 @@ public:
             draw_batch = std::move(_draw_batch);
             return *this;
         }
-        MutiDrawDispatcher& SetViewMask(uint32_t mask) {
+        MutiDrawDispatcher& SetViewMask(uint32 mask) {
             pass_info.view_mask = mask;
             return *this;
         }
@@ -1525,26 +1586,26 @@ public:
     struct RENDER_API ComputeDispatcher {
         void Dispatch(
             Vector2ui        _group_count,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            std::string_view _name    = Command::typenames[(uint32)Command::EType::ShaderDispatch],
             ProfileSection   _section = ProfileSection("Other")
         ) {
             Dispatch(uint3(_group_count, 1), _name, _section);
         }
         void Dispatch(
             Vector3ui        _group_count,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            std::string_view _name    = Command::typenames[(uint32)Command::EType::ShaderDispatch],
             ProfileSection   _section = ProfileSection("Other")
         );
         void Dispatch(
-            uint             _group_cnt,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            uint32           _group_cnt,
+            std::string_view _name    = Command::typenames[(uint32)Command::EType::ShaderDispatch],
             ProfileSection   _section = ProfileSection("Other")
         ) {
             Dispatch(Vector3ui(_group_cnt, 1, 1), _name, _section);
         }
         void DispatchIndirect(
             BufferView,
-            std::string_view _name    = Command::typenames[(uint)Command::EType::ShaderDispatch],
+            std::string_view _name    = Command::typenames[(uint32)Command::EType::ShaderDispatch],
             ProfileSection   _section = ProfileSection("Other")
         );
         ComputeDispatcher(ComputePipeline& _pso, CommandList& _cmd_list, ArrayArguments&& _args);
@@ -1576,7 +1637,7 @@ public:
         // bool      b_set_params = false;
         // bool      b_set_consts = false;
     };
-    friend class VkCommandQueue;
+    friend class VulkanCommandQueue;
 
     using Dispatcher = std::variant<DrawDispatcher, ComputeDispatcher>;
 
@@ -1640,62 +1701,62 @@ public:
     RENDER_API void CopyFrom(
         BufferView       _src,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::BufferToBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::BufferToBuffer]
     );
     RENDER_API void CopyFrom(
         TextureView      _src,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::TextureToTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::TextureToTexture]
     );
     RENDER_API void CopyFrom(
         TextureView      _src,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::TextureToBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::TextureToBuffer]
     );
     RENDER_API void CopyFrom(
         BufferView       _src,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::BufferToTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::BufferToTexture]
     );
     RENDER_API void CopyFrom(
         std::span<byte>  _data,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::UploadBuffer]
     );
     RENDER_API void CopyFrom(
         std::span<const byte> _data,
         BufferView            _dst,
-        std::string_view      _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+        std::string_view      _name = Command::typenames[(uint32)Command::EType::UploadBuffer]
     );
     RENDER_API void CopyFrom(
         std::span<byte>  _data,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::UploadTexture]
     );
     RENDER_API void CopyFrom(
         std::span<const byte> _data,
         TextureView           _dst,
-        std::string_view      _name = Command::typenames[(uint)Command::EType::UploadTexture]
+        std::string_view      _name = Command::typenames[(uint32)Command::EType::UploadTexture]
     );
     RENDER_API void CopyFrom(
         Array<byte>&&    _data,
         BufferView       _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::UploadBuffer]
     );
     RENDER_API void CopyFrom(
         Array<byte>&&    _data,
         TextureView      _dst,
-        std::string_view _name = Command::typenames[(uint)Command::EType::UploadTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::UploadTexture]
     );
     RENDER_API void CopyFrom(
         BufferView       _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::CopyBackBuffer]
     );
     RENDER_API void CopyFrom(
         TextureView      _src,
         std::span<byte>  _data,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::CopyBackTexture]
     );
 
     // Owning host readback. The returned Future does not expose native
@@ -1703,18 +1764,18 @@ public:
     // retired and an immutable CPU byte snapshot has been materialized.
     [[nodiscard]] RENDER_API ReadbackFuture Readback(
         BufferView       _src,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackBuffer]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::CopyBackBuffer]
     );
     [[nodiscard]] RENDER_API ReadbackFuture Readback(
         TextureView      _src,
-        std::string_view _name = Command::typenames[(uint)Command::EType::CopyBackTexture]
+        std::string_view _name = Command::typenames[(uint32)Command::EType::CopyBackTexture]
     );
 
     RENDER_API void UpdateBindlessArray(BindlessArrayRef _array);
 
-    RENDER_API void ClearResource(BufferView _buffer, uint32_t _value);
+    RENDER_API void ClearResource(BufferView _buffer, uint32 _value);
     RENDER_API void ClearResource(TextureView _texture, float4 _color);
-    RENDER_API void ClearResource(TextureView _texture, uint32_t _value);
+    RENDER_API void ClearResource(TextureView _texture, uint32 _value);
 
     RENDER_API void PushScope(
         std::string_view _name,
@@ -1759,40 +1820,40 @@ public:
 
     template<typename T>
     struct CountType<T> {
-        static constexpr uint32_t value = 0;
+        static constexpr uint32 value = 0;
     };
 
     template<typename T, typename First, typename... Rest>
     struct CountType<T, First, Rest...> {
-        static constexpr uint32_t value = std::is_same_v<T, First> + CountType<T, Rest...>::value;
+        static constexpr uint32 value = std::is_same_v<T, First> + CountType<T, Rest...>::value;
     };
 
     template<typename... Args>
     struct GetReadTextureCnt {
-        static constexpr uint32_t value = CountType<ReadTexture, Args...>::value;
+        static constexpr uint32 value = CountType<ReadTexture, Args...>::value;
     };
 
     template<typename... Args>
     struct GetWriteTextureCnt {
-        static constexpr uint32_t value = CountType<WriteTexture, Args...>::value;
+        static constexpr uint32 value = CountType<WriteTexture, Args...>::value;
     };
 
     template<typename... Args>
     struct GetReadBufferCnt {
-        static constexpr uint32_t value = CountType<ReadBuffer, Args...>::value;
+        static constexpr uint32 value = CountType<ReadBuffer, Args...>::value;
     };
 
     template<typename... Args>
     struct GetWriteBufferCnt {
-        static constexpr uint32_t value = CountType<WriteBuffer, Args...>::value;
+        static constexpr uint32 value = CountType<WriteBuffer, Args...>::value;
     };
 
     template<typename... T>
     void Barriers(EQueueType _src_queue, EQueueType _dst_queue, EPassType _pass, T... _args) {
-        constexpr uint read_tex_cnt  = GetReadTextureCnt<T...>::value;
-        constexpr uint write_tex_cnt = GetWriteTextureCnt<T...>::value;
-        constexpr uint read_buf_cnt  = GetReadBufferCnt<T...>::value;
-        constexpr uint write_buf_cnt = GetWriteBufferCnt<T...>::value;
+        constexpr uint32 read_tex_cnt  = GetReadTextureCnt<T...>::value;
+        constexpr uint32 write_tex_cnt = GetWriteTextureCnt<T...>::value;
+        constexpr uint32 read_buf_cnt  = GetReadBufferCnt<T...>::value;
+        constexpr uint32 write_buf_cnt = GetWriteBufferCnt<T...>::value;
         static_assert(read_tex_cnt + write_tex_cnt + read_buf_cnt + write_buf_cnt > 0, "no barriers");
 
         BeginBarriers(read_tex_cnt, write_tex_cnt, read_buf_cnt, write_buf_cnt, _src_queue, _dst_queue);
@@ -1824,6 +1885,15 @@ public:
     void Barriers(std::span<const BarrierCreateInfo> _barriers) {
         Barriers(_barriers, queue_type, queue_type);
     }
+
+    // Declarations include every possible bindless target, not only directly
+    // bound arguments. Candidate completeness is the caller's contract; table
+    // membership cannot establish which targets a GPU-selected index uses.
+    // Storage descriptors expose capabilities; declarations specify which
+    // bound subresources are actually read or written by this scope.
+    // Nested scopes inherit resources not redeclared by the child scope.
+    RENDER_API void BeginResourceAccesses(std::span<const RHIResourceAccess> accesses, std::string_view label);
+    RENDER_API void EndResourceAccesses();
 
     void Barriers(std::initializer_list<BarrierCreateInfo> _barriers) {
         Barriers(
@@ -1917,7 +1987,7 @@ public:
 
     RENDER_API void AddCustomCommand(
         UniquePtr<Command>&& _cmd,
-        std::string_view     _name = Command::typenames[(uint)Command::EType::Custom]
+        std::string_view     _name = Command::typenames[(uint32)Command::EType::Custom]
     );
 
 #pragma endregion
@@ -1944,6 +2014,12 @@ public:
     RENDER_API void RejectPendingSignals() noexcept;
 
     RENDER_API ArrayArgReference RegisterArgs(ArrayArguments&& _args);
+
+    // Direct command arguments are retained automatically. Custom commands
+    // and bindless users must retain resources reachable only through opaque
+    // handles. Owners survive rejection cleanup or GPU retirement callbacks.
+    RENDER_API void RetainResource(RHIResource* _resource);
+    RENDER_API void KeepAlive(std::shared_ptr<const void> _owner);
 
     // Terminal rejection-only ownership path. The producer must have stopped
     // mutating this CommandList before it is called. It destructively drops all
@@ -2043,11 +2119,15 @@ public:
     }
 
     bool HasExplicitResourceStateOwnership() const noexcept {
-        return resource_state_ownership == ERHIResourceStateOwnership::Explicit;
+        return resource_state_ownership != ERHIResourceStateOwnership::BackendTracked;
     }
 
     ERHITranslateExecutionClass GetTranslateExecutionClass() const noexcept {
         return translate_execution_class;
+    }
+
+    ERHIResourceStateOwnership GetResourceStateOwnership() const noexcept {
+        return resource_state_ownership;
     }
 
 private:
@@ -2088,10 +2168,10 @@ private:
     );
 
     RENDER_API void BeginBarriers(
-        uint       _read_tex_cnt,
-        uint       _write_tex_cnt,
-        uint       _read_buf_cnt,
-        uint       _write_buf_cnt,
+        uint32     _read_tex_cnt,
+        uint32     _write_tex_cnt,
+        uint32     _read_buf_cnt,
+        uint32     _write_buf_cnt,
         EQueueType _src_queue,
         EQueueType _dst_queue
     );
@@ -2138,6 +2218,20 @@ private:
     RENDER_API void TraceRayIndirect(PipelineHandle _pipeline, BufferView _buffer);
 #pragma endregion
 
+    void Retain(BufferView _view) {
+        RetainResource(_view.GetBuffer());
+    }
+    void Retain(TextureView _view) {
+        RetainResource(_view.GetTexture());
+    }
+    void Retain(const ArrayArguments& _args);
+    void Retain(const TShaderArgArray& _args);
+    void Retain(const RenderPassInfo& _pass);
+    void Retain(const MeshDrawData& _draw);
+    void Retain(const DispatchMeshData& _draw);
+    void Retain(const IndirectDrawParam& _draw);
+
+    std::shared_ptr<RHICommandLifetime> lifetime;
     Array<UniquePtr<Command>>    commands;
     Command*                     current_barriers{nullptr};
     Array<std::function<void()>> callbacks;
@@ -2245,7 +2339,7 @@ struct ProfileData {
     Array<ProfileResultEntry> cpu_entries;
 };
 
-enum class EPresentStatus : uint8_t {
+enum class EPresentStatus : uint8 {
     Unresolved,
     Success,
     Suboptimal,
@@ -2256,7 +2350,7 @@ enum class EPresentStatus : uint8_t {
     Faulted,
 };
 
-enum class EPresentStage : uint8_t {
+enum class EPresentStage : uint8 {
     None,
     Validation,
     Acquire,
@@ -2276,7 +2370,7 @@ PresentStatusRequiresNativeSurfaceRefresh(EPresentStatus status) noexcept {
     return status == EPresentStatus::SurfaceLost;
 }
 
-[[nodiscard]] constexpr uint8_t PresentRecoveryPriority(EPresentStatus status) noexcept {
+[[nodiscard]] constexpr uint8 PresentRecoveryPriority(EPresentStatus status) noexcept {
     switch (status) {
         case EPresentStatus::SurfaceLost:
             return 3;
@@ -2494,9 +2588,8 @@ public:
 class RENDER_API CopyQueue {
 public:
     CopyQueue() {};
-    ~CopyQueue()                                           = default;
-    virtual IOWaitEvt Execute(IOQueueSubmission&& _submit) = 0;
-    virtual IOWaitEvt Execute(CmdSubmit&& _submit)         = 0;
+    ~CopyQueue() = default;
+    virtual WaitEvent Execute(CmdSubmit&& _submit) = 0;
 
     virtual void CopyFrom(BufferView _src, BufferView _dst)        = 0;
     virtual void CopyFrom(TextureView _src, TextureView _dst)      = 0;
@@ -2515,26 +2608,5 @@ public:
     CopyQueue(CopyQueue&& other)            = delete;
 };
 
-class IOInterface;
-using IOInterfaceRef = std::shared_ptr<IOInterface>;
-struct IOService {
-    static void Init();
-    static void Dispose();
-
-    static uint64_t     Execute(class IOCommandList& _cmd_list);
-    static void         Sync(uint64_t _time_stamp);
-    static IOInterface* CreateGPUService(CopyQueue* _copy_queue);
-    static IOInterface* CreateCPUService();
-
-    static void Destroy(IOInterface* _service);
-    struct Impl;
-};
-
-class IOInterface {
-public:
-    virtual WaitEvent GetWaitEvent(uint64 _time_stamp)   = 0;
-    virtual uint64    Execute(IOCommandList&& _cmd_list) = 0;
-    virtual void      Sync(uint64_t _time_stamp)         = 0;
-};
 } // namespace Moer::Render
 #endif

@@ -21,19 +21,14 @@
 
 ```toml
 [cvars]
-"RHI.CommandRecording.Parallel" = true
-"RHI.CommandRecording.Parallel.Workers" = 0
 "RHI.Submission.BatchWindow" = 2
 
 [profiles.rdg-parallel.cvars]
-"Render.Raster.RDG.Enabled" = true
 "Render.Raster.RDG.ParallelRecording" = true
-"RHI.CommandRecording.Parallel" = true
 ```
 
 ```powershell
 MoerEditor.exe --profile rdg-parallel
-MoerEditor.exe --set Render.Raster.RDG.Enabled=true --set RHI.Submission.BatchWindow=1
 ```
 
 这些设置在启动结束时被冻结，并生成一份强类型快照。RHI 与渲染器只读取该
@@ -41,27 +36,25 @@ MoerEditor.exe --set Render.Raster.RDG.Enabled=true --set RHI.Submission.BatchWi
 
 ## 当前 startup CVar
 
+Raster 和 Raytracing 固定采用 RDG 编译执行。`render_graph` 和
+`Render.*.RDG.Enabled` 已移除；并行录制开关只影响 CPU 录制方式，不改变资源依赖与 barrier 的来源。
+
 - `Engine.Threading.RenderThread`
 - `Engine.Threading.RHIThread`
 - `Engine.Threading.RHIBypass`
 - `Engine.Threading.ProfileLogging`
 - `Engine.Threading.MaxFrameLag`
-- `RHI.CommandRecording.Parallel`
-- `RHI.CommandRecording.Parallel.Workers`
-- `RHI.CommandRecording.Parallel.Verify`
-- `RHI.CommandRecording.Parallel.Profile`
-- `RHI.CommandRecording.Parallel.MinWorkUnitsPerJob`
 - `RHI.Submission.BatchWindow`
-- `RHI.Heartbeat.Enabled`
-- `RHI.Heartbeat.StallTimeoutMs`
-- `RHI.Heartbeat.PollIntervalMs`
-- `Render.Raster.RDG.Enabled`
 - `Render.Raster.RDG.DebugDump`
 - `Render.Raster.RDG.ParallelRecording`
-- `Render.Raytracing.RDG.Enabled`
 - `Render.Raytracing.RDG.DebugDump`
 - `Render.Raytracing.RDG.ParallelRecording`
 
 `RHI.Submission.BatchWindow.PolicyClamped` 是只读诊断值，用于查看策略钳制后的
 窗口。所有 startup CVar 都会在初始化结束后封存；若要临时试验，优先用
 `--set`，若要保存一组组合，使用命名 profile。
+
+## CPU 耗时采集
+
+工作内部的耗时使用现有 CPU profile scope 记录，可通过 `[engine.profile_dump]` 的
+`enabled = true` 启动采集。每个 scope 在结束时写入耗时记录。

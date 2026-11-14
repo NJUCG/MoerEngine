@@ -6,6 +6,7 @@
 #include <imgui_internal.h>
 
 #include <string_view>
+#include <utility>
 
 namespace Moer {
 
@@ -14,6 +15,19 @@ namespace {
 constexpr const char*      k_editor_window_visibility_type    = "EditorWindowVisibility";
 constexpr const char*      k_editor_window_visibility_name    = "Main";
 constexpr std::string_view k_editor_window_visibility_section = "[EditorWindowVisibility][Main]";
+
+constexpr std::pair<const char*, bool EditorWindowVisibilitySettings::*> k_window_visibility_fields[] = {
+    {"SceneColor", &EditorWindowVisibilitySettings::scene_color},
+    {"SceneView", &EditorWindowVisibilitySettings::scene_view},
+    {"Hierarchy", &EditorWindowVisibilitySettings::hierarchy},
+    {"Inspector", &EditorWindowVisibilitySettings::inspector},
+    {"Configs", &EditorWindowVisibilitySettings::config},
+    {"SceneEditing", &EditorWindowVisibilitySettings::scene_editing},
+    {"Console", &EditorWindowVisibilitySettings::console},
+    {"ProfileCapture", &EditorWindowVisibilitySettings::profile_capture},
+    {"ProfileViewer", &EditorWindowVisibilitySettings::profile_viewer},
+    {"MemoryProfiler", &EditorWindowVisibilitySettings::memory_profiler},
+};
 
 EditorWindowVisibilitySettings g_editor_window_visibility_settings;
 
@@ -44,21 +58,11 @@ void ParseEditorWindowVisibilityLine(EditorWindowVisibilitySettings& settings, s
         return;
     }
 
-    if (TryParseBoolSetting(line, "SceneColor", settings.scene_color) ||
-        TryParseBoolSetting(line, "SceneView", settings.scene_view) ||
-        TryParseBoolSetting(line, "Hierarchy", settings.hierarchy) ||
-        TryParseBoolSetting(line, "Inspector", settings.inspector) ||
-        TryParseBoolSetting(line, "Configs", settings.config) ||
-        TryParseBoolSetting(line, "SceneEditing", settings.scene_editing) ||
-        TryParseBoolSetting(line, "Console", settings.console) ||
-        TryParseBoolSetting(
-            line,
-            "ProfileCapture",
-            settings.profile_capture
-        ) ||
-        TryParseBoolSetting(line, "ProfileViewer", settings.profile_viewer) ||
-        TryParseBoolSetting(line, "MemoryProfiler", settings.memory_profiler)) {
-        settings.loaded = true;
+    for (const auto& [key, member] : k_window_visibility_fields) {
+        if (TryParseBoolSetting(line, key, settings.*member)) {
+            settings.loaded = true;
+            return;
+        }
     }
 }
 
@@ -88,19 +92,10 @@ void EditorWindowVisibilitySettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*
     }
 
     out_buf->appendf("[%s][%s]\n", k_editor_window_visibility_type, k_editor_window_visibility_name);
-    out_buf->appendf("SceneColor=%d\n", settings.scene_color ? 1 : 0);
-    out_buf->appendf("SceneView=%d\n", settings.scene_view ? 1 : 0);
-    out_buf->appendf("Hierarchy=%d\n", settings.hierarchy ? 1 : 0);
-    out_buf->appendf("Inspector=%d\n", settings.inspector ? 1 : 0);
-    out_buf->appendf("Configs=%d\n", settings.config ? 1 : 0);
-    out_buf->appendf("SceneEditing=%d\n", settings.scene_editing ? 1 : 0);
-    out_buf->appendf("Console=%d\n", settings.console ? 1 : 0);
-    out_buf->appendf(
-        "ProfileCapture=%d\n",
-        settings.profile_capture ? 1 : 0
-    );
-    out_buf->appendf("ProfileViewer=%d\n", settings.profile_viewer ? 1 : 0);
-    out_buf->appendf("MemoryProfiler=%d\n\n", settings.memory_profiler ? 1 : 0);
+    for (const auto& [key, member] : k_window_visibility_fields) {
+        out_buf->appendf("%s=%d\n", key, settings.*member ? 1 : 0);
+    }
+    out_buf->append("\n");
 }
 
 void RegisterEditorWindowVisibilitySettingsHandler() {
@@ -158,20 +153,6 @@ void LoadEditorWindowVisibilitySettingsFromLoadedIni() {
     }
 }
 
-bool IsSameWindowVisibilitySettings(
-    const EditorWindowVisibilitySettings& lhs,
-    const EditorWindowVisibilitySettings& rhs
-) {
-    return lhs.loaded == rhs.loaded && lhs.scene_color == rhs.scene_color &&
-           lhs.scene_view == rhs.scene_view && lhs.hierarchy == rhs.hierarchy &&
-           lhs.inspector == rhs.inspector && lhs.config == rhs.config &&
-           lhs.scene_editing == rhs.scene_editing &&
-           lhs.console == rhs.console &&
-           lhs.profile_capture == rhs.profile_capture &&
-           lhs.profile_viewer == rhs.profile_viewer &&
-           lhs.memory_profiler == rhs.memory_profiler;
-}
-
 } // namespace
 
 namespace EditorUISettings {
@@ -190,7 +171,7 @@ void StoreWindowVisibilitySettings(const EditorWindowVisibilitySettings& setting
     EditorWindowVisibilitySettings stored_settings = settings;
     stored_settings.loaded                         = true;
 
-    if (!IsSameWindowVisibilitySettings(stored_settings, g_editor_window_visibility_settings)) {
+    if (stored_settings != g_editor_window_visibility_settings) {
         g_editor_window_visibility_settings = stored_settings;
         ImGui::MarkIniSettingsDirty();
     }

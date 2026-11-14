@@ -1,7 +1,7 @@
 #include "rhi/RHIResource.h"
 #include "rhi/RHIWindowSurface.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <cstdlib>
 #include <memory>
 
@@ -30,7 +30,7 @@ public:
 };
 
 std::shared_ptr<FakeWindowSurfaceSource>
-MakeSource(uintptr_t window_system_handle, uintptr_t platform_window_handle, uint64_t generation) {
+MakeSource(uintptr_t window_system_handle, uintptr_t platform_window_handle, Moer::uint64 generation) {
     auto source      = std::make_shared<FakeWindowSurfaceSource>();
     source->identity = {
         .window_system          = EWindowSystemType::GLFW,

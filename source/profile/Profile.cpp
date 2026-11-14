@@ -1,8 +1,9 @@
 #include "Profile.h"
-#include "ProfileUtils.h"
-#include "VulkanProfiler.h"
 #include "MemoryProfiler.h"
 #include "MinHook.h"
+#include "ProfileUtils.h"
+#include "VulkanProfiler.h"
+#include "misc/Types.h"
 
 #pragma comment(lib,"psapi.lib")
 #pragma comment(lib, "dbghelp.lib")
@@ -12,10 +13,10 @@ static std::chrono::steady_clock::time_point g_start_time = std::chrono::steady_
 static constexpr size_t LOG_BATCH_FLUSH = 0;
 
 moodycamel::ConcurrentQueue<EventRecord>* g_rings[(int)MemorySource::MAX_SOURCES] = { nullptr };
-std::atomic<uint64_t> g_global_sequence{0};
+std::atomic<Moer::uint64>                 g_global_sequence{0};
 
 std::priority_queue<EventRecord, std::vector<EventRecord>, RecordComparator> g_reorder_buffer;
-uint64_t g_expected_sequence = 0;
+Moer::uint64                                                                 g_expected_sequence = 0;
 const size_t MAX_REORDER_WINDOW = 4096;
 
 static std::atomic<bool> g_dbghelp_inited(false);
@@ -39,14 +40,14 @@ PROFILE_API SourceUIConfig g_UIConfigs[3] = {
 std::unordered_map<void*,    LiveAllocInfo> g_live_allocs_editor;
 std::unordered_map<void*,    LiveAllocInfo> g_live_allocs_vulkan;
 //VkTmp返回的不是指针，不统计hotspot
-std::unordered_map<uint64_t, size_t>        g_live_allocs_vktmp;
+std::unordered_map<Moer::uint64, size_t> g_live_allocs_vktmp;
 
 std::unordered_map<StackKey, HotspotInfo, StackKeyHash> g_hotspots[(int)MemorySource::MAX_SOURCES];
 std::mutex g_hotspots_mtx[(int)MemorySource::MAX_SOURCES];
 
 PROFILE_API std::deque<TimePoint> g_history_data;
 PROFILE_API std::mutex g_history_mtx;
-uint64_t current_frame = 0;
+Moer::uint64           current_frame = 0;
 
 LiveMetrics g_metrics;
 
@@ -113,8 +114,9 @@ static void worker_thread_func() {
     }
 }
 void process_record_logical(const EventRecord& rec) {
-    const uint8_t s_idx = static_cast<uint8_t>(rec.source);
-    if (s_idx >= (uint8_t)MemorySource::MAX_SOURCES) return;
+    const Moer::uint8 s_idx = static_cast<Moer::uint8>(rec.source);
+    if (s_idx >= (Moer::uint8)MemorySource::MAX_SOURCES)
+        return;
 
     switch (rec.source) {
 
@@ -191,7 +193,7 @@ void process_record_logical(const EventRecord& rec) {
 
         case MemorySource::VulkanTmp: {
             // handle不是真实指针，用uint64_t作key，独立map
-            uint64_t handle = (uint64_t)rec.ptr;
+            Moer::uint64 handle = (Moer::uint64)rec.ptr;
 
             if (rec.action == MemoryAction::Alloc) {
                 g_live_allocs_vktmp[handle] = rec.size;
@@ -220,9 +222,9 @@ void process_record_logical(const EventRecord& rec) {
     if (rec.source == MemorySource::Editor) return;
 
     char header[512];
-    uint64_t us     = rec.ts_us;
+    Moer::uint64 us     = rec.ts_us;
     time_t   secs   = (time_t)(us / 1000000ULL);
-    uint32_t usec   = (uint32_t)(us % 1000000ULL);
+    Moer::uint32 usec   = (Moer::uint32)(us % 1000000ULL);
     tm tmv;
     gmtime_s(&tmv, &secs);
 
@@ -232,7 +234,7 @@ void process_record_logical(const EventRecord& rec) {
         auto it = g_live_allocs_vulkan.find(rec.ptr);
         log_size = (it != g_live_allocs_vulkan.end()) ? it->second.size : 0;
     } else if (rec.source == MemorySource::VulkanTmp) {
-        auto it = g_live_allocs_vktmp.find((uint64_t)rec.ptr);
+        auto it  = g_live_allocs_vktmp.find((Moer::uint64)rec.ptr);
         log_size = (it != g_live_allocs_vktmp.end()) ? it->second : rec.size;
     }
 
@@ -379,8 +381,8 @@ void WriteHotspots(bool ifDump) {
                     auto sym = symbolicate_address(snap.frames[f]);
                     g_log_ofs << sym << " ";
                 }
-                
-                g_log_ofs << "[0x" << std::hex << std::uppercase << (uint64_t)snap.frames[f] << std::dec << "]\n";
+
+                g_log_ofs << "[0x" << std::hex << std::uppercase << (Moer::uint64)snap.frames[f] << std::dec << "]\n";
             }
             g_log_ofs << "-------------------------------------------\n";
         }

@@ -93,16 +93,20 @@ struct RtaoDenoiserPassBindlessParam {
 
     uint motion_vector_tex;
     uint is_reprojection_enable;
-    uint depth_tex;
-    uint normal_tex;
+    uint current_geometry_tex;
+    uint history_geometry_tex;
 
     uint  is_validation_enable;
     uint  is_history_clamp_enable;
     float history_ratio;
-    float valid_depth_threshold;
+    float valid_position_threshold; // Relative to camera distance, with a 1.5-pixel world-space floor.
 
     float valid_normal_threshold;
     uint  is_motion_weighting_enable;
+    float2 geometry_padding;
+
+    float3 camera_position;
+    uint camera_padding;
 };
 
 struct AoCompositeParam {
@@ -115,6 +119,7 @@ struct AoCompositeParam {
     uint   is_half_resolution;
     uint   depth_tex;
     uint   normal_tex;
+    uint   indirect_tex;
 };
 
 struct BilateralFilterDenoiserPipelineBindlessParam {

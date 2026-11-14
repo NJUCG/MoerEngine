@@ -1,4 +1,5 @@
 #include "renderer/raster/ProbeStreaming.h"
+#include "misc/Types.h"
 
 #include <iostream>
 
@@ -16,7 +17,7 @@ bool Expect(bool condition, const char* message) {
 }
 
 bool TestPageEntryRoundTrip() {
-    const uint entry = PackProbePageEntry(511u, 0xabcdeu, RASTER_PROBE_STREAMING_RESIDENT);
+    const uint32 entry = PackProbePageEntry(511u, 0xabcdeu, RASTER_PROBE_STREAMING_RESIDENT);
     return Expect(entry != RASTER_PROBE_PAGE_INVALID, "valid page entry must not alias invalid") &&
            Expect(UnpackProbePageBrickIndex(entry) == 511u, "brick index must round-trip") &&
            Expect(UnpackProbePageGeneration(entry) == 0xabcdeu, "generation must round-trip") &&
@@ -28,13 +29,13 @@ bool TestPageEntryRoundTrip() {
 }
 
 bool TestStreamingFlagsPreserveDirtyState() {
-    const uint dirty_flags = RASTER_PROBE_DIRTY_GEOMETRY | RASTER_PROBE_DIRTY_SCHEDULED;
-    const uint pending_flags = PackProbeStreamingFlags(
+    const uint32 dirty_flags   = RASTER_PROBE_DIRTY_GEOMETRY | RASTER_PROBE_DIRTY_SCHEDULED;
+    const uint32 pending_flags = PackProbeStreamingFlags(
         dirty_flags | RASTER_PROBE_STREAMING_STATE_FLAG_MASK | RASTER_PROBE_STREAMING_CACHED,
         RASTER_PROBE_STREAMING_PENDING_LOAD,
         false
     );
-    const uint resident_flags = PackProbeStreamingFlags(
+    const uint32 resident_flags = PackProbeStreamingFlags(
         dirty_flags,
         RASTER_PROBE_STREAMING_RESIDENT,
         true,

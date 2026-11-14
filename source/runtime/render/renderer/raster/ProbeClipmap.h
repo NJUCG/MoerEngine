@@ -1,6 +1,7 @@
 #pragma once
 
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include "shaderheaders/shared/raster/lighting_pass/ShaderParameters.h"
 
 #include <algorithm>
@@ -120,7 +121,7 @@ public:
             z >= int(counts.z)) {
             return false;
         }
-        neighbor = uint3(uint(x), uint(y), uint(z));
+        neighbor = uint3(uint32(x), uint32(y), uint32(z));
         return true;
     }
 

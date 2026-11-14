@@ -4,6 +4,7 @@
 #include "Configs.h"
 #include "ShaderUtils.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "renderer/common/RuntimeAssets.h"
 #include "rhi/RHIResource.h"
 #include "scene/Scene.h"
@@ -22,7 +23,7 @@
 
 namespace Moer::Render::Raytracing {
 
-inline constexpr bool IsNrdDenoiserActive(uint denoiser_mode) {
+inline constexpr bool IsNrdDenoiserActive(uint32 denoiser_mode) {
 #if WITH_NRD
     return denoiser_mode == s_denoiser_mode_reblur || denoiser_mode == s_denoiser_mode_relax;
 #else
@@ -92,9 +93,9 @@ struct RTContext {
         float4      reblur_diffuse_hit_dist_params;
         float4      reblur_specular_hit_dist_params;
         EFinalColor final_color;
-        uint        denoiser_mode;
+        uint32      denoiser_mode;
         bool        enable_adaptive_local_light_sampling = true;
-        uint        grid_min_local_light_count           = 64;
+        uint32      grid_min_local_light_count           = 64;
     };
 
 public:
@@ -116,10 +117,10 @@ public:
 
     // Create light sampling buffers
     void CreateBuffersIfNeeded(
-        uint _num_emissive_meshes,
-        uint _num_emissive_triangles,
-        uint _num_prim_lights,
-        uint _max_primitives
+        uint32 _num_emissive_meshes,
+        uint32 _num_emissive_triangles,
+        uint32 _num_prim_lights,
+        uint32 _max_primitives
     );
 
     void Tick(Camera& _camera, float2 _jitter);
@@ -137,19 +138,19 @@ public:
 
     void LoadDefaultResources(RuntimeAssets& _rt_res);
 
-    const UnorderedSet<uint>& GetAllocatedBdlsBuf() {
+    const UnorderedSet<uint32>& GetAllocatedBdlsBuf() {
         return allocated_bdls_buf;
     }
-    const UnorderedSet<uint>& GetAllocatedBdlsTex() {
+    const UnorderedSet<uint32>& GetAllocatedBdlsTex() {
         return allocated_bdls_tex;
     }
 
 private:
-    void AllocateAndFreeBdlsIfNeeded(uint& _target, const TextureView& _view, Sampler _sampler);
-    void AllocateAndFreeBdlsIfNeeded(uint& _target, const BufferView& _view);
+    void AllocateAndFreeBdlsIfNeeded(uint32& _target, const TextureView& _view, Sampler _sampler);
+    void AllocateAndFreeBdlsIfNeeded(uint32& _target, const BufferView& _view);
 
-    UnorderedSet<uint> allocated_bdls_buf;
-    UnorderedSet<uint> allocated_bdls_tex;
+    UnorderedSet<uint32> allocated_bdls_buf;
+    UnorderedSet<uint32> allocated_bdls_tex;
 
 public:
     Config            config;
@@ -180,9 +181,9 @@ public:
     TextureRef         local_light_pdf_tex;
     Array<TextureView> local_light_pdf_mips;
 
-    uint max_emissive_meshes;
-    uint max_emissive_triangles;
-    uint max_prim_lights;
+    uint32 max_emissive_meshes;
+    uint32 max_emissive_triangles;
+    uint32 max_prim_lights;
 
     FrameResources   frame_rt;
     DefaultResources default_res;
@@ -190,7 +191,7 @@ public:
     ImportanceSamplingContext& is_ctx;
     ShaderUtils&               sd_utils;
     bool                       b_parallel_process_light = false;
-    uint                       num_threads              = 4;
+    uint32                     num_threads              = 4;
 
     RaytracingSceneRef rt_scene;
     bool               b_current_frame = true;

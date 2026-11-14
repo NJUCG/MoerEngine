@@ -3,8 +3,8 @@
 
 #include "API_Macro.h"
 
+#include "misc/Types.h"
 #include <cstddef>
-#include <cstdint>
 #include <string_view>
 
 #if defined(NDEBUG)
@@ -18,18 +18,18 @@
 namespace Moer { namespace LogSystem {
 
 struct ConsoleLogEntryView {
-    std::uint64_t             sequence = 0;
+    uint64                    sequence = 0;
     spdlog::level::level_enum level    = spdlog::level::info;
     std::string_view          message;
 };
 
 struct ConsoleLogPollResult {
-    std::uint64_t next_sequence = 1;
-    std::uint64_t dropped_count = 0;
+    uint64        next_sequence = 1;
+    uint64        dropped_count = 0;
     std::size_t   visited_count = 0;
 };
 
-enum class EFileLogInitStatus : std::uint8_t {
+enum class EFileLogInitStatus : uint8 {
     Disabled,
     Active,
     Failed,
@@ -73,7 +73,7 @@ CORE_API void Flush() noexcept;
 // ClearConsoleLogs are reported through dropped_count. The visitor runs after
 // releasing channel locks and may re-enter logging, polling, or clearing.
 [[nodiscard]] CORE_API ConsoleLogPollResult VisitConsoleLogs(
-    std::uint64_t     _next_sequence,
+    uint64            _next_sequence,
     std::size_t       _max_count,
     ConsoleLogVisitor _visitor,
     void*             _context

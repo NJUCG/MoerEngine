@@ -1,22 +1,23 @@
 #include "ProfileUtils.h"
-
+#include "misc/Types.h"
 
 void capture_frames_fast(
-    void**   out_frames,
-    int      max_frames,
-    uint16_t& out_count,
-    uint16_t  skip)
-{
-    out_count = (uint16_t)CaptureStackBackTrace(
-        skip, max_frames, out_frames, NULL);
+    void**        out_frames,
+    int           max_frames,
+    Moer::uint16& out_count,
+    Moer::uint16  skip
+) {
+    out_count = (Moer::uint16)CaptureStackBackTrace(
+        skip, max_frames, out_frames, NULL
+    );
 }
 
-uint64_t now_us()
-{
+Moer::uint64 now_us() {
     using namespace std::chrono;
-    return (uint64_t)duration_cast<microseconds>(
-        system_clock::now().time_since_epoch()
-    ).count();
+    return (Moer::uint64)duration_cast<microseconds>(
+               system_clock::now().time_since_epoch()
+    )
+        .count();
 }
 
 static CRITICAL_SECTION s_sym_cs;

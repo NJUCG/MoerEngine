@@ -1,7 +1,9 @@
 #ifndef MOER_RHI_IMPL_H
 #define MOER_RHI_IMPL_H
+
 #include "PixelFormat.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
@@ -13,8 +15,8 @@ namespace Moer::Render {
 
 struct ComponentShuffleShader : public ComputePipeline {
     struct Arg {
-        uint stride;
-        uint component_cnt;
+        uint32 stride;
+        uint32 component_cnt;
     };
 
     DEFINE_COMPUTE_PIPELINE_CLASS(ComponentShuffleShader);
@@ -45,7 +47,7 @@ public:
         uint64           _offset,
         uint64           _byte_size,
         const void*      _data,
-        std::string_view _name = typenames[uint(EType::UploadBuffer)]
+        std::string_view _name = typenames[uint32(EType::UploadBuffer)]
     ) :
         Command(EType::UploadBuffer, _name),
         handle(_handle),
@@ -58,7 +60,7 @@ public:
         uint64           _offset,
         uint64           _byte_size,
         Array<byte>&&    _data,
-        std::string_view _name = typenames[uint(EType::UploadBuffer)]
+        std::string_view _name = typenames[uint32(EType::UploadBuffer)]
     ) :
         Command(EType::UploadBuffer, _name),
         handle(_handle),
@@ -109,7 +111,7 @@ public:
         uint64           _offset,
         uint64           _byte_size,
         void* const      _data,
-        std::string_view _name = typenames[uint(EType::CopyBackBuffer)]
+        std::string_view _name = typenames[uint32(EType::CopyBackBuffer)]
     ) :
         Command(EType::CopyBackBuffer, _name),
         handle(_handle),
@@ -122,7 +124,7 @@ public:
         uint64           _offset,
         uint64           _byte_size,
         ReadbackToken    _owning_readback,
-        std::string_view _name = typenames[uint(EType::CopyBackBuffer)]
+        std::string_view _name = typenames[uint32(EType::CopyBackBuffer)]
     ) :
         Command(EType::CopyBackBuffer, _name),
         handle(_handle),
@@ -159,8 +161,8 @@ public:
 struct CopyBackTextureCmd : public Command {
 private:
     uint64          handle{};
-    uint            mip_level{};
-    uint            array_layer{};
+    uint32          mip_level{};
+    uint32          array_layer{};
     uint3           offset{};
     uint3           size{};
     uint64          byte_size{};
@@ -171,12 +173,12 @@ private:
 public:
     CopyBackTextureCmd(
         uint64           _handle,
-        uint             _mip_level,
-        uint             _array_layer,
+        uint32           _mip_level,
+        uint32           _array_layer,
         uint3            _offset,
         uint3            _size,
         std::span<byte>  _data,
-        std::string_view _name = typenames[uint(EType::CopyBackTexture)]
+        std::string_view _name = typenames[uint32(EType::CopyBackTexture)]
     ) :
         Command(EType::CopyBackTexture, _name),
         handle(_handle),
@@ -189,12 +191,12 @@ public:
 
     CopyBackTextureCmd(
         uint64           _handle,
-        uint             _mip_level,
-        uint             _array_layer,
+        uint32           _mip_level,
+        uint32           _array_layer,
         uint3            _offset,
         uint3            _size,
         ReadbackToken    _owning_readback,
-        std::string_view _name = typenames[uint(EType::CopyBackTexture)]
+        std::string_view _name = typenames[uint32(EType::CopyBackTexture)]
     ) :
         Command(EType::CopyBackTexture, _name),
         handle(_handle),
@@ -258,7 +260,7 @@ public:
         uint64           _src_offset,
         uint64           _dst_offset,
         uint64           _byte_size,
-        std::string_view _name = typenames[uint(EType::BufferToBuffer)]
+        std::string_view _name = typenames[uint32(EType::BufferToBuffer)]
     ) :
         Command(EType::BufferToBuffer, _name),
         src_handle(_src_handle),
@@ -293,8 +295,10 @@ public:
     EPixelFormat format{};
     uint64       src_handle{};
     uint64       dst_handle{};
-    uint         src_mip_level{};
-    uint         dst_mip_level{};
+    uint32       src_mip_level{};
+    uint32       dst_mip_level{};
+    uint32       src_array_layer{};
+    uint32       dst_array_layer{};
     uint3        src_offset{};
     uint3        dst_offset{};
     uint3        size{};
@@ -307,12 +311,14 @@ public:
         EPixelFormat     _format,
         uint64           _src_handle,
         uint64           _dst_handle,
-        uint             _src_mip_level,
-        uint             _dst_mip_level,
+        uint32           _src_mip_level,
+        uint32           _dst_mip_level,
         uint3            _src_offset,
         uint3            _dst_offset,
         uint3            _size,
-        std::string_view _name = typenames[uint(EType::TextureToTexture)]
+        std::string_view _name = typenames[uint32(EType::TextureToTexture)],
+        uint32           _src_array_layer = 0,
+        uint32           _dst_array_layer = 0
     ) :
         Command(EType::TextureToTexture, _name),
         format(_format),
@@ -320,6 +326,8 @@ public:
         dst_handle(_dst_handle),
         src_mip_level(_src_mip_level),
         dst_mip_level(_dst_mip_level),
+        src_array_layer(_src_array_layer),
+        dst_array_layer(_dst_array_layer),
         src_offset{_src_offset.x, _src_offset.y, _src_offset.z},
         dst_offset{_dst_offset.x, _dst_offset.y, _dst_offset.z},
         size{_size.x, _size.y, _size.z} {}
@@ -343,6 +351,12 @@ public:
     auto DstMipLevel() const {
         return dst_mip_level;
     }
+    auto SrcArrayLayer() const {
+        return src_array_layer;
+    }
+    auto DstArrayLayer() const {
+        return dst_array_layer;
+    }
     auto SrcOffset() const {
         return src_offset;
     }
@@ -359,10 +373,10 @@ public:
     EPixelFormat format{};
     uint64       src_handle{};
     uint64       dst_handle{};
-    uint         src_offset{};
+    uint32       src_offset{};
     uint3        dst_offset{};
     uint3        size{};
-    uint         mip_level{};
+    uint32       mip_level{};
     uint32       array_layer{};
 
 private:
@@ -373,12 +387,12 @@ public:
         EPixelFormat     _format,
         uint64           _src_handle,
         uint64           _dst_handle,
-        uint             _src_offset,
+        uint32           _src_offset,
         uint3            _dst_offset,
         uint3            _size,
-        uint             _mip_level,
+        uint32           _mip_level,
         uint32           _array_layer,
-        std::string_view _name = typenames[uint(EType::BufferToTexture)]
+        std::string_view _name = typenames[uint32(EType::BufferToTexture)]
     ) :
         Command(EType::BufferToTexture, _name),
         format(_format),
@@ -413,7 +427,7 @@ public:
         return size;
     }
     auto ByteSize() const {
-        return size[0] * size[1] * size[2];
+        return GetSizeFromImageFormat(format, size);
     }
     auto MipLevel() const {
         return mip_level;
@@ -429,10 +443,10 @@ public:
     uint64       src_handle{};
     uint64       dst_handle{};
     uint3        src_offset{};
-    uint         dst_offset{};
+    uint32       dst_offset{};
     uint3        size{};
-    uint         mip_level{};
-    uint         array_layer{};
+    uint32       mip_level{};
+    uint32       array_layer{};
 
 private:
     CopyTextureToBufferCmd() : Command(EType::TextureToBuffer) {}
@@ -443,11 +457,11 @@ public:
         uint64           _src_handle,
         uint64           _dst_handle,
         uint3            _src_offset,
-        uint             _dst_offset,
+        uint32           _dst_offset,
         uint3            _size,
-        uint             _mip_level,
-        uint             _array_layer,
-        std::string_view _name = typenames[uint(EType::TextureToBuffer)]
+        uint32           _mip_level,
+        uint32           _array_layer,
+        std::string_view _name = typenames[uint32(EType::TextureToBuffer)]
     ) :
         Command(EType::TextureToBuffer, _name),
         format(_format),
@@ -482,7 +496,7 @@ public:
         return size;
     }
     auto ByteSize() const {
-        return size[0] * size[1] * size[2];
+        return GetSizeFromImageFormat(format, size);
     }
     auto MipLevel() const {
         return mip_level;
@@ -509,12 +523,12 @@ public:
     UploadTextureCmd(
         EPixelFormat     _format,
         uint64           _handle,
-        uint             _mip_level,
+        uint32           _mip_level,
         uint32           _array_layer,
         uint3            _offset,
         uint3            _size,
         const void*      _data,
-        std::string_view _name = typenames[uint(EType::UploadTexture)]
+        std::string_view _name = typenames[uint32(EType::UploadTexture)]
     ) :
         Command(EType::UploadTexture, _name),
         format(_format),
@@ -533,12 +547,12 @@ public:
     UploadTextureCmd(
         EPixelFormat     _format,
         uint64           _handle,
-        uint             _mip_level,
+        uint32           _mip_level,
         uint32           _array_layer,
         uint3            _offset,
         uint3            _size,
         Array<byte>&&    _data,
-        std::string_view _name = typenames[uint(EType::UploadTexture)]
+        std::string_view _name = typenames[uint32(EType::UploadTexture)]
     ) :
         Command(EType::UploadTexture, _name),
         format(_format),
@@ -597,10 +611,10 @@ struct TextureBarrier {
     ETextureState state;
     EPassType     pass_type;
     bool          publish_external_state{false};
-    uint          mip_level : 8;
-    uint          mip_cnt : 8;
-    uint          array_layer : 8;
-    uint          array_cnt : 8;
+    uint32        mip_level : 8;
+    uint32        mip_cnt : 8;
+    uint32        array_layer : 8;
+    uint32        array_cnt : 8;
 };
 
 struct BufferBarrier {
@@ -631,6 +645,7 @@ struct ExplicitBufferBarrier {
     BarrierQueueTransfer queue_transfer{};
     uint64       offset{};
     uint64       byte_size{};
+    bool                 publish_external_state{false};
 };
 
 struct BarrierCmd : public Command {
@@ -738,12 +753,13 @@ public:
                         "buffer barriers cannot carry texture aspects"
                     );
                     explicit_buffers.emplace_back(ExplicitBufferBarrier{
-                        .handle     = reinterpret_cast<uint64>(_resource.GetBuffer()),
-                        .src_state  = _barrier.src_state,
-                        .dst_state  = _barrier.dst_state,
-                        .queue_transfer = _barrier.queue_transfer,
-                        .offset     = _resource.GetByteOffset(),
-                        .byte_size  = _resource.GetByteSize(),
+                        .handle                 = reinterpret_cast<uint64>(_resource.GetBuffer()),
+                        .src_state              = _barrier.src_state,
+                        .dst_state              = _barrier.dst_state,
+                        .queue_transfer         = _barrier.queue_transfer,
+                        .offset                 = _resource.GetByteOffset(),
+                        .byte_size              = _resource.GetByteSize(),
+                        .publish_external_state = _barrier.publish_external_state,
                     });
                 }
             },
@@ -753,10 +769,10 @@ public:
     }
 
     BarrierCmd(
-        uint       _read_tex_cnt,
-        uint       _write_tex_cnt,
-        uint       _read_buf_cnt,
-        uint       _write_buf_cnt,
+        uint32     _read_tex_cnt,
+        uint32     _write_tex_cnt,
+        uint32     _read_buf_cnt,
+        uint32     _write_buf_cnt,
         EQueueType _src_queue,
         EQueueType _dst_queue
     ) :
@@ -771,7 +787,7 @@ public:
     }
 
     BarrierCmd(
-        uint       _explicit_barrier_count,
+        uint32     _explicit_barrier_count,
         EQueueType _src_queue,
         EQueueType _dst_queue
     ) :
@@ -883,11 +899,11 @@ private:
     };
     Array<BindlessArray::UpdateCmd> update_cmds;
     Array<byte>                     array_data;
-    Array<std::pair<uint, uint>>    array_indices_dat;
+    Array<std::pair<uint32, uint32>> array_indices_dat;
     Array<byte>                     buffer_data;
-    Array<std::pair<uint, uint>>    buffer_indices_dat;
+    Array<std::pair<uint32, uint32>> buffer_indices_dat;
     Array<byte>                     texture_data;
-    Array<std::pair<uint, uint>>    texture_indices_dat;
+    Array<std::pair<uint32, uint32>> texture_indices_dat;
 
 public:
     ~UpdateBindlessArrayCmd() override {
@@ -903,15 +919,15 @@ public:
     }
 
     UpdateBindlessArrayCmd(
-        BindlessArrayRef                  _array,
-        Array<BindlessArray::UpdateCmd>&& _update_cmds,
-        Array<byte>&&                     _array_data,
-        Array<std::pair<uint, uint>>&&    _array_indices_dat,
-        Array<byte>&&                     _buffer_data,
-        Array<std::pair<uint, uint>>&&    _buffer_indices_dat,
-        Array<byte>&&                     _texture_data,
-        Array<std::pair<uint, uint>>&&    _texture_indices_dat,
-        std::string_view                  _name = typenames[uint(EType::UpdateBindlessArray)]
+        BindlessArrayRef                   _array,
+        Array<BindlessArray::UpdateCmd>&&  _update_cmds,
+        Array<byte>&&                      _array_data,
+        Array<std::pair<uint32, uint32>>&& _array_indices_dat,
+        Array<byte>&&                      _buffer_data,
+        Array<std::pair<uint32, uint32>>&& _buffer_indices_dat,
+        Array<byte>&&                      _texture_data,
+        Array<std::pair<uint32, uint32>>&& _texture_indices_dat,
+        std::string_view                   _name = typenames[uint32(EType::UpdateBindlessArray)]
     ) :
         Command(EType::UpdateBindlessArray, _name),
         array(_array),
@@ -996,7 +1012,7 @@ public:
 };
 
 using TClearResource = std::variant<BufferView, TextureView>;
-using TClearVar      = std::variant<uint, float4>;
+using TClearVar      = std::variant<uint32, float4>;
 struct ClearResourceCmd : public Command {
 private:
     ClearResourceCmd() : Command(EType::ClearResource) {}
@@ -1004,8 +1020,8 @@ private:
 public:
     ClearResourceCmd(
         BufferView       _buffer,
-        uint             _value,
-        std::string_view _name = typenames[uint(EType::ClearResource)]
+        uint32           _value,
+        std::string_view _name = typenames[uint32(EType::ClearResource)]
     ) :
         Command(EType::ClearResource, _name),
         resource(_buffer),
@@ -1013,15 +1029,15 @@ public:
     ClearResourceCmd(
         TextureView      _texture,
         float4           _value,
-        std::string_view _name = typenames[uint(EType::ClearResource)]
+        std::string_view _name = typenames[uint32(EType::ClearResource)]
     ) :
         Command(EType::ClearResource, _name),
         resource(_texture),
         clear_value(_value) {}
     ClearResourceCmd(
         TextureView      _texture,
-        uint             _value,
-        std::string_view _name = typenames[uint(EType::ClearResource)]
+        uint32           _value,
+        std::string_view _name = typenames[uint32(EType::ClearResource)]
     ) :
         Command(EType::ClearResource, _name),
         resource(_texture),
@@ -1052,14 +1068,14 @@ public:
     }
 
     const auto& UIntValue() const {
-        return std::get<uint>(clear_value);
+        return std::get<uint32>(clear_value);
     }
     const auto& Float4Value() const {
         return std::get<float4>(clear_value);
     }
 
     bool IsUInt() const {
-        return std::holds_alternative<uint>(clear_value);
+        return std::holds_alternative<uint32>(clear_value);
     }
     bool IsFloat4() const {
         return std::holds_alternative<float4>(clear_value);
@@ -1107,7 +1123,7 @@ public:
         ArrayArguments&&      _args,
         RenderPassInfo&&      _info,
         Array<MeshDrawData>&& _draw_data,
-        std::string_view      _name = typenames[uint(EType::SetDrawState)]
+        std::string_view      _name = typenames[uint32(EType::SetDrawState)]
     ) :
         Command(EType::SetDrawState, _name),
         args(std::move(_args)),
@@ -1179,17 +1195,9 @@ public:
         return args;
     }
 
-    // Note: This function is never used, so I comment it out.
-    // void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _flag)> _func) const {
-    //     for (int i = 0; i < args.args.size(); i++) {
-    //         if (pipeline->valid_bits & (1 << i))
-    //             _func(args.args[i], pipeline->binding_infos[i]);
-    //     }
-    // }
-
     void IterateArgs(
-        std::function<void(const TArg&, uint _idx)> _func,
-        std::function<void(const TArg&, uint _idx)> _bdls_post_func
+        std::function<void(const TArg&, uint32 _idx)> _func,
+        std::function<void(const TArg&, uint32 _idx)> _bdls_post_func
     ) const {
         int bdls_idx = -1;
         for (int i = 0; i < args.args.size(); i++) {
@@ -1327,7 +1335,7 @@ public:
         return true;
     }
 
-    void RebaseCachedArgumentReferences(uint _offset) noexcept override {
+    void RebaseCachedArgumentReferences(uint32 _offset) noexcept override {
         if (_offset == 0) {
             return;
         }
@@ -1461,9 +1469,9 @@ struct DispatchIndirectParam {
 };
 
 static void IterateArgs(
-    const ArrayArguments&                       _args,
-    std::function<void(const TArg&, uint _idx)> _func,
-    std::function<void(const TArg&, uint _idx)> _bdls_post_func
+    const ArrayArguments&                         _args,
+    std::function<void(const TArg&, uint32 _idx)> _func,
+    std::function<void(const TArg&, uint32 _idx)> _bdls_post_func
 ) {
     int bdls_idx = -1;
     for (int i = 0; i < _args.args.size(); i++) {
@@ -1497,7 +1505,7 @@ public:
         PipelineHandle&   _handle,
         uint3             _param,
         ProfileSection    _profile_section,
-        std::string_view  _name = typenames[uint(EType::ShaderDispatch)]
+        std::string_view  _name = typenames[uint32(EType::ShaderDispatch)]
     ) :
         Command(EType::ShaderDispatch, _name),
         param(_param),
@@ -1509,7 +1517,7 @@ public:
         PipelineHandle&   _handle,
         BufferView        _indirect,
         ProfileSection    _profile_section,
-        std::string_view  _name = typenames[uint(EType::ShaderDispatch)]
+        std::string_view  _name = typenames[uint32(EType::ShaderDispatch)]
     ) :
         Command(EType::ShaderDispatch, _name),
         pipeline(_handle),
@@ -1528,7 +1536,7 @@ public:
                std::get<ArrayArgReference>(args).handle < _cache_size;
     }
 
-    void RebaseCachedArgumentReferences(uint _offset) noexcept override {
+    void RebaseCachedArgumentReferences(uint32 _offset) noexcept override {
         if (_offset != 0 &&
             std::holds_alternative<ArrayArgReference>(args)) {
             std::get<ArrayArgReference>(args).handle += _offset;
@@ -1567,7 +1575,7 @@ public:
         ArrayArguments&& _args,
         PipelineHandle   _handle,
         uint3            _param,
-        std::string_view _name = typenames[uint(EType::TraceRay)]
+        std::string_view _name = typenames[uint32(EType::TraceRay)]
     ) :
         Command(EType::TraceRay, _name),
         param(_param),
@@ -1577,7 +1585,7 @@ public:
         ArrayArguments&& _args,
         PipelineHandle   _handle,
         BufferView       _param,
-        std::string_view _name = typenames[uint(EType::TraceRay)]
+        std::string_view _name = typenames[uint32(EType::TraceRay)]
     ) :
         Command(EType::TraceRay, _name),
         pipeline(_handle),
@@ -1597,15 +1605,15 @@ public:
     auto Param() const {
         return param;
     }
-    void IterateArgs(const std::function<void(const TArg&, ParamInfoFlags _flag)>& _func) const {
-        for (int i = 0; i < args.args.size(); i++) {
-            if (pipeline.valid_bits & (1 << i))
-                std::visit(
-                    [&_func, i, this](const auto& _arg) {
-                        _func(_arg, pipeline.binding_infos[i]);
-                    },
-                    args.args[i]
-                );
+    void IterateArgs(const std::function<void(const TArg&, uint32)>& visit) const {
+        if (!pipeline.IsValid()) {
+            return;
+        }
+        const uint64 active_argument_bits = pipeline.GetState()->GetActiveArgumentBits();
+        for (uint32 index = 0; index < args.args.size() && index < 64; ++index) {
+            if (active_argument_bits & (uint64(1) << index)) {
+                visit(args.args[index], index);
+            }
         }
     }
 };
@@ -1617,7 +1625,7 @@ private:
 public:
     BuildAccelerationStructuresCmd(
         const Array<AccelerationStructureBuildParam>& _params,
-        std::string_view                              _name = typenames[uint(EType::BuildAccel)]
+        std::string_view                              _name = typenames[uint32(EType::BuildAccel)]
     ) :
         Command(EType::BuildAccel, _name),
         params(_params) {
@@ -1625,7 +1633,7 @@ public:
     }
     BuildAccelerationStructuresCmd(
         Array<AccelerationStructureBuildParam>&& _params,
-        std::string_view                         _name = typenames[uint(EType::BuildAccel)]
+        std::string_view                         _name = typenames[uint32(EType::BuildAccel)]
     ) :
         Command(EType::BuildAccel, _name),
         params(std::move(_params)) {
@@ -1684,12 +1692,12 @@ public:
         BufferRef                      _instance_buffer,
         BufferRef                      _scratch_buffer,
         RaytracingTlasRef              _tlas,
-        Array<RaytracingGeometryRef>&&  _geometry_refs,
-        Array<uint>&&                  _instances_to_update,
+        Array<RaytracingGeometryRef>&& _geometry_refs,
+        Array<uint32>&&                _instances_to_update,
         Array<byte>&&                  _instance_data,
-        uint                           _instance_cnt,
+        uint32                         _instance_cnt,
         bool                           _full_refit,
-        std::string_view               _name = typenames[uint(EType::BuildTLAS)]
+        std::string_view               _name = typenames[uint32(EType::BuildTLAS)]
     ) :
         related_geometries(std::move(_related_geoms)),
         scene(std::move(_scene)),
@@ -1769,7 +1777,7 @@ public:
     }
 
 private:
-    Array<uint> instance_to_update_ids;
+    Array<uint32> instance_to_update_ids;
     Array<byte> instance_data;
 
     RaytracingSceneRef            scene;
@@ -1778,10 +1786,10 @@ private:
     RaytracingTlasRef             tlas;
     Array<RaytracingGeometryRef> geometry_refs;
 
-    uint                       modifiable_instance_cnt = 0;
+    uint32                       modifiable_instance_cnt = 0;
     bool                       b_full_refit            = false;
-    uint                       instance_cnt            = 0;
-    UnorderedMap<uint64, uint> related_geometries;
+    uint32                       instance_cnt            = 0;
+    UnorderedMap<uint64, uint32> related_geometries;
 };
 
 // Backend-neutral query boundary. The token is copied into both boundaries so
@@ -1789,7 +1797,7 @@ private:
 // independently of CommandList/CmdSubmit movement.
 struct QueryCmd : public Command {
 public:
-    enum class EOp : uint8_t {
+    enum class EOp : uint8 {
         BeginTimestamp = 0,
         EndTimestamp   = 1,
         BeginOcclusion = 2,
@@ -1800,7 +1808,7 @@ public:
         QueryToken       _token,
         EOp              _op,
         EQueueType       _queue_type,
-        std::string_view _name = typenames[uint(EType::Query)]
+        std::string_view _name = typenames[uint32(EType::Query)]
     ) :
         Command(EType::Query, _name),
         token(std::move(_token)),
@@ -1910,7 +1918,7 @@ private:
 public:
     explicit CustomCmd(CustomCmdId _id) :
         custom_id(_id),
-        Command(EType::Custom, custom_cmd_names[uint(_id)]) {}
+        Command(EType::Custom, custom_cmd_names[uint32(_id)]) {}
     explicit CustomCmd(CustomCmdId _id, std::string_view _name) :
         custom_id(_id),
         Command(EType::Custom, _name) {}
@@ -1922,28 +1930,10 @@ public:
 
 struct CustomDispatchCmd : public CustomCmd {
 public:
-    struct ResourceUsage {
-        TArg           resource;
-        ParamInfoFlags state_flags;
-        template<typename Arg>
-            requires(std::is_constructible_v<TArg, Arg &&>)
-        ResourceUsage(Arg&& _resource, ParamInfoFlags _state_flags) :
-            resource{std::forward<Arg>(_resource)},
-            state_flags{_state_flags} {}
-    };
-
-private:
-    virtual std::span<const ResourceUsage> GetResourceUsages() const = 0;
-
-public:
     CustomDispatchCmd() : CustomCmd(CustomCmdId::CUSTOM_DISPATCH) {}
     ~CustomDispatchCmd() = default;
 
-    void IterateArgs(std::function<void(const TArg&, ParamInfoFlags _usage)> _func) const {
-        for (const auto& usage : GetResourceUsages()) {
-            _func(usage.resource, usage.state_flags);
-        }
-    }
+    virtual void IterateArgs(const std::function<void(const TArg&, ERHIAccessFlags)>& visit) const = 0;
 };
 
 class RenderDevice::Impl {
@@ -1957,8 +1947,8 @@ public:
     virtual FenceRef  CreateFence() = 0;
     virtual BufferRef CreateBuffer(
         std::string_view  _name,
-        uint              _element_cnt,
-        uint              _byte_stride,
+        uint32            _element_cnt,
+        uint32            _byte_stride,
         EBufferUsageFlags _usage,
         EPixelFormat      _format
     ) = 0;
@@ -1969,11 +1959,11 @@ public:
         Extent3D           _size,
         EPixelFormat       _format,
         ETextureUsageFlags _usage,
-        uint32_t           _mip_cnt    = 1,
-        uint               _array_size = 1
+        uint32             _mip_cnt    = 1,
+        uint32             _array_size = 1
     ) {
         const bool b_depth =
-            uint(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
+            uint32(ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT & _usage) != 0;
         TextureInfo info{
             _dimension,
             _usage,
@@ -1999,7 +1989,7 @@ public:
         std::string_view   _name,
         Extent2D           _size,
         EPixelFormat       _format,
-        uint32_t           _array_size = 1,
+        uint32             _array_size = 1,
         ETextureUsageFlags _usage      = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT
     ) {
         const ETextureDimension dimension =
@@ -2009,7 +1999,7 @@ public:
         ));
     }
 
-    virtual BindlessArrayRef CreateBindlessArray(uint _max_size) = 0;
+    virtual BindlessArrayRef CreateBindlessArray(uint32 _max_size) = 0;
 
     /// Raytracing
     virtual RaytracingGeometryRef CreateRaytracingGeometry(const RaytracingGeometryInfo& _init) = 0;
@@ -2041,10 +2031,6 @@ public:
         return nullptr;
     }
 
-    virtual IOInterfaceRef CreateIOInterface(CopyQueue&) {
-        return nullptr;
-    };
-
     virtual void FlushDebugMessages() const {
         ; // do nothing by default
     }
@@ -2053,11 +2039,11 @@ public:
         return false;
     }
 
-    virtual uint32_t GetMaxTessellationFactor() const {
+    virtual uint32 GetMaxTessellationFactor() const {
         return 0;
     }
 
-    virtual bool SupportsMultiview(uint32_t) const {
+    virtual bool SupportsMultiview(uint32) const {
         return false;
     }
 

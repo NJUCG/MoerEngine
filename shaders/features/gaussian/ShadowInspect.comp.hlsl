@@ -1,5 +1,6 @@
 #include "core/common/Bindless.hlsl"
 BINDLESS_BINDINGS(4, 5, 6, 7)
+DEFINE_SHADER_BINDLESS_CONSTANTS()
 #include "shared/gaussian/GaussianShadowParameters.h"
 [[vk::binding(0, 0)]] ConstantBuffer<Moer::GaussianShadowData> data;
 [[vk::binding(1, 0)]] RWTexture2D<float4>                      output;

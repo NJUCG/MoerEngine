@@ -10,6 +10,13 @@
 #include <thread>
 #include <utility>
 
+#if defined(_WIN32)
+extern "C" {
+__declspec(dllexport) extern const unsigned int D3D12SDKVersion = MOER_AGILITY_SDK_VERSION;
+__declspec(dllexport) extern const char* D3D12SDKPath = ".\\D3D12\\";
+}
+#endif
+
 namespace {
 
 bool HasFlag(int argc, const char** argv, std::string_view flag) {

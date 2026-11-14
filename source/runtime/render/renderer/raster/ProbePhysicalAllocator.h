@@ -2,6 +2,7 @@
 
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 
 #include <algorithm>
 
@@ -10,12 +11,12 @@ namespace Moer::Render::Raster {
 class ProbePhysicalAllocator {
 public:
     struct Allocation {
-        uint probe_offset = 0;
-        uint probe_count  = 0;
+        uint32 probe_offset = 0;
+        uint32 probe_count  = 0;
         bool valid        = false;
     };
 
-    void Reset(uint capacity) {
+    void Reset(uint32 capacity) {
         m_capacity = capacity;
         m_free_ranges.clear();
         if (capacity > 0u) {
@@ -23,7 +24,7 @@ public:
         }
     }
 
-    bool Allocate(uint probe_count, Allocation& allocation) {
+    bool Allocate(uint32 probe_count, Allocation& allocation) {
         allocation = {};
         if (probe_count == 0u) {
             return false;
@@ -53,9 +54,9 @@ public:
             return false;
         }
 
-        const uint release_end = allocation.probe_offset + allocation.probe_count;
+        const uint32 release_end = allocation.probe_offset + allocation.probe_count;
         for (const Range& range : m_free_ranges) {
-            const uint range_end = range.probe_offset + range.probe_count;
+            const uint32 range_end = range.probe_offset + range.probe_count;
             if (allocation.probe_offset < range_end && range.probe_offset < release_end) {
                 return false;
             }
@@ -66,20 +67,20 @@ public:
         return true;
     }
 
-    uint GetCapacity() const {
+    uint32 GetCapacity() const {
         return m_capacity;
     }
 
-    uint GetFreeProbeCount() const {
-        uint free_probe_count = 0;
+    uint32 GetFreeProbeCount() const {
+        uint32 free_probe_count = 0;
         for (const Range& range : m_free_ranges) {
             free_probe_count += range.probe_count;
         }
         return free_probe_count;
     }
 
-    uint GetLargestFreeRange() const {
-        uint largest_range = 0;
+    uint32 GetLargestFreeRange() const {
+        uint32 largest_range = 0;
         for (const Range& range : m_free_ranges) {
             largest_range = std::max(largest_range, range.probe_count);
         }
@@ -87,8 +88,8 @@ public:
     }
 
     bool Validate() const {
-        uint previous_end = 0;
-        uint free_count   = 0;
+        uint32 previous_end = 0;
+        uint32 free_count   = 0;
         for (size_t range_index = 0; range_index < m_free_ranges.size(); ++range_index) {
             const Range& range = m_free_ranges[range_index];
             if (range.probe_count == 0u || range.probe_offset > m_capacity ||
@@ -106,8 +107,8 @@ public:
 
 private:
     struct Range {
-        uint probe_offset = 0;
-        uint probe_count  = 0;
+        uint32 probe_offset = 0;
+        uint32 probe_count  = 0;
     };
 
     void CoalesceFreeRanges() {
@@ -128,9 +129,9 @@ private:
             }
 
             Range& previous = merged_ranges.back();
-            const uint previous_end = previous.probe_offset + previous.probe_count;
+            const uint32 previous_end = previous.probe_offset + previous.probe_count;
             if (range.probe_offset <= previous_end) {
-                const uint merged_end = std::max(previous_end, range.probe_offset + range.probe_count);
+                const uint32 merged_end = std::max(previous_end, range.probe_offset + range.probe_count);
                 previous.probe_count = merged_end - previous.probe_offset;
                 continue;
             }
@@ -139,7 +140,7 @@ private:
         m_free_ranges = std::move(merged_ranges);
     }
 
-    uint         m_capacity = 0;
+    uint32       m_capacity = 0;
     Array<Range> m_free_ranges;
 };
 

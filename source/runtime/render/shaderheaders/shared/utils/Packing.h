@@ -138,26 +138,6 @@ GLOBAL_FUNC float3 Unpack_R8G8B8_UFLOAT(uint rgb) {
     return float3(r, g, b);
 }
 
-GLOBAL_FUNC uint
-Pack_R8G8B8A8_Gamma_UFLOAT(float4 rgba, float gamma = 2.2, float4 d = float4(0.5f, 0.5f, 0.5f, 0.5f)) {
-    rgba   = pow(saturate(rgba), 1.f / gamma);
-    uint r = Pack_R8_UFLOAT(rgba.r, d.r);
-    uint g = Pack_R8_UFLOAT(rgba.g, d.g) << 8;
-    uint b = Pack_R8_UFLOAT(rgba.b, d.b) << 16;
-    uint a = Pack_R8_UFLOAT(rgba.a, d.a) << 24;
-    return r | g | b | a;
-}
-
-GLOBAL_FUNC float4 Unpack_R8G8B8A8_Gamma_UFLOAT(uint rgba, float gamma = 2.2) {
-    float  r = Unpack_R8_UFLOAT(rgba);
-    float  g = Unpack_R8_UFLOAT(rgba >> 8);
-    float  b = Unpack_R8_UFLOAT(rgba >> 16);
-    float  a = Unpack_R8_UFLOAT(rgba >> 24);
-    float4 v = float4(r, g, b, a);
-    v        = pow(saturate(v), gamma);
-    return v;
-}
-
 GLOBAL_FUNC uint Pack_R11G11B10_UFLOAT(float3 rgb, float3 d = float3(0.5f, 0.5f, 0.5f)) {
     uint r = Pack_R11_UFLOAT(rgb.r, d.r);
     uint g = Pack_R11_UFLOAT(rgb.g, d.g) << 11;
@@ -186,6 +166,17 @@ GLOBAL_FUNC float4 Unpack_R8G8B8A8_UFLOAT(uint rgba) {
     float b = Unpack_R8_UFLOAT(rgba >> 16);
     float a = Unpack_R8_UFLOAT(rgba >> 24);
     return float4(r, g, b, a);
+}
+
+GLOBAL_FUNC uint
+Pack_R8G8B8A8_Gamma_UFLOAT(float4 rgba, float gamma = 2.2, float4 d = float4(0.5f, 0.5f, 0.5f, 0.5f)) {
+    rgba = pow(saturate(rgba), 1.f / gamma);
+    return Pack_R8G8B8A8_UFLOAT(rgba, d);
+}
+
+GLOBAL_FUNC float4 Unpack_R8G8B8A8_Gamma_UFLOAT(uint rgba, float gamma = 2.2) {
+    float4 v = Unpack_R8G8B8A8_UFLOAT(rgba);
+    return pow(saturate(v), gamma);
 }
 
 GLOBAL_FUNC uint Pack_R16G16_UFLOAT(float2 rg, float2 d = float2(0.5f, 0.5f)) {
@@ -261,15 +252,8 @@ GLOBAL_FUNC float2 Pack_NormalOct(float3 _normal) {
     return Math::NdirToOct(_normal);
 }
 
-GLOBAL_FUNC float3 Interpolate(float3 _val[3], float3 _bary) {
-    return _val[0] * _bary.x + _val[1] * _bary.y + _val[2] * _bary.z;
-}
-
-GLOBAL_FUNC float2 Interpolate(float2 _val[3], float3 _bary) {
-    return _val[0] * _bary.x + _val[1] * _bary.y + _val[2] * _bary.z;
-}
-
-GLOBAL_FUNC float4 Interpolate(float4 _val[3], float3 _bary) {
+template<typename T>
+GLOBAL_FUNC T Interpolate(T _val[3], float3 _bary) {
     return _val[0] * _bary.x + _val[1] * _bary.y + _val[2] * _bary.z;
 }
 }; // namespace Moer

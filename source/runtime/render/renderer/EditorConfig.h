@@ -1,6 +1,7 @@
 #pragma once
 
 #include "misc/Traits.h"
+#include "misc/Types.h"
 
 #include "raster/RasterConfig.h"
 #include "raytracing/RaytracingConfig.h"
@@ -20,7 +21,7 @@ enum class EEditorViewportMode {
 };
 constexpr std::string_view k_editor_viewport_mode_names[] = {"Scene", "Game"};
 
-inline float4 GetCsmGizmoCascadeColor(uint cascade_index) {
+inline float4 GetCsmGizmoCascadeColor(uint32 cascade_index) {
     if (cascade_index == 0u) {
         return float4(1.00f, 0.30f, 0.05f, 0.96f);
     }
@@ -41,7 +42,7 @@ struct SceneViewGizmoConfig {
     bool show_csm                  = true;
     bool show_csm_split_frustums   = true;
     bool show_csm_bounding_spheres = true;
-    uint csm_cascade_visibility_mask = (1u << CSM_MAX_CASCADES) - 1u;
+    uint32 csm_cascade_visibility_mask = (1u << CSM_MAX_CASCADES) - 1u;
 
     bool show_probe_gi                = false;
     bool show_probe_gi_probes         = true;
@@ -78,7 +79,7 @@ public:
     void SetResolution(uint2 _resolution) {
         resolution = _resolution;
     }
-    void SetResolution(uint _width, uint _height) {
+    void SetResolution(uint32 _width, uint32 _height) {
         resolution = uint2(_width, _height);
     }
     const uint2& GetResolution() const {

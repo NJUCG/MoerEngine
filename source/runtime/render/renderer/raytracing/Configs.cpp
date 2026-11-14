@@ -1,4 +1,5 @@
 #include "Configs.h"
+#include "misc/Types.h"
 
 // 维护帧间 ReSTIR 储层索引与光源采样缓冲区范围。
 
@@ -44,9 +45,9 @@ ImportanceSamplingContext::ImportanceSamplingContext(const ImportanceSamplingPar
         di_shading_params            = GetDefaultReSTIRDIShadingParams();
         di_buffer_indices            = GetDefaultReSTIRDIBufferIndicesParams();
 
-        uint render_block_width =
+        uint32 render_block_width =
             (restir_di_config.render_width + s_di_reservoir_block_size - 1) / s_di_reservoir_block_size;
-        uint render_block_height =
+        uint32 render_block_height =
             (restir_di_config.render_height + s_di_reservoir_block_size - 1) / s_di_reservoir_block_size;
 
         restir_di_runtime_config.reservoir_buffer_params.block_row_pitch =
@@ -81,10 +82,10 @@ void ImportanceSamplingContext::UpdateReSTIRDIBufferIndices() {
 }
 
 DI::LightBufferParams ImportanceSamplingContext::BuildLightBufferParams(
-    uint frame_offset,
-    uint num_finite_lights,
-    uint num_infinite_primitive_lights,
-    uint num_environment_lights
+    uint32 frame_offset,
+    uint32 num_finite_lights,
+    uint32 num_infinite_primitive_lights,
+    uint32 num_environment_lights
 ) {
     DI::LightBufferParams params{};
     params.local_light_region.first_light_idx = frame_offset;
@@ -99,17 +100,17 @@ DI::LightBufferParams ImportanceSamplingContext::BuildLightBufferParams(
 }
 
 void ImportanceSamplingContext::SetLightBufferParams(
-    uint _frame_offset,
-    uint _local_light_region_light_cnt,
-    uint _infinite_light_region_light_cnt,
-    uint _env_light_light_cnt
+    uint32 _frame_offset,
+    uint32 _local_light_region_light_cnt,
+    uint32 _infinite_light_region_light_cnt,
+    uint32 _env_light_light_cnt
 ) {
     CommitAcceptedLightBufferParams(BuildLightBufferParams(
         _frame_offset, _local_light_region_light_cnt, _infinite_light_region_light_cnt, _env_light_light_cnt
     ));
 }
 
-void ImportanceSamplingContext::AdvanceFrameIdx(uint _frame_idx) {
+void ImportanceSamplingContext::AdvanceFrameIdx(uint32 _frame_idx) {
 
     //ReSTIR DI
     {
@@ -136,19 +137,19 @@ void ImportanceSamplingContext::AdvanceFrameIdx(uint _frame_idx) {
     }
 }
 
-void ImportanceSamplingContext::TickFrame(uint _frame_idx) {
+void ImportanceSamplingContext::TickFrame(uint32 _frame_idx) {
     AdvanceFrameIdx(_frame_idx);
 }
 
 SimpleSegmentAllocator::SimpleSegmentAllocator() : total_element_count(0) {}
 
-uint SimpleSegmentAllocator::Allocate(uint _size_elements) {
-    const uint offset = total_element_count;
+uint32 SimpleSegmentAllocator::Allocate(uint32 _size_elements) {
+    const uint32 offset = total_element_count;
     total_element_count += _size_elements;
     return offset;
 }
 
-uint SimpleSegmentAllocator::GetTotalSize() const {
+uint32 SimpleSegmentAllocator::GetTotalSize() const {
     return total_element_count;
 }
 

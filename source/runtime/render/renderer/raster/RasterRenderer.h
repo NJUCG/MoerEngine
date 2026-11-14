@@ -2,6 +2,7 @@
 #pragma once
 
 #include "RasterFramePacket.h"
+#include "misc/Types.h"
 #include "renderer/Renderer.h"
 #include "rhi/RHIResource.h"
 
@@ -115,15 +116,13 @@ private:
     bool   scene_view_camera_initialized = false;
     bool   capture_scene_geometry_snapshot = true;
 
-    uint64_t next_frame_id = 0;
-    uint64_t render_extent_generation = 0;
+    uint64 next_frame_id            = 0;
+    uint64 render_extent_generation = 0;
 
     SceneRenderExtentTracker scene_render_extent_tracker;
 
-    bool                            render_graph_enabled = false;
     bool                            render_graph_debug_dump = false;
     bool                            parallel_recording_enabled = false;
-    bool                            render_graph_fallback_latched = false;
     std::unordered_set<std::string> logged_render_graph_dumps;
 };
 

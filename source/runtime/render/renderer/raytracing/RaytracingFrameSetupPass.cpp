@@ -1,5 +1,5 @@
 #include "RaytracingFrameSetupPass.h"
-
+#include "misc/Types.h"
 #include "rhi/RHIImpl.h"
 
 #include <algorithm>
@@ -10,14 +10,6 @@
 namespace Moer::Render::Raytracing {
 
 namespace {
-
-RenderGraph::TextureState PreferredReadState(const TextureRef& texture) {
-    const auto usage = texture->GetUsage();
-    const bool supports_uav =
-        (usage & ETextureUsageFlags::UNORDERED_ACCESS) == ETextureUsageFlags::UNORDERED_ACCESS;
-    return supports_uav ? RenderGraph::TextureState::ShaderResource :
-                          RenderGraph::TextureState::Sampled;
-}
 
 template<typename RefType>
 void AppendUnique(Array<RefType>& refs, RefType ref) {
@@ -51,13 +43,13 @@ RenderGraph::TextureHandle ImportTexture(
 ) {
     RenderGraph::TextureAspect aspects = RenderGraph::TextureAspect::None;
     const auto                 rhi_aspects = texture->GetAspectFlags();
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Color;
     }
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Depth;
     }
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Stencil;
     }
     return graph.ImportTexture(
@@ -77,18 +69,12 @@ RaytracingFrameSetupPass::PreparedCommand RaytracingFrameSetupPass::Prepare(
     const RTContext&   rt_ctx,
     RaytracingSceneRef scene,
     BindlessArrayRef   bindless_array,
-    uint64             target_revision,
-    bool               build_tlas,
-    bool               scene_resources_refreshed,
-    bool               external_tlas_built
+    bool               build_tlas
 ) {
     auto payload = MakeShared<RecordPayload>();
     payload->bindless_array       = std::move(bindless_array);
     payload->scene                = std::move(scene);
-    payload->target_revision      = target_revision;
     payload->build_tlas           = build_tlas;
-    payload->scene_resources_refreshed = scene_resources_refreshed;
-    payload->external_tlas_built  = external_tlas_built;
 
     if (!payload->bindless_array || !payload->scene) {
         return PreparedCommand{.record = std::move(payload)};
@@ -97,7 +83,7 @@ RaytracingFrameSetupPass::PreparedCommand RaytracingFrameSetupPass::Prepare(
     payload->scene_resources = rt_ctx.GetBindlessResources();
 
     if (build_tlas) {
-        for (uint index = 0; index < payload->scene->GetInstanceCount(); ++index) {
+        for (uint32 index = 0; index < payload->scene->GetInstanceCount(); ++index) {
             RaytracingInstance& instance = payload->scene->GetInstance(index);
             payload->scene->MarkModified(instance.instance_id);
         }
@@ -150,6 +136,9 @@ RaytracingFrameSetupPass::PreparedCommand RaytracingFrameSetupPass::Prepare(
     }
 
     payload->previous_tlas = payload->scene->GetPrevTlas();
+    // There is no temporal TLAS on the first accepted frame. Match the shader
+    // binding's current-TLAS fallback; temporal resampling stays disabled.
+    if (!payload->previous_tlas) { payload->previous_tlas = payload->destination_tlas; }
     payload->previous_tlas_buffer =
         payload->previous_tlas ?
             BufferRef(payload->previous_tlas->GetUnderlyingBuffer()) :
@@ -172,39 +161,6 @@ bool RaytracingFrameSetupPass::AddPasses(
          !payload->scratch_buffer || payload->geometry_buffers.empty())) {
         return false;
     }
-    if (payload->build_tlas && !payload->full_instance_upload &&
-        !accepted_instance_buffers.contains(payload->instance_buffer.Get())) {
-        return false;
-    }
-    if (!payload->scene_resources_refreshed) {
-        for (const BufferRef& buffer : {
-                 payload->scene_resources.light_buf,
-                 payload->scene_resources.material_buf,
-                 payload->scene_resources.primitive_buf,
-                 payload->scene_resources.instance_buf,
-                 payload->scene_resources.position_buf,
-                 payload->scene_resources.packed_normal_buf,
-                 payload->scene_resources.packed_tangent_buf,
-                 payload->scene_resources.texcoord0_buf,
-                 payload->scene_resources.index_buf,
-                 payload->scene_resources.rt_instance_buf,
-                 payload->scene_resources.rt_primitive_table_buf,
-             }) {
-            if (buffer && !accepted_scene_buffers.contains(buffer.Get())) {
-                return false;
-            }
-        }
-    }
-    if (!payload->build_tlas && !payload->external_tlas_built &&
-        !accepted_tlas_buffers.contains(payload->destination_tlas_buffer.Get())) {
-        return false;
-    }
-    if (payload->previous_tlas_buffer.Get() !=
-            payload->destination_tlas_buffer.Get() &&
-        !accepted_tlas_buffers.contains(payload->previous_tlas_buffer.Get())) {
-        return false;
-    }
-
     graph_resources.bindless =
         graph.ImportToken("RT.FrameSetup.bindless", payload->bindless_array.Get());
     graph_resources.ready =
@@ -221,29 +177,20 @@ bool RaytracingFrameSetupPass::AddPasses(
         );
         graph.SetInitialState(
             graph_resources.previous_tlas,
-            RenderGraph::BufferState::AccelerationStructureRead,
+            RenderGraph::BufferAccessType::AccelerationStructureRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
     }
 
-    const bool current_tlas_accepted =
-        accepted_tlas_buffers.contains(payload->destination_tlas_buffer.Get());
+    // Every accepted scene/frame build exports ASRead. A new buffer has no
+    // image layout and no prior accesses, so it uses the same boundary without
+    // a separate allocation-address registry.
     graph.SetInitialState(
         graph_resources.current_tlas,
-        payload->external_tlas_built ?
-            RenderGraph::BufferState::AccelerationStructureWrite :
-            (current_tlas_accepted ?
-                 RenderGraph::BufferState::AccelerationStructureRead :
-                 RenderGraph::BufferState::Undefined),
-        payload->external_tlas_built || current_tlas_accepted ?
-            RenderGraph::QueueRole::Graphics :
-            RenderGraph::QueueRole::None,
-        payload->external_tlas_built ?
-            RenderGraph::AccessMode::Write :
-            (current_tlas_accepted ?
-                 RenderGraph::AccessMode::Read :
-                 RenderGraph::AccessMode::None)
+        RenderGraph::BufferAccessType::AccelerationStructureRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
     );
 
     Array<RenderGraph::BufferHandle> unique_scene_buffers;
@@ -261,7 +208,7 @@ bool RaytracingFrameSetupPass::AddPasses(
             if (first_import) {
                 graph.SetInitialState(
                     handle,
-                    RenderGraph::BufferState::ShaderResource,
+                    RenderGraph::BufferAccessType::ShaderRead,
                     RenderGraph::QueueRole::Graphics,
                     RenderGraph::AccessMode::Read
                 );
@@ -327,7 +274,7 @@ bool RaytracingFrameSetupPass::AddPasses(
     );
 
     Array<RenderGraph::TextureHandle> unique_scene_textures;
-    Array<RenderGraph::TextureState>  unique_scene_texture_states;
+    Array<RenderGraph::TextureAccessType> unique_scene_texture_states;
     graph_resources.scene.material_textures.reserve(
         payload->scene_resources.material_textures.size()
     );
@@ -356,21 +303,20 @@ bool RaytracingFrameSetupPass::AddPasses(
         if (first_import) {
             graph.SetInitialState(
                 handle,
-                PreferredReadState(texture),
+                RenderGraph::TextureAccessType::Sampled,
                 RenderGraph::QueueRole::Graphics,
                 RenderGraph::AccessMode::Read
             );
             unique_scene_textures.emplace_back(handle);
-            unique_scene_texture_states.emplace_back(
-                PreferredReadState(texture)
-            );
+            unique_scene_texture_states.emplace_back(RenderGraph::TextureAccessType::Sampled);
         }
     }
 
+    // Capturing pending bindless updates consumes shared CPU state in order.
     graph_resources.update_bindless = graph.AddRecordPass(
         "RT.FrameSetup.UpdateBindless",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                 .Write(graph_resources.bindless)
                 .SideEffect();
         },
@@ -382,18 +328,18 @@ bool RaytracingFrameSetupPass::AddPasses(
             );
             cmd_list.UpdateBindlessArray(payload->bindless_array);
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     graph_resources.normalize_scene = graph.AddRecordPass(
         "RT.FrameSetup.NormalizeSceneBindings",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Compute)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                 .DependsOn(graph_resources.update_bindless)
                 .Read(graph_resources.bindless)
                 .SideEffect();
             for (const auto buffer : unique_scene_buffers) {
-                builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+                builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
             }
             for (size_t index = 0;
                  index < unique_scene_textures.size();
@@ -405,14 +351,14 @@ bool RaytracingFrameSetupPass::AddPasses(
             }
         },
         [](CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(graph_resources.bindless);
     for (const auto buffer : unique_scene_buffers) {
         graph.Export(
             buffer,
-            RenderGraph::BufferState::ShaderResource,
+            RenderGraph::BufferAccessType::ShaderRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -428,39 +374,10 @@ bool RaytracingFrameSetupPass::AddPasses(
         );
     }
 
-    RenderGraph::BufferHandle instance_buffer{};
-    RenderGraph::BufferHandle scratch_buffer{};
     Array<RenderGraph::BufferHandle> geometry_buffers;
     if (payload->build_tlas) {
-        instance_buffer =
-            ImportBuffer(graph, "RT.FrameSetup.tlas_instances", payload->instance_buffer);
-        scratch_buffer =
-            ImportBuffer(graph, "RT.FrameSetup.tlas_scratch", payload->scratch_buffer);
-        const bool instance_initialized =
-            accepted_instance_buffers.contains(payload->instance_buffer.Get());
-        graph.SetInitialState(
-            instance_buffer,
-            instance_initialized ?
-                RenderGraph::BufferState::AccelerationStructureBuildInput :
-                RenderGraph::BufferState::Undefined,
-            instance_initialized ? RenderGraph::QueueRole::Graphics :
-                                   RenderGraph::QueueRole::None,
-            instance_initialized ? RenderGraph::AccessMode::Read :
-                                   RenderGraph::AccessMode::None
-        );
-        const bool scratch_initialized =
-            accepted_scratch_buffers.contains(payload->scratch_buffer.Get());
-        graph.SetInitialState(
-            scratch_buffer,
-            scratch_initialized ?
-                RenderGraph::BufferState::AccelerationStructureWrite :
-                RenderGraph::BufferState::Undefined,
-            scratch_initialized ? RenderGraph::QueueRole::Graphics :
-                                  RenderGraph::QueueRole::None,
-            scratch_initialized ? RenderGraph::AccessMode::Write :
-                                  RenderGraph::AccessMode::None
-        );
-
+        // Instance upload and scratch storage are private to the RHI TLAS
+        // operation. RDG owns only its public BLAS inputs and TLAS output.
         geometry_buffers.reserve(payload->geometry_buffers.size());
         for (size_t index = 0; index < payload->geometry_buffers.size(); ++index) {
             const auto geometry = ImportBuffer(
@@ -470,7 +387,7 @@ bool RaytracingFrameSetupPass::AddPasses(
             );
             graph.SetInitialState(
                 geometry,
-                RenderGraph::BufferState::AccelerationStructureRead,
+                RenderGraph::BufferAccessType::AccelerationStructureRead,
                 RenderGraph::QueueRole::Graphics,
                 RenderGraph::AccessMode::Read
             );
@@ -483,34 +400,19 @@ bool RaytracingFrameSetupPass::AddPasses(
                 auto& setup_builder =
                     builder.ExecuteOn(
                                RenderGraph::QueueRole::Graphics,
-                               RenderGraph::PipelineType::Compute
+                               RenderGraph::GpuWorkType::Compute
                            )
                     .DependsOn(graph_resources.normalize_scene)
                     .Read(graph_resources.bindless);
-                if (payload->full_instance_upload) {
-                    setup_builder.Write(
-                        instance_buffer,
-                        RenderGraph::BufferState::UnorderedAccess
-                    );
-                } else {
-                    setup_builder.ReadWrite(
-                        instance_buffer,
-                        RenderGraph::BufferState::UnorderedAccess
-                    );
-                }
                 setup_builder
                     .Write(
-                        scratch_buffer,
-                        RenderGraph::BufferState::AccelerationStructureWrite
-                    )
-                    .Write(
                         graph_resources.current_tlas,
-                        RenderGraph::BufferState::AccelerationStructureWrite
+                        RenderGraph::BufferAccessType::AccelerationStructureWrite
                     );
                 for (const auto geometry : geometry_buffers) {
                     builder.Read(
                         geometry,
-                        RenderGraph::BufferState::AccelerationStructureBuildInput
+                        RenderGraph::BufferAccessType::AccelerationStructureBuildInput
                     );
                 }
             },
@@ -532,7 +434,7 @@ bool RaytracingFrameSetupPass::AddPasses(
                 );
                 cmd_list.PopScopeWithTimeScope();
             },
-            RenderGraph::PassExecutionClass::SerialRecord
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     }
 
@@ -542,13 +444,13 @@ bool RaytracingFrameSetupPass::AddPasses(
             auto& finalize_builder =
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Compute
-                       )
+                           RenderGraph::GpuWorkType::Compute
+                )
                     .DependsOn(graph_resources.normalize_scene)
                     .Read(graph_resources.bindless)
                     .Read(
                         graph_resources.current_tlas,
-                        RenderGraph::BufferState::AccelerationStructureRead
+                        RenderGraph::BufferAccessType::AccelerationStructureRead
                     )
                     .Write(graph_resources.ready)
                     .SideEffect();
@@ -559,7 +461,7 @@ bool RaytracingFrameSetupPass::AddPasses(
                 graph_resources.current_tlas) {
                 finalize_builder.Read(
                     graph_resources.previous_tlas,
-                    RenderGraph::BufferState::AccelerationStructureRead
+                    RenderGraph::BufferAccessType::AccelerationStructureRead
                 );
             }
         },
@@ -568,12 +470,12 @@ bool RaytracingFrameSetupPass::AddPasses(
             // transaction gate, including no-build frames.
             (void)payload;
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(
         graph_resources.current_tlas,
-        RenderGraph::BufferState::AccelerationStructureRead,
+        RenderGraph::BufferAccessType::AccelerationStructureRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -581,114 +483,22 @@ bool RaytracingFrameSetupPass::AddPasses(
         graph_resources.current_tlas) {
         graph.Export(
             graph_resources.previous_tlas,
-            RenderGraph::BufferState::AccelerationStructureRead,
+            RenderGraph::BufferAccessType::AccelerationStructureRead,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
     }
     if (payload->build_tlas) {
-        graph.Export(
-            instance_buffer,
-            RenderGraph::BufferState::AccelerationStructureBuildInput,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Read
-        );
-        graph.Export(
-            scratch_buffer,
-            RenderGraph::BufferState::AccelerationStructureWrite,
-            RenderGraph::QueueRole::Graphics,
-            RenderGraph::AccessMode::Write
-        );
         for (const auto geometry : geometry_buffers) {
             graph.Export(
                 geometry,
-                RenderGraph::BufferState::AccelerationStructureRead,
+                RenderGraph::BufferAccessType::AccelerationStructureRead,
                 RenderGraph::QueueRole::Graphics,
                 RenderGraph::AccessMode::Read
             );
         }
     }
     return graph_resources.IsValid();
-}
-
-bool RaytracingFrameSetupPass::ProcessLinear(
-    CommandList&           cmd_list,
-    const PreparedCommand& command
-) const {
-    const SharedPtr<RecordPayload> payload = command.record;
-    if (!payload || !payload->bindless_array || !payload->destination_tlas ||
-        !payload->destination_tlas_buffer) {
-        return false;
-    }
-    if (payload->build_tlas &&
-        (!payload->build_tlas_command || !payload->instance_buffer ||
-         !payload->scratch_buffer || payload->geometry_buffers.empty())) {
-        return false;
-    }
-    cmd_list.UpdateBindlessArray(payload->bindless_array);
-    if (!payload->build_tlas || !payload->build_tlas_command) {
-        return true;
-    }
-
-    bool expected = false;
-    if (!payload->build_tlas_recorded.compare_exchange_strong(expected, true)) {
-        throw std::logic_error("RT FrameSetup BuildTLAS command was recorded more than once");
-    }
-    ScopedGpuMarker marker(
-        cmd_list,
-        "Pass: Scene Acceleration Structure",
-        GpuMarkerPalette::Pass()
-    );
-    cmd_list.PushScopeWithTimeScope("RTScene RendererTLAS");
-    cmd_list.UpdateRaytracingScene(std::move(payload->build_tlas_command));
-    cmd_list.PopScopeWithTimeScope();
-    return true;
-}
-
-void RaytracingFrameSetupPass::CommitAccepted(
-    const PreparedCommand& command
-) noexcept {
-    const SharedPtr<RecordPayload> payload = command.record;
-    if (!payload) {
-        return;
-    }
-
-    for (const BufferRef& buffer : {
-             payload->scene_resources.light_buf,
-             payload->scene_resources.material_buf,
-             payload->scene_resources.primitive_buf,
-             payload->scene_resources.instance_buf,
-             payload->scene_resources.position_buf,
-             payload->scene_resources.packed_normal_buf,
-             payload->scene_resources.packed_tangent_buf,
-             payload->scene_resources.texcoord0_buf,
-             payload->scene_resources.index_buf,
-             payload->scene_resources.rt_instance_buf,
-             payload->scene_resources.rt_primitive_table_buf,
-         }) {
-        if (buffer) {
-            accepted_scene_buffers.emplace(buffer.Get());
-        }
-    }
-    if (payload->destination_tlas_buffer) {
-        accepted_tlas_buffers.emplace(payload->destination_tlas_buffer.Get());
-    }
-    if (payload->previous_tlas_buffer) {
-        accepted_tlas_buffers.emplace(payload->previous_tlas_buffer.Get());
-    }
-    if (payload->instance_buffer) {
-        accepted_instance_buffers.emplace(payload->instance_buffer.Get());
-    }
-    if (payload->scratch_buffer) {
-        accepted_scratch_buffers.emplace(payload->scratch_buffer.Get());
-    }
-}
-
-void RaytracingFrameSetupPass::ResetAcceptedResources() noexcept {
-    accepted_tlas_buffers.clear();
-    accepted_instance_buffers.clear();
-    accepted_scratch_buffers.clear();
-    accepted_scene_buffers.clear();
 }
 
 } // namespace Moer::Render::Raytracing

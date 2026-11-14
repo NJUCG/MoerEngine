@@ -6,14 +6,14 @@
 #include "misc/Traits.h"
 #include "shaderheaders/shared/raster/SharedEnum.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <entt/entity/entity.hpp>
 #include <string>
 #include <string_view>
 
 namespace Moer {
 
-enum class EProceduralPrimitiveShape : std::uint32_t {
+enum class EProceduralPrimitiveShape : uint32 {
     Cube,
     FacetedSphere,
 };

@@ -5,6 +5,8 @@
  * 为当前 pass 生成紧凑的可见实例索引和新的间接绘制命令。
  */
 
+#include "shared/ShaderConstants.h"
+
 #ifndef ENABLE_HIZ_OCCLUSION
 #define ENABLE_HIZ_OCCLUSION 0
 #endif
@@ -18,7 +20,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "shared/rhi/CommandDrawData.h"
 #include "shared/scene/SharedSceneStruct.h"
 
-[[vk::push_constant]] ConstantBuffer<Moer::CullParams> cull_params;
+DEFINE_SHADER_CONSTANT(Moer::CullParams, cull_params)
 
 [[vk::binding(0, 0)]] StructuredBuffer<Moer::DrawIndexedCmdData> source_draw_commands;
 [[vk::binding(1, 0)]] StructuredBuffer<Moer::GPrimitive> primitives;
@@ -70,7 +72,7 @@ float ComputeScreenError(float3 world_center, float world_radius, float world_er
 bool IsClusterLodActive(Moer::GPrimitive prim, float4x4 world_transform) {
     if (prim.cluster_group_id < 0) return true; // 无 LOD 数据（如旧缓存场景），始终渲染
 
-    if ((cull_params.flags & Moer::CULL_FLAG_ENABLE_CLUSTER_LOD) == 0) {
+    if ((moer_constants.cull_params.flags & Moer::CULL_FLAG_ENABLE_CLUSTER_LOD) == 0) {
         // LOD 数据未就绪（如 shadow pass 不传 LOD 参数）—— 仅渲染叶子 cluster
         return prim.cluster_refined_id < 0;
     }
@@ -171,17 +173,17 @@ uint GetHiZMipForScreenBounds(float2 uv_min, float2 uv_max) {
     float2 pixel_size  = max((uv_max - uv_min) * hiz_size, float2(1.0, 1.0));
     float  max_pixels  = max(pixel_size.x, pixel_size.y);
     uint   target_mip  = (uint)ceil(log2(max_pixels));
-    uint   max_mip_idx = cull_params.hiz_mip_count - 1;
+    uint   max_mip_idx = moer_constants.cull_params.hiz_mip_count - 1;
     return min(target_mip, max_mip_idx);
 }
 
 float SamplePreviousHiZ(uint mip, float2 uv) {
-    return TextureHandle(cull_params.hiz_mip_handles[mip]).SampleLevel<float>(saturate(uv), 0.0);
+    return TextureHandle(moer_constants.cull_params.hiz_mip_handles[mip]).SampleLevel<float>(saturate(uv), 0.0);
 }
 
 // Tests occlusion against the previous frame Hi-Z pyramid. Reverse-Z stores the farthest depth per mip tile.
 bool AABBOccludedByPreviousHiZ(float3 aabb_min, float3 aabb_max) {
-    if ((cull_params.flags & Moer::CULL_FLAG_ENABLE_HIZ_OCCLUSION) == 0 || cull_params.hiz_mip_count == 0) {
+    if ((moer_constants.cull_params.flags & Moer::CULL_FLAG_ENABLE_HIZ_OCCLUSION) == 0 || moer_constants.cull_params.hiz_mip_count == 0) {
         return false;
     }
 
@@ -242,7 +244,7 @@ bool IsInstanceVisible(Moer::GInstance inst, Moer::GPrimitive prim, out bool fru
     occlusion_culled = false;
     lod_culled       = false;
 
-    if ((cull_params.flags & Moer::CULL_FLAG_ENABLE_FRUSTUM) != 0) {
+    if ((moer_constants.cull_params.flags & Moer::CULL_FLAG_ENABLE_FRUSTUM) != 0) {
         if (!AABBInsideFrustum(world_min, world_max)) {
             frustum_culled = true;
             return false;
@@ -262,7 +264,7 @@ bool IsInstanceVisible(Moer::GInstance inst, Moer::GPrimitive prim, out bool fru
 // Culls each source draw and emits compact visible-instance and indirect-draw buffers.
 [numthreads(64, 1, 1)]
 void main(uint tid : SV_DispatchThreadID) {
-    if (tid >= cull_params.draw_count) return;
+    if (tid >= moer_constants.cull_params.draw_count) return;
     
     Moer::DrawIndexedCmdData src_cmd = source_draw_commands[tid];
     uint first_inst_idx = src_cmd.first_instance;

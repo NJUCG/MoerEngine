@@ -1,8 +1,8 @@
 #include "profile/ProfileDump.h"
-
 #include "ProfileDumpTesting.h"
-#include "platform/Platform.h"
 #include "misc/AtomicSharedPtr.h"
+#include "misc/Types.h"
+#include "platform/Platform.h"
 
 #include <algorithm>
 #include <atomic>
@@ -41,25 +41,25 @@ namespace {
 
 using namespace std::chrono_literals;
 
-std::atomic<std::uint64_t> g_temp_path_nonce{1};
+std::atomic<uint64> g_temp_path_nonce{1};
 
-[[nodiscard]] std::uint64_t CurrentProcessIdValue() noexcept {
+[[nodiscard]] uint64 CurrentProcessIdValue() noexcept {
 #if PLATFORM_WINDOWS
-    return static_cast<std::uint64_t>(::GetCurrentProcessId());
+    return static_cast<uint64>(::GetCurrentProcessId());
 #else
-    return static_cast<std::uint64_t>(::getpid());
+    return static_cast<uint64>(::getpid());
 #endif
 }
 
 [[nodiscard]] std::filesystem::path MakeSessionTempPath(const std::filesystem::path& _output_path) {
     const auto clock_tick =
-        static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-    const std::uint64_t nonce = g_temp_path_nonce.fetch_add(1, std::memory_order_relaxed);
+        static_cast<uint64>(std::chrono::steady_clock::now().time_since_epoch().count());
+    const uint64 nonce = g_temp_path_nonce.fetch_add(1, std::memory_order_relaxed);
 
-    auto combine = [](std::uint64_t _seed, std::uint64_t _value) noexcept {
+    auto combine = [](uint64 _seed, uint64 _value) noexcept {
         return _seed ^ (_value + 0x9e3779b97f4a7c15ULL + (_seed << 6U) + (_seed >> 2U));
     };
-    std::uint64_t token = combine(CurrentProcessIdValue(), clock_tick);
+    uint64 token        = combine(CurrentProcessIdValue(), clock_tick);
     token               = combine(token, nonce);
     token ^= token >> 30U;
     token *= 0xbf58476d1ce4e5b9ULL;
@@ -75,18 +75,18 @@ std::atomic<std::uint64_t> g_temp_path_nonce{1};
 }
 
 struct PendingRecord {
-    std::uint64_t       schema_hash{0};
-    std::uint64_t       sequence{0};
-    Array<std::uint8_t> payload{};
+    uint64       schema_hash{0};
+    uint64       sequence{0};
+    Array<uint8> payload{};
 };
 
 struct ImmutableChunk {
-    std::uint64_t              generation{0};
+    uint64                     generation{0};
     std::vector<PendingRecord> records{};
     std::size_t                payload_bytes{0};
-    std::uint64_t              first_sequence{0};
-    std::uint64_t              last_sequence{0};
-    std::uint64_t              value_bytes{0};
+    uint64                     first_sequence{0};
+    uint64                     last_sequence{0};
+    uint64                     value_bytes{0};
 };
 
 struct FlushFence {
@@ -111,44 +111,44 @@ struct SchemaEntry {
     std::size_t      encoded_bytes{0};
 };
 
-using SchemaMap = std::unordered_map<std::uint64_t, std::shared_ptr<const SchemaEntry>>;
+using SchemaMap = std::unordered_map<uint64, std::shared_ptr<const SchemaEntry>>;
 
 struct Admission {
-    std::uint64_t              generation{0};
+    uint64                     generation{0};
     RuntimeConfig              config{};
-    std::atomic<std::uint64_t> next_sequence{1};
+    std::atomic<uint64>        next_sequence{1};
     // Protected by Hub::mutex. Shutdown closes admission first, then waits
     // until every registered emitter has either published its TLS shard or
     // left the active set.
     bool          closing{false};
-    std::uint64_t active_emitters{0};
+    uint64        active_emitters{0};
 };
 
 struct AtomicStats {
-    std::atomic<std::uint64_t> records_committed{0};
-    std::atomic<std::uint64_t> records_enqueued{0};
-    std::atomic<std::uint64_t> records_written{0};
-    std::atomic<std::uint64_t> records_dropped_stopped{0};
-    std::atomic<std::uint64_t> records_dropped_stale_generation{0};
-    std::atomic<std::uint64_t> records_dropped_oversized{0};
-    std::atomic<std::uint64_t> records_dropped_queue_full{0};
-    std::atomic<std::uint64_t> records_dropped_after_fault{0};
+    std::atomic<uint64> records_committed{0};
+    std::atomic<uint64> records_enqueued{0};
+    std::atomic<uint64> records_written{0};
+    std::atomic<uint64> records_dropped_stopped{0};
+    std::atomic<uint64> records_dropped_stale_generation{0};
+    std::atomic<uint64> records_dropped_oversized{0};
+    std::atomic<uint64> records_dropped_queue_full{0};
+    std::atomic<uint64> records_dropped_after_fault{0};
 
-    std::atomic<std::uint64_t> chunks_enqueued{0};
-    std::atomic<std::uint64_t> chunks_written{0};
-    std::atomic<std::uint64_t> chunks_dropped{0};
+    std::atomic<uint64> chunks_enqueued{0};
+    std::atomic<uint64> chunks_written{0};
+    std::atomic<uint64> chunks_dropped{0};
 
-    std::atomic<std::uint64_t> resident_chunks{0};
-    std::atomic<std::uint64_t> resident_records{0};
-    std::atomic<std::uint64_t> resident_bytes{0};
-    std::atomic<std::uint64_t> high_water_chunks{0};
-    std::atomic<std::uint64_t> high_water_records{0};
-    std::atomic<std::uint64_t> high_water_bytes{0};
+    std::atomic<uint64> resident_chunks{0};
+    std::atomic<uint64> resident_records{0};
+    std::atomic<uint64> resident_bytes{0};
+    std::atomic<uint64> high_water_chunks{0};
+    std::atomic<uint64> high_water_records{0};
+    std::atomic<uint64> high_water_bytes{0};
 
-    std::atomic<std::uint64_t> file_bytes_written{0};
-    std::atomic<std::uint64_t> flush_completed{0};
-    std::atomic<std::uint64_t> flush_failed{0};
-    std::atomic<std::uint64_t> io_faults{0};
+    std::atomic<uint64> file_bytes_written{0};
+    std::atomic<uint64> flush_completed{0};
+    std::atomic<uint64> flush_failed{0};
+    std::atomic<uint64> io_faults{0};
 
     void Reset() noexcept {
         records_committed.store(0, std::memory_order_relaxed);
@@ -177,8 +177,8 @@ struct AtomicStats {
 
 struct TestHooks {
     Testing::FaultPoint fault_point{Testing::FaultPoint::None};
-    std::uint64_t       trigger_hit{1};
-    std::uint64_t       matching_hits{0};
+    uint64              trigger_hit{1};
+    uint64              matching_hits{0};
     bool                fault_fired{false};
     bool                pause_before_temp_open{false};
     bool                pause_after_start{false};
@@ -194,7 +194,7 @@ struct TestHooks {
 
 struct PendingLossSlot {
     bool          pending{false};
-    std::uint64_t generation{0};
+    uint64        generation{0};
     LossNotice    notice{};
 };
 
@@ -212,21 +212,21 @@ struct Hub {
 
     std::atomic<RuntimeState>  state{RuntimeState::Stopped};
     std::atomic<RuntimeFault>  last_fault{RuntimeFault::None};
-    std::atomic<std::uint64_t> generation{0};
-    std::uint64_t              generation_counter{0};
+    std::atomic<uint64>        generation{0};
+    uint64                     generation_counter{0};
 
     // Crash flushing is intentionally independent of Hub::mutex and the
     // allocation-backed WriterMessage queue. A fatal caller publishes a
     // monotonically increasing ticket, wakes the writer, then polls these
     // atomics only until its bounded deadline.
-    std::atomic<std::uint64_t> crash_flush_requested{0};
-    std::atomic<std::uint64_t> crash_flush_completed{0};
+    std::atomic<uint64> crash_flush_requested{0};
+    std::atomic<uint64> crash_flush_completed{0};
     // Writer failure is terminal within one generation. This stores the
     // first failed ticket so a later failed batch cannot poison an earlier
     // successfully completed waiter.
-    std::atomic<std::uint64_t> crash_flush_first_failed{0};
-    std::atomic<std::uint64_t> crash_flush_epoch{0};
-    std::atomic<std::uint32_t> writer_thread_id{0};
+    std::atomic<uint64>        crash_flush_first_failed{0};
+    std::atomic<uint64>        crash_flush_epoch{0};
+    std::atomic<uint32>        writer_thread_id{0};
     std::atomic<bool>          test_pause_crash_flush_before_publish{false};
     std::atomic<bool>          test_crash_flush_before_publish_paused{false};
     std::atomic<bool>          test_crash_flush_before_publish_resume{false};
@@ -281,7 +281,7 @@ Hub* TryGetHub() noexcept {
     return g_hub_instance.load(std::memory_order_acquire);
 }
 
-enum class PublishResult : std::uint8_t {
+enum class PublishResult : uint8 {
     Nothing,
     Accepted,
     QueueFull,
@@ -292,7 +292,7 @@ enum class PublishResult : std::uint8_t {
 
 struct ThreadLocalShardNode {
     std::mutex                 mutex{};
-    std::uint64_t              generation{0};
+    uint64                     generation{0};
     std::vector<PendingRecord> records{};
     std::size_t                payload_bytes{0};
     ThreadLocalShardNode*      registry_previous{nullptr};
@@ -310,47 +310,47 @@ struct ThreadLocalShard {
 
 thread_local ThreadLocalShard g_tls_shard{};
 
-void UpdateHighWater(std::atomic<std::uint64_t>& _counter, std::uint64_t _value) noexcept {
-    std::uint64_t observed = _counter.load(std::memory_order_relaxed);
+void UpdateHighWater(std::atomic<uint64>& _counter, uint64 _value) noexcept {
+    uint64 observed = _counter.load(std::memory_order_relaxed);
     while (observed < _value && !_counter.compare_exchange_weak(
                                     observed, _value, std::memory_order_relaxed, std::memory_order_relaxed
                                 )) {
     }
 }
 
-std::uint64_t SaturatingAdd(std::uint64_t _lhs, std::uint64_t _rhs) noexcept {
-    constexpr std::uint64_t max = std::numeric_limits<std::uint64_t>::max();
+uint64 SaturatingAdd(uint64 _lhs, uint64 _rhs) noexcept {
+    constexpr uint64 max = std::numeric_limits<uint64>::max();
     return _rhs > max - _lhs ? max : _lhs + _rhs;
 }
 
-bool WouldExceedLimit(std::uint64_t _resident, std::uint64_t _additional, std::uint64_t _limit) noexcept {
+bool WouldExceedLimit(uint64 _resident, uint64 _additional, uint64 _limit) noexcept {
     return _resident > _limit || _additional > _limit - _resident;
 }
 
-std::uint64_t RecordValueBytes(const PendingRecord& _record) noexcept {
-    constexpr std::size_t record_prefix_bytes = sizeof(std::uint64_t) * 2 + sizeof(std::uint32_t);
+uint64 RecordValueBytes(const PendingRecord& _record) noexcept {
+    constexpr std::size_t record_prefix_bytes = sizeof(uint64) * 2 + sizeof(uint32);
     return _record.payload.size() > record_prefix_bytes ?
-               static_cast<std::uint64_t>(_record.payload.size() - record_prefix_bytes) :
+               static_cast<uint64>(_record.payload.size() - record_prefix_bytes) :
                0;
 }
 
-std::uint64_t EncodedRecordValueBytes(std::span<const std::uint8_t> _payload) noexcept {
-    constexpr std::size_t record_prefix_bytes = sizeof(std::uint64_t) * 2 + sizeof(std::uint32_t);
+uint64 EncodedRecordValueBytes(std::span<const uint8> _payload) noexcept {
+    constexpr std::size_t record_prefix_bytes = sizeof(uint64) * 2 + sizeof(uint32);
     return _payload.size() > record_prefix_bytes ?
-               static_cast<std::uint64_t>(_payload.size() - record_prefix_bytes) :
+               static_cast<uint64>(_payload.size() - record_prefix_bytes) :
                0;
 }
 
-std::uint64_t EstimateValueBytes(std::span<const FieldValueView> _values) noexcept {
-    std::uint64_t bytes = 0;
+uint64 EstimateValueBytes(std::span<const FieldValueView> _values) noexcept {
+    uint64 bytes = 0;
     for (const FieldValueView& value : _values) {
-        const std::uint64_t field_bytes = std::visit(
-            [](const auto& field) -> std::uint64_t {
+        const uint64 field_bytes = std::visit(
+            [](const auto& field) -> uint64 {
                 using FieldT = std::decay_t<decltype(field)>;
                 if constexpr (std::is_same_v<FieldT, bool>) {
                     return 1;
                 } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
-                    return SaturatingAdd(sizeof(std::uint32_t), static_cast<std::uint64_t>(field.size()));
+                    return SaturatingAdd(sizeof(uint32), static_cast<uint64>(field.size()));
                 } else {
                     return sizeof(FieldT);
                 }
@@ -363,13 +363,13 @@ std::uint64_t EstimateValueBytes(std::span<const FieldValueView> _values) noexce
 }
 
 void AccumulateLossLocked(
-    Hub&          _hub,
-    std::uint64_t _generation,
-    std::uint64_t _first_sequence,
-    std::uint64_t _last_sequence,
-    std::uint64_t _record_count,
-    std::uint64_t _value_bytes,
-    LossReason    _reason
+    Hub&       _hub,
+    uint64     _generation,
+    uint64     _first_sequence,
+    uint64     _last_sequence,
+    uint64     _record_count,
+    uint64     _value_bytes,
+    LossReason _reason
 ) noexcept {
     if (_record_count == 0 || _hub.state.load(std::memory_order_acquire) != RuntimeState::Running ||
         _generation != _hub.generation.load(std::memory_order_acquire)) {
@@ -381,11 +381,11 @@ void AccumulateLossLocked(
         slot.pending    = true;
         slot.generation = _generation;
         slot.notice     = LossNotice{
-                .first_sequence = _first_sequence,
-                .last_sequence  = _last_sequence,
-                .record_count   = _record_count,
-                .value_bytes    = _value_bytes,
-                .reason_mask    = static_cast<std::uint32_t>(_reason),
+            .first_sequence = _first_sequence,
+            .last_sequence  = _last_sequence,
+            .record_count   = _record_count,
+            .value_bytes    = _value_bytes,
+            .reason_mask    = static_cast<uint32>(_reason),
         };
         return;
     }
@@ -394,16 +394,16 @@ void AccumulateLossLocked(
     slot.notice.last_sequence  = std::max(slot.notice.last_sequence, _last_sequence);
     slot.notice.record_count   = SaturatingAdd(slot.notice.record_count, _record_count);
     slot.notice.value_bytes    = SaturatingAdd(slot.notice.value_bytes, _value_bytes);
-    slot.notice.reason_mask |= static_cast<std::uint32_t>(_reason);
+    slot.notice.reason_mask |= static_cast<uint32>(_reason);
 }
 
 void AccumulateLoss(
-    std::uint64_t _generation,
-    std::uint64_t _first_sequence,
-    std::uint64_t _last_sequence,
-    std::uint64_t _record_count,
-    std::uint64_t _value_bytes,
-    LossReason    _reason
+    uint64     _generation,
+    uint64     _first_sequence,
+    uint64     _last_sequence,
+    uint64     _record_count,
+    uint64     _value_bytes,
+    LossReason _reason
 ) noexcept {
     Hub& hub = GetHub();
     {
@@ -415,7 +415,7 @@ void AccumulateLoss(
     hub.work_cv.notify_one();
 }
 
-std::optional<LossNotice> TakePendingLossLocked(Hub& _hub, std::uint64_t _generation) noexcept {
+std::optional<LossNotice> TakePendingLossLocked(Hub& _hub, uint64 _generation) noexcept {
     if (!_hub.pending_loss.pending || _hub.pending_loss.generation != _generation) {
         return std::nullopt;
     }
@@ -458,7 +458,7 @@ bool ShouldInjectLocked(TestHooks& _hooks, Testing::FaultPoint _point) noexcept 
         return false;
     }
     ++_hooks.matching_hits;
-    if (_hooks.matching_hits != std::max<std::uint64_t>(_hooks.trigger_hit, 1)) {
+    if (_hooks.matching_hits != std::max<uint64>(_hooks.trigger_hit, 1)) {
         return false;
     }
     _hooks.fault_fired = true;
@@ -526,7 +526,7 @@ std::unique_lock<std::mutex> LockRegisteredTlsShard(ThreadLocalShardNode& _shard
     return shard_lock;
 }
 
-void CountDroppedChunk(Hub& _hub, std::uint64_t _record_count, PublishResult _reason) noexcept {
+void CountDroppedChunk(Hub& _hub, uint64 _record_count, PublishResult _reason) noexcept {
     if (_record_count == 0) {
         return;
     }
@@ -548,21 +548,21 @@ void CountDroppedChunk(Hub& _hub, std::uint64_t _record_count, PublishResult _re
 }
 
 PublishResult PublishDetachedChunk(Hub& _hub, ImmutableChunk&& _chunk) noexcept {
-    const std::uint64_t record_count = static_cast<std::uint64_t>(_chunk.records.size());
+    const uint64 record_count = static_cast<uint64>(_chunk.records.size());
     if (record_count == 0) {
         return PublishResult::Nothing;
     }
 
-    const std::uint64_t generation     = _chunk.generation;
-    const std::uint64_t payload_bytes  = static_cast<std::uint64_t>(_chunk.payload_bytes);
-    const std::uint64_t first_sequence = _chunk.first_sequence;
-    const std::uint64_t last_sequence  = _chunk.last_sequence;
-    const std::uint64_t value_bytes    = _chunk.value_bytes;
+    const uint64        generation     = _chunk.generation;
+    const uint64        payload_bytes  = static_cast<uint64>(_chunk.payload_bytes);
+    const uint64        first_sequence = _chunk.first_sequence;
+    const uint64        last_sequence  = _chunk.last_sequence;
+    const uint64        value_bytes    = _chunk.value_bytes;
     PublishResult       result         = PublishResult::Rejected;
     {
         std::lock_guard     lock(_hub.mutex);
         const RuntimeState  state             = _hub.state.load(std::memory_order_acquire);
-        const std::uint64_t active_generation = _hub.generation.load(std::memory_order_acquire);
+        const uint64        active_generation = _hub.generation.load(std::memory_order_acquire);
 
         if (state == RuntimeState::Faulted) {
             result = PublishResult::Faulted;
@@ -571,20 +571,20 @@ PublishResult PublishDetachedChunk(Hub& _hub, ImmutableChunk&& _chunk) noexcept 
         } else if (state != RuntimeState::Running) {
             result = PublishResult::Rejected;
         } else {
-            const std::uint64_t resident_chunks = _hub.stats.resident_chunks.load(std::memory_order_relaxed);
-            const std::uint64_t resident_records =
+            const uint64 resident_chunks = _hub.stats.resident_chunks.load(std::memory_order_relaxed);
+            const uint64 resident_records =
                 _hub.stats.resident_records.load(std::memory_order_relaxed);
-            const std::uint64_t resident_bytes = _hub.stats.resident_bytes.load(std::memory_order_relaxed);
+            const uint64 resident_bytes = _hub.stats.resident_bytes.load(std::memory_order_relaxed);
 
             const bool full =
                 WouldExceedLimit(
-                    resident_chunks, 1, static_cast<std::uint64_t>(_hub.config.queue_max_chunks)
+                    resident_chunks, 1, static_cast<uint64>(_hub.config.queue_max_chunks)
                 ) ||
                 WouldExceedLimit(
-                    resident_records, record_count, static_cast<std::uint64_t>(_hub.config.queue_max_records)
+                    resident_records, record_count, static_cast<uint64>(_hub.config.queue_max_records)
                 ) ||
                 WouldExceedLimit(
-                    resident_bytes, payload_bytes, static_cast<std::uint64_t>(_hub.config.queue_max_bytes)
+                    resident_bytes, payload_bytes, static_cast<uint64>(_hub.config.queue_max_bytes)
                 );
             if (full) {
                 result = PublishResult::QueueFull;
@@ -780,8 +780,8 @@ EmitStatus ReleaseEmitter(const std::shared_ptr<Admission>& _admission, EmitStat
 }
 
 void DecrementResidentLocked(Hub& _hub, const ImmutableChunk& _chunk) noexcept {
-    const std::uint64_t records = static_cast<std::uint64_t>(_chunk.records.size());
-    const std::uint64_t bytes   = static_cast<std::uint64_t>(_chunk.payload_bytes);
+    const uint64 records = static_cast<uint64>(_chunk.records.size());
+    const uint64 bytes   = static_cast<uint64>(_chunk.payload_bytes);
     _hub.stats.resident_chunks.fetch_sub(1, std::memory_order_relaxed);
     _hub.stats.resident_records.fetch_sub(records, std::memory_order_relaxed);
     _hub.stats.resident_bytes.fetch_sub(bytes, std::memory_order_relaxed);
@@ -795,7 +795,7 @@ void CountChunkAfterFault(
     const std::size_t total = _chunk.records.size();
     if (_records_already_written < total) {
         _hub.stats.records_dropped_after_fault.fetch_add(
-            static_cast<std::uint64_t>(total - _records_already_written), std::memory_order_relaxed
+            static_cast<uint64>(total - _records_already_written), std::memory_order_relaxed
         );
     }
     _hub.stats.chunks_dropped.fetch_add(1, std::memory_order_relaxed);
@@ -875,15 +875,15 @@ void FailWriter(
 }
 
 void WritePacketChecked(
-    Hub&                          _hub,
-    std::FILE*                    _stream,
-    PacketType                    _type,
-    std::uint64_t&                _packet_index,
-    std::span<const std::uint8_t> _payload
+    Hub&                   _hub,
+    std::FILE*             _stream,
+    PacketType             _type,
+    uint64&                _packet_index,
+    std::span<const uint8> _payload
 ) {
     InjectOrContinue(Testing::FaultPoint::WritePacket, RuntimeFault::WritePacket);
 
-    Array<std::uint8_t> packet;
+    Array<uint8> packet;
     if (WrapPacket(_type, _packet_index++, _payload, _hub.config.codec_limits, packet) != EncodeStatus::Ok) {
         throw WriterFailure{RuntimeFault::WriterException};
     }
@@ -893,12 +893,12 @@ void WritePacketChecked(
         throw WriterFailure{RuntimeFault::WritePacket};
     }
     _hub.stats.file_bytes_written.fetch_add(
-        static_cast<std::uint64_t>(packet.size()), std::memory_order_relaxed
+        static_cast<uint64>(packet.size()), std::memory_order_relaxed
     );
 }
 
-void WriteLossChecked(Hub& _hub, std::FILE* _stream, std::uint64_t& _packet_index, const LossNotice& _loss) {
-    Array<std::uint8_t> loss_payload;
+void WriteLossChecked(Hub& _hub, std::FILE* _stream, uint64& _packet_index, const LossNotice& _loss) {
+    Array<uint8> loss_payload;
     EncodeLossPayload(_loss, loss_payload);
     WritePacketChecked(_hub, _stream, PacketType::Loss, _packet_index, loss_payload);
     std::lock_guard lock(_hub.mutex);
@@ -928,8 +928,8 @@ void RenameFinalChecked(Hub& _hub) {
         flags |= MOVEFILE_REPLACE_EXISTING;
     }
 
-    constexpr std::uint32_t max_attempts = 8;
-    for (std::uint32_t attempt = 0; attempt < max_attempts; ++attempt) {
+    constexpr uint32 max_attempts = 8;
+    for (uint32 attempt = 0; attempt < max_attempts; ++attempt) {
         if (::MoveFileExW(_hub.temp_path.c_str(), _hub.config.output_path.c_str(), flags)) {
             return;
         }
@@ -939,7 +939,7 @@ void RenameFinalChecked(Hub& _hub) {
         if (!transient || attempt + 1 == max_attempts) {
             throw WriterFailure{RuntimeFault::RenameFinal};
         }
-        const auto backoff = std::chrono::milliseconds(1U << std::min<std::uint32_t>(attempt, 5U));
+        const auto backoff = std::chrono::milliseconds(1U << std::min<uint32>(attempt, 5U));
         std::this_thread::sleep_for(backoff);
     }
 #else
@@ -986,17 +986,17 @@ void SignalStartFailure(Hub& _hub, RuntimeFault _fault, StartResult _result, std
     _hub.start_cv.notify_all();
 }
 
-void CompleteCrashFlushRequest(Hub& _hub, std::uint64_t _target, bool _succeeded) noexcept {
+void CompleteCrashFlushRequest(Hub& _hub, uint64 _target, bool _succeeded) noexcept {
     if (_target == 0) {
         return;
     }
-    const std::uint64_t previous_completed =
+    const uint64 previous_completed =
         _hub.crash_flush_completed.load(std::memory_order_acquire);
     if (_target <= previous_completed) {
         return;
     }
     if (!_succeeded) {
-        std::uint64_t no_failure = 0;
+        uint64 no_failure = 0;
         static_cast<void>(_hub.crash_flush_first_failed.compare_exchange_strong(
             no_failure,
             previous_completed + 1,
@@ -1008,9 +1008,9 @@ void CompleteCrashFlushRequest(Hub& _hub, std::uint64_t _target, bool _succeeded
 }
 
 void FailPendingCrashFlushRequest(Hub& _hub) noexcept {
-    const std::uint64_t requested =
+    const uint64 requested =
         _hub.crash_flush_requested.load(std::memory_order_acquire);
-    const std::uint64_t completed =
+    const uint64 completed =
         _hub.crash_flush_completed.load(std::memory_order_acquire);
     if (requested > completed) {
         CompleteCrashFlushRequest(_hub, requested, false);
@@ -1028,9 +1028,9 @@ public:
     ~WriterThreadIdentity() {
         hub.crash_flush_epoch.store(0, std::memory_order_seq_cst);
         hub.writer_thread_id.store(0, std::memory_order_seq_cst);
-        const std::uint64_t requested =
+        const uint64 requested =
             hub.crash_flush_requested.load(std::memory_order_seq_cst);
-        const std::uint64_t completed =
+        const uint64 completed =
             hub.crash_flush_completed.load(std::memory_order_acquire);
         if (requested > completed) {
             CompleteCrashFlushRequest(hub, requested, durable_exit);
@@ -1049,7 +1049,7 @@ private:
     bool durable_exit{false};
 };
 
-std::uint64_t DroppedRecordCount(const Hub& _hub) noexcept {
+uint64 DroppedRecordCount(const Hub& _hub) noexcept {
     return _hub.stats.records_dropped_stopped.load(std::memory_order_relaxed) +
            _hub.stats.records_dropped_stale_generation.load(std::memory_order_relaxed) +
            _hub.stats.records_dropped_oversized.load(std::memory_order_relaxed) +
@@ -1062,7 +1062,7 @@ void WriterMain(Hub& _hub, std::shared_ptr<Admission> _session_admission) noexce
     Platform::SetCurrentThreadName("Moer ProfileDump Writer");
 
     std::FILE*    stream       = nullptr;
-    std::uint64_t packet_index = 0;
+    uint64        packet_index = 0;
     try {
         InjectOrContinue(Testing::FaultPoint::OpenTempFile, RuntimeFault::OpenTempFile);
         const std::filesystem::path parent = _hub.temp_path.parent_path();
@@ -1090,12 +1090,12 @@ void WriterMain(Hub& _hub, std::shared_ptr<Admission> _session_admission) noexce
             throw WriterFailure{RuntimeFault::OpenTempFile};
         }
 
-        Array<std::uint8_t> session_payload;
+        Array<uint8>        session_payload;
         const auto          now = std::chrono::system_clock::now().time_since_epoch();
         EncodeSessionBeginPayload(
             SessionBeginInfo{
                 .generation      = _hub.generation.load(std::memory_order_acquire),
-                .started_unix_ns = static_cast<std::uint64_t>(
+                .started_unix_ns = static_cast<uint64>(
                     std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()
                 ),
             },
@@ -1141,11 +1141,11 @@ void WriterMain(Hub& _hub, std::shared_ptr<Admission> _session_admission) noexce
         }
     }
 
-    std::unordered_set<std::uint64_t> emitted_schemas;
+    std::unordered_set<uint64> emitted_schemas;
     for (;;) {
         std::optional<WriterMessage> current;
         std::optional<LossNotice>    pending_loss;
-        std::uint64_t                crash_flush_target = 0;
+        uint64                       crash_flush_target           = 0;
         std::size_t                  records_written_from_current = 0;
         try {
             InjectOrContinue(Testing::FaultPoint::WriterException, RuntimeFault::WriterException);
@@ -1182,9 +1182,9 @@ void WriterMain(Hub& _hub, std::shared_ptr<Admission> _session_admission) noexce
                     }
                     throw WriterFailure{fault};
                 }
-                const std::uint64_t requested =
+                const uint64 requested =
                     _hub.crash_flush_requested.load(std::memory_order_acquire);
-                const std::uint64_t completed =
+                const uint64 completed =
                     _hub.crash_flush_completed.load(std::memory_order_acquire);
                 if (requested > completed) {
                     crash_flush_target = requested;
@@ -1246,7 +1246,7 @@ void WriterMain(Hub& _hub, std::shared_ptr<Admission> _session_admission) noexce
                     }
 
                     if (!emitted_schemas.contains(record.schema_hash)) {
-                        Array<std::uint8_t> schema_payload;
+                        Array<uint8> schema_payload;
                         if (EncodeSchemaPayload(
                                 schema_it->second->descriptor, _hub.config.codec_limits, schema_payload
                             ) != EncodeStatus::Ok) {
@@ -1304,7 +1304,7 @@ void WriterMain(Hub& _hub, std::shared_ptr<Admission> _session_admission) noexce
                 WriteLossChecked(_hub, stream, packet_index, *final_loss);
             }
 
-            Array<std::uint8_t> end_payload;
+            Array<uint8> end_payload;
             EncodeSessionEndPayload(
                 SessionEndInfo{
                     .generation      = _hub.generation.load(std::memory_order_acquire),
@@ -1526,10 +1526,10 @@ StartResult Start(const RuntimeConfig& _config) noexcept {
             hub.start_complete = false;
             hub.start_result   = StartResult::FileOpenFailed;
             hub.stats.Reset();
-            const std::uint64_t generation = ++hub.generation_counter;
+            const uint64 generation        = ++hub.generation_counter;
             session_admission->generation  = generation;
             hub.generation.store(generation, std::memory_order_seq_cst);
-            const std::uint64_t settled_crash_request =
+            const uint64 settled_crash_request =
                 hub.crash_flush_requested.load(std::memory_order_seq_cst);
             hub.crash_flush_completed.store(
                 settled_crash_request, std::memory_order_seq_cst
@@ -1594,7 +1594,7 @@ SchemaRegistration RegisterSchema(const SchemaDescriptor& _schema) noexcept {
         return {.status = SchemaStatus::NotRunning};
     }
 
-    Array<std::uint8_t> encoded;
+    Array<uint8> encoded;
     try {
         if (EncodeSchemaPayload(_schema, admission->config.codec_limits, encoded) != EncodeStatus::Ok) {
             return {.status = SchemaStatus::InvalidSchema};
@@ -1603,7 +1603,7 @@ SchemaRegistration RegisterSchema(const SchemaDescriptor& _schema) noexcept {
         return {.status = SchemaStatus::InvalidSchema};
     }
 
-    const std::uint64_t hash = ComputeSchemaHash(_schema);
+    const uint64 hash = ComputeSchemaHash(_schema);
     if (hash == 0) {
         return {.status = SchemaStatus::InvalidSchema};
     }
@@ -1615,7 +1615,7 @@ SchemaRegistration RegisterSchema(const SchemaDescriptor& _schema) noexcept {
         return {.status = SchemaStatus::NotRunning};
     }
 
-    const std::uint64_t generation = admission->generation;
+    const uint64        generation = admission->generation;
     const auto          current    = hub.schemas.load(std::memory_order_acquire);
     if (const auto found = current->find(hash); found != current->end()) {
         if (found->second->descriptor == _schema) {
@@ -1690,9 +1690,9 @@ EmitStatus Emit(SchemaHandle _schema, std::span<const FieldValueView> _values) n
         return finish(EmitStatus::InvalidHandle);
     }
 
-    const std::uint64_t sequence = admission->next_sequence.fetch_add(1, std::memory_order_relaxed);
-    const std::uint64_t attempted_value_bytes = EstimateValueBytes(_values);
-    Array<std::uint8_t> payload;
+    const uint64        sequence              = admission->next_sequence.fetch_add(1, std::memory_order_relaxed);
+    const uint64        attempted_value_bytes = EstimateValueBytes(_values);
+    Array<uint8>        payload;
     EncodeStatus        encode_status = EncodeStatus::InvalidSchema;
     try {
         encode_status = EncodeRecordPayload(
@@ -1829,7 +1829,9 @@ FlushResult FlushAll() noexcept {
 namespace {
 
 std::optional<CrashFlushResult> ResolveCrashFlushTicket(
-    Hub& _hub, std::uint64_t _generation, std::uint64_t _ticket
+    Hub&   _hub,
+    uint64 _generation,
+    uint64 _ticket
 ) noexcept {
     if (_hub.generation.load(std::memory_order_seq_cst) != _generation) {
         return CrashFlushResult::NotRunning;
@@ -1862,7 +1864,7 @@ std::optional<CrashFlushResult> ResolveCrashFlushTicket(
         }
     }
 
-    const std::uint64_t first_failed =
+    const uint64 first_failed =
         _hub.crash_flush_first_failed.load(std::memory_order_acquire);
     // Start publishes the new generation before resetting its result
     // markers. A final generation check therefore rejects any mixed snapshot
@@ -1877,7 +1879,7 @@ std::optional<CrashFlushResult> ResolveCrashFlushTicket(
 
 } // namespace
 
-CrashFlushResult FlushCrashPublishedPrefix(std::uint32_t _timeout_ms) noexcept {
+CrashFlushResult FlushCrashPublishedPrefix(uint32 _timeout_ms) noexcept {
     Hub* const hub_ptr = TryGetHub();
     if (!hub_ptr) {
         return CrashFlushResult::NotRunning;
@@ -1891,14 +1893,14 @@ CrashFlushResult FlushCrashPublishedPrefix(std::uint32_t _timeout_ms) noexcept {
         return CrashFlushResult::NotRunning;
     }
 
-    const std::uint64_t generation =
+    const uint64 generation =
         hub.generation.load(std::memory_order_seq_cst);
-    const std::uint64_t epoch_before =
+    const uint64 epoch_before =
         hub.crash_flush_epoch.load(std::memory_order_seq_cst);
     if (epoch_before == 0 || epoch_before != generation) {
         return CrashFlushResult::NotRunning;
     }
-    const std::uint32_t writer_thread_id =
+    const uint32 writer_thread_id =
         hub.writer_thread_id.load(std::memory_order_acquire);
     if (writer_thread_id == 0 ||
         writer_thread_id == Platform::GetCurrentThreadID()) {
@@ -1921,9 +1923,9 @@ CrashFlushResult FlushCrashPublishedPrefix(std::uint32_t _timeout_ms) noexcept {
         );
     }
 
-    const std::uint64_t ticket =
+    const uint64 ticket =
         hub.crash_flush_requested.fetch_add(1, std::memory_order_seq_cst) + 1;
-    const std::uint64_t epoch_after =
+    const uint64 epoch_after =
         hub.crash_flush_epoch.load(std::memory_order_seq_cst);
     if (epoch_after != epoch_before ||
         hub.generation.load(std::memory_order_seq_cst) != generation) {
@@ -2076,7 +2078,7 @@ RuntimeState GetRuntimeState() noexcept {
     return GetHub().state.load(std::memory_order_acquire);
 }
 
-std::uint64_t GetRuntimeGeneration() noexcept {
+uint64 GetRuntimeGeneration() noexcept {
     return GetHub().generation.load(std::memory_order_acquire);
 }
 
@@ -2115,14 +2117,14 @@ RuntimeStats GetRuntimeStats() noexcept {
 
 namespace Testing {
 
-bool ConfigureFault(FaultPoint _point, std::uint64_t _trigger_hit) noexcept {
+bool ConfigureFault(FaultPoint _point, uint64 _trigger_hit) noexcept {
     Hub&            hub = GetHub();
     std::lock_guard lock(hub.mutex);
     if (hub.state.load(std::memory_order_acquire) != RuntimeState::Stopped) {
         return false;
     }
     hub.test_hooks.fault_point   = _point;
-    hub.test_hooks.trigger_hit   = std::max<std::uint64_t>(_trigger_hit, 1);
+    hub.test_hooks.trigger_hit   = std::max<uint64>(_trigger_hit, 1);
     hub.test_hooks.matching_hits = 0;
     hub.test_hooks.fault_fired   = false;
     return true;
@@ -2213,7 +2215,7 @@ bool ConfigureEmitterPauseAfterAdmission(bool _enabled) noexcept {
     return true;
 }
 
-bool WaitForWriterPaused(std::uint32_t _timeout_ms) noexcept {
+bool WaitForWriterPaused(uint32 _timeout_ms) noexcept {
     Hub&             hub = GetHub();
     std::unique_lock lock(hub.mutex);
     return hub.test_cv.wait_for(lock, std::chrono::milliseconds(_timeout_ms), [&] {
@@ -2222,7 +2224,7 @@ bool WaitForWriterPaused(std::uint32_t _timeout_ms) noexcept {
     }) && hub.test_hooks.writer_paused;
 }
 
-bool WaitForWriterIdleWaitPaused(std::uint32_t _timeout_ms) noexcept {
+bool WaitForWriterIdleWaitPaused(uint32 _timeout_ms) noexcept {
     Hub&             hub = GetHub();
     std::unique_lock lock(hub.mutex);
     return hub.test_cv.wait_for(
@@ -2236,7 +2238,7 @@ bool WaitForWriterIdleWaitPaused(std::uint32_t _timeout_ms) noexcept {
 }
 
 bool WaitForCrashFlushBeforePublishPaused(
-    std::uint32_t _timeout_ms
+    uint32 _timeout_ms
 ) noexcept {
     Hub&       hub      = GetHub();
     const auto deadline = std::chrono::steady_clock::now() +
@@ -2255,7 +2257,7 @@ bool WaitForCrashFlushBeforePublishPaused(
 }
 
 bool WaitForCrashFlushAfterCompletionObservedPaused(
-    std::uint32_t _timeout_ms
+    uint32 _timeout_ms
 ) noexcept {
     Hub&       hub      = GetHub();
     const auto deadline = std::chrono::steady_clock::now() +
@@ -2273,7 +2275,7 @@ bool WaitForCrashFlushAfterCompletionObservedPaused(
     );
 }
 
-bool WaitForCrashFlushRequestPending(std::uint32_t _timeout_ms) noexcept {
+bool WaitForCrashFlushRequestPending(uint32 _timeout_ms) noexcept {
     Hub&       hub      = GetHub();
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(_timeout_ms);
@@ -2288,7 +2290,7 @@ bool WaitForCrashFlushRequestPending(std::uint32_t _timeout_ms) noexcept {
            hub.crash_flush_completed.load(std::memory_order_acquire);
 }
 
-bool WaitForEmitterPaused(std::uint32_t _timeout_ms) noexcept {
+bool WaitForEmitterPaused(uint32 _timeout_ms) noexcept {
     Hub&             hub = GetHub();
     std::unique_lock lock(hub.mutex);
     return hub.test_cv.wait_for(lock, std::chrono::milliseconds(_timeout_ms), [&] {
@@ -2297,7 +2299,7 @@ bool WaitForEmitterPaused(std::uint32_t _timeout_ms) noexcept {
     }) && hub.test_hooks.emitter_paused;
 }
 
-bool CreateActiveTempCollision(const std::uint8_t* _bytes, std::size_t _byte_count) noexcept {
+bool CreateActiveTempCollision(const uint8* _bytes, std::size_t _byte_count) noexcept {
     Hub&            hub = GetHub();
     std::lock_guard lock(hub.mutex);
     if (hub.state.load(std::memory_order_acquire) != RuntimeState::Starting ||

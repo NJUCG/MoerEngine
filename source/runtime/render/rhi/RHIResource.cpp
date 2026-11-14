@@ -1,6 +1,7 @@
 #include "rhi/RHIResource.h"
 #include "PixelFormat.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "rhi/RHICommon.h"
 
 #include <algorithm>
@@ -11,21 +12,21 @@ void RHIResource::Destroy() {
 }
 namespace Moer::Render {
 
-uint2 TextureWithHandle::GetSize(uint mip) const {
+uint2 TextureWithHandle::GetSize(uint32 mip) const {
     return uint2(std::max(1u, tex->GetExtent().x >> mip), std::max(1u, tex->GetExtent().y >> mip));
 }
-uint TextureWithHandle::GetSizeX(uint mip) const {
+uint32 TextureWithHandle::GetSizeX(uint32 mip) const {
     return std::max(1u, tex->GetExtent().x >> mip);
 }
-uint TextureWithHandle::GetSizeY(uint mip) const {
+uint32 TextureWithHandle::GetSizeY(uint32 mip) const {
     return std::max(1u, tex->GetExtent().y >> mip);
 }
-Rect2D TextureWithHandle::GetRect2D(uint mip) const {
+Rect2D TextureWithHandle::GetRect2D(uint32 mip) const {
     uint2 size = GetSize(mip);
     return Rect2D(0, 0, size.x, size.y);
 }
 
-uint TextureWithHandle::GetMipHandle(uint mip) const {
+uint32 TextureWithHandle::GetMipHandle(uint32 mip) const {
     if (mip_handles.size() > mip) {
         return mip_handles[mip];
     }
@@ -58,7 +59,7 @@ TextureView::TextureView(Texture* _tex, EPixelFormat _fmt, uint8 _mip_level, uin
 }
 
 //in case of const TextureView, so return copy
-TextureView TextureView::Slice(uint layer, uint count) const {
+TextureView TextureView::Slice(uint32 layer, uint32 count) const {
     TextureView copy = *this;
     copy.array_layer = layer;
     copy.num_array   = count;
@@ -79,7 +80,7 @@ BufferView::BufferView(Buffer* _buffer, EPixelFormat _fmt) :
     num_elements(_buffer->GetNumElement()),
     stride(_buffer->GetStride()),
     format(_fmt) {}
-BufferView Buffer::GetView(uint64_t _byte_offset, uint64_t _byte_size) {
+BufferView Buffer::GetView(uint64 _byte_offset, uint64 _byte_size) {
     if (_byte_size == UINT64_MAX && _byte_offset == 0) {
         return BufferView(this, info.format);
     }
@@ -87,7 +88,7 @@ BufferView Buffer::GetView(uint64_t _byte_offset, uint64_t _byte_size) {
     return BufferView(this, _byte_offset, _byte_size / GetStride(), GetStride(), info.format);
 }
 
-BufferView Buffer::GetView(EPixelFormat _fmt, uint64_t _byte_offset, uint64_t _byte_size) {
+BufferView Buffer::GetView(EPixelFormat _fmt, uint64 _byte_offset, uint64 _byte_size) {
     if (_byte_size == UINT64_MAX && _byte_offset == 0) {
         return BufferView(this, _fmt);
     }
@@ -97,15 +98,15 @@ BufferView Buffer::GetView(EPixelFormat _fmt, uint64_t _byte_offset, uint64_t _b
 
 BindlessArray::BindlessArray() : RHIResource(RRT_BINDLESS_ARRAY) {};
 
-RaytracingInstance& RaytracingScene::GetInstance(uint _array_idx) {
+RaytracingInstance& RaytracingScene::GetInstance(uint32 _array_idx) {
     return instances[_array_idx];
 }
 
-const RaytracingInstance& RaytracingScene::GetInstance(uint _array_idx) const {
+const RaytracingInstance& RaytracingScene::GetInstance(uint32 _array_idx) const {
     return instances[_array_idx];
 }
 
-uint RaytracingScene::GetInstanceCount() const {
+uint32 RaytracingScene::GetInstanceCount() const {
     return instances.size();
 }
 

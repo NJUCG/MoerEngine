@@ -1,6 +1,6 @@
 #include "ImGuiIOInput.h"
-
 #include "RenderThread.h"
+#include "misc/Types.h"
 
 #include <cassert>
 #include <cmath>
@@ -78,14 +78,14 @@ namespace {
     }
 }
 
-[[nodiscard]] uint32_t ToDisplayExtent(float value) noexcept {
+[[nodiscard]] uint32 ToDisplayExtent(float value) noexcept {
     if (!std::isfinite(value) || value <= 0.0f) {
         return 0;
     }
-    return static_cast<uint32_t>(value);
+    return static_cast<uint32>(value);
 }
 
-[[nodiscard]] uint32_t GetFocusedPlatformViewportId() {
+[[nodiscard]] uint32 GetFocusedPlatformViewportId() {
     const ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
     if (platform_io.Platform_GetWindowFocus == nullptr) {
         return ImGui::GetIO().AppFocusLost ? 0u : ImGui::GetMainViewport()->ID;
@@ -102,7 +102,7 @@ namespace {
 
 } // namespace
 
-WindowInputSourceSnapshot CaptureImGuiIOInput(uint64_t capture_sequence) {
+WindowInputSourceSnapshot CaptureImGuiIOInput(uint64 capture_sequence) {
     assert(!IsRenderThreadInitialized() || IsCurrentlyGameThread());
 
     WindowInputSourceSnapshot snapshot{};
@@ -143,7 +143,7 @@ WindowInputSourceSnapshot CaptureImGuiIOInput(uint64_t capture_sequence) {
     snapshot.mouse_button_released[MouseButtons::Right] =
         ImGui::IsMouseReleased(ImGuiMouseButton_Right);
 
-    for (uint32_t i = 0; i < KeyButtons::KeyButtonCount; ++i) {
+    for (uint32 i = 0; i < KeyButtons::KeyButtonCount; ++i) {
         const ImGuiKey imgui_key = ToImGuiKey(static_cast<KeyButtons>(i));
         if (imgui_key == ImGuiKey_None) {
             continue;

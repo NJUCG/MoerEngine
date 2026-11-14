@@ -1,6 +1,7 @@
 #pragma once
 
 #include "math/Function.h"
+#include "misc/Types.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -28,9 +29,10 @@ public:
     DEFINE_SHADER_TEX(rw_ao_only);
     DEFINE_SHADER_TEX(rw_camera_mv);
     DEFINE_SHADER_TLAS(tlas);
+    DEFINE_SHADER_TEX(rw_geometry);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
 
-    DEFINE_SHADER_ARGS(param, rw_ao_only, rw_camera_mv, tlas, bdls);
+    DEFINE_SHADER_ARGS(param, rw_ao_only, rw_camera_mv, tlas, rw_geometry, bdls);
 
     MUTATION_BOOL(RTAO_COSINE_WEIGHTED);
 };
@@ -70,6 +72,8 @@ public:
         RenderGraph::TextureHandle ao_only{};
         RenderGraph::TextureHandle camera_motion_vector{};
         RenderGraph::BufferHandle  motion_vector_data{};
+        RenderGraph::TextureHandle indirect{};
+        RenderGraph::TextureHandle geometry{};
     };
 
     struct CompositeGraphResources {
@@ -78,16 +82,19 @@ public:
         RenderGraph::TextureHandle depth{};
         RenderGraph::TextureHandle normal{};
         RenderGraph::TextureHandle ao_output{};
+        RenderGraph::TextureHandle indirect{};
     };
 
     struct AoPassOutput {
-        uint ao_only;     // bindless hdl, for composite
-        uint ao_only_idx; // 0 or 1, for denoiser double-buffering
+        uint32 ao_only;     // bindless hdl, for composite
+        uint32 ao_only_idx; // 0 or 1, for denoiser double-buffering
     };
 
     struct AoTextureSet {
         TextureWithHandle ao_only;
         TextureWithHandle camera_mv;
+        TextureWithHandle indirect;
+        TextureWithHandle geometry;
     };
 
     struct RecordParameters {
@@ -112,12 +119,18 @@ public:
     };
 
     AoPass(RasterContext& context) {
-        auto create_pso_func = [&]() {
+        auto create_pso_func = [&](bool include_indirect = false) {
+            Array<RHIColorAttachmentInfo> attachments{
+                RHIColorAttachmentInfo::Preset(context.textures.ao_output_ambient_only.tex->GetFormat()),
+                RHIColorAttachmentInfo::Preset(context.textures.camera_motion_vector.tex->GetFormat())
+            };
+            if (include_indirect) {
+                attachments.push_back(RHIColorAttachmentInfo::Preset(context.textures.ao_indirect.tex->GetFormat()));
+            }
             GfxPsoCreateInfo pso_full_screen_info(
                 RHIRasterizeInfo::Preset(),
                 {},
-                {RHIColorAttachmentInfo::Preset(context.textures.ao_output_ambient_only.tex->GetFormat()),
-                 RHIColorAttachmentInfo::Preset(context.textures.camera_motion_vector.tex->GetFormat())}
+                std::move(attachments)
             );
             return pso_full_screen_info;
         };
@@ -144,7 +157,7 @@ public:
         ssdo_pipeline = context.manager.Raster()
                             .Vertex("core/utils/FullScreenQuad.hlsl")
                             .Pixel("pipelines/postprocess/lighting_effects/Ssdo.hlsl")
-                            .Build<SsdoPipeline>(std::move(create_pso_func()));
+                            .Build<SsdoPipeline>(create_pso_func(true));
 
         ao_composite_pipeline = context.manager.Compute<AoCompositePipeline>(
             "pipelines/postprocess/lighting_effects/AoComposite.hlsl"
@@ -164,7 +177,7 @@ public:
         camera_mv_data_in_gpu.hdl = context.bdls->AllocateBuffer(camera_mv_data_in_gpu.buf->GetView());
     }
 
-    [[nodiscard]] uint NextAoOnlyIndex() const noexcept {
+    [[nodiscard]] uint32 NextAoOnlyIndex() const noexcept {
         return committed_ao_only_idx ^ 1u;
     }
 
@@ -179,7 +192,7 @@ public:
         const bool half_res = ui_config.ao_half_resolution;
         TextureWithHandle ao_only_full = context.textures.ao_output_ambient_only;
         TextureWithHandle ao_only_half = context.textures.ao_output_ambient_only_half;
-        const uint        ao_only_idx  = NextAoOnlyIndex();
+        const uint32      ao_only_idx  = NextAoOnlyIndex();
         if (ao_only_idx) {
             ao_only_full = context.textures.ao_output_ambient_only_1;
             ao_only_half = context.textures.ao_output_ambient_only_1_half;
@@ -216,9 +229,15 @@ public:
         if (ui_config.ao_half_resolution) {
             parameters.textures.ao_only   = ao_only_half;
             parameters.textures.camera_mv = context.textures.camera_motion_vector_half;
+            parameters.textures.indirect = context.textures.ao_indirect_half;
+            parameters.textures.geometry = parameters.output.ao_only_idx == 0 ?
+                context.textures.ao_history_geometry_half : context.textures.ao_history_geometry_1_half;
         } else {
             parameters.textures.ao_only   = ao_only_full;
             parameters.textures.camera_mv = context.textures.camera_motion_vector;
+            parameters.textures.indirect = context.textures.ao_indirect;
+            parameters.textures.geometry = parameters.output.ao_only_idx == 0 ?
+                context.textures.ao_history_geometry : context.textures.ao_history_geometry_1;
         }
 
         {
@@ -276,12 +295,20 @@ public:
         return parameters;
     }
 
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+    void RecordUpload(CommandList& cmd_list, const RecordParameters& parameters) {
         CameraMotionVectorData upload = parameters.motion_vector_upload;
         cmd_list.CopyFrom(
             std::span<byte>(reinterpret_cast<byte*>(&upload), sizeof(upload)),
             parameters.motion_vector_data.buf->GetView()
         );
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        RecordUpload(cmd_list, parameters);
+        RecordEvaluate(cmd_list, parameters);
+    }
+
+    void RecordEvaluate(CommandList& cmd_list, const RecordParameters& parameters) {
 
         if (parameters.mode == EAoMode::RTAO || parameters.mode == EAoMode::RTAO_AO_ONLY) {
             auto& active_pipeline =
@@ -295,6 +322,7 @@ public:
                         parameters.textures.ao_only.tex,
                         parameters.textures.camera_mv.tex,
                         parameters.tlas,
+                        parameters.textures.geometry.tex,
                         parameters.bindless
                     )
                 .Dispatch(
@@ -311,7 +339,8 @@ public:
                     parameters.textures.ao_only.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(parameters.textures.ao_only.tex),
-                    ColorAttachment(parameters.textures.camera_mv.tex)
+                    ColorAttachment(parameters.textures.camera_mv.tex),
+                    ColorAttachment(parameters.textures.indirect.tex)
                 );
             return;
         }
@@ -326,7 +355,7 @@ public:
             );
     }
 
-    RenderGraph::PreparedPassHandle AddToGraph(
+    void AddToGraph(
         RenderGraph& graph,
         RasterContext& context,
         const RasterConfig& ui_config,
@@ -336,20 +365,22 @@ public:
     );
 
     [[nodiscard]] CompositeRecordParameters PrepareComposite(
-        RasterContext&       context,
-        const RasterConfig&  ui_config,
-        uint                 ao_only_hdl
+        RasterContext&      context,
+        const RasterConfig& ui_config,
+        uint32              ao_only_hdl
     ) const {
         CompositeRecordParameters parameters{};
         auto& param = parameters.shader;
         param.ao_tex              = ao_only_hdl;
         param.color_tex           = context.textures.lighting_output.hdl;
-        param.ao_mode             = static_cast<uint>(ui_config.ao_mode);
+        param.ao_mode                   = static_cast<uint32>(ui_config.ao_mode);
         param.is_half_resolution  = ui_config.ao_half_resolution ? 1u : 0u;
         param.full_resolution     = float2(context.textures.ao_output.GetSize());
         param.inv_full_resolution = float2(1.0f) / param.full_resolution;
         param.depth_tex           = context.textures.depth_nearest_sampler.hdl;
         param.normal_tex          = context.textures.normal.hdl;
+        param.indirect_tex = (ui_config.ao_half_resolution ? context.textures.ao_indirect_half :
+                                                             context.textures.ao_indirect).hdl;
         if (ui_config.ao_half_resolution) {
             const uint2 full = uint2(context.textures.ao_output.GetSize());
             param.ao_resolution = float2(std::max(1u, full.x / 2), std::max(1u, full.y / 2));
@@ -373,11 +404,11 @@ public:
             .Dispatch(parameters.groups, "AO Composite Pass");
     }
 
-    RenderGraph::PreparedPassHandle AddCompositeToGraph(
-        RenderGraph& graph,
-        RasterContext& context,
-        const RasterConfig& ui_config,
-        uint ao_only_handle,
+    void AddCompositeToGraph(
+        RenderGraph&            graph,
+        RasterContext&          context,
+        const RasterConfig&     ui_config,
+        uint32                  ao_only_handle,
         CompositeGraphResources resources
     );
 
@@ -386,7 +417,7 @@ public:
         committed_ao_only_idx = parameters.output.ao_only_idx;
     }
 
-    void CommitFrame(const Matrix4x4f& view_proj, uint ao_only_idx) {
+    void CommitFrame(const Matrix4x4f& view_proj, uint32 ao_only_idx) {
         camera_mv_data_in_cpu.world2clip_prev = camera_mv_data_in_cpu.world2clip;
         camera_mv_data_in_cpu.world2clip      = Transpose(view_proj);
         committed_ao_only_idx                 = ao_only_idx;
@@ -404,7 +435,7 @@ public:
         return parameters.output;
     }
 
-    void CompositeAo(RasterContext& context, const RasterConfig& ui_config, uint ao_only_hdl) {
+    void CompositeAo(RasterContext& context, const RasterConfig& ui_config, uint32 ao_only_hdl) {
         const CompositeRecordParameters parameters =
             PrepareComposite(context, ui_config, ao_only_hdl);
         RecordComposite(context.cmd_list, parameters);
@@ -419,7 +450,7 @@ private:
 
     CameraMotionVectorData camera_mv_data_in_cpu{}; // mv: motion vector
     BufferWithHandle       camera_mv_data_in_gpu; // mv: motion vector
-    uint                    committed_ao_only_idx{0};
+    uint32                 committed_ao_only_idx{0};
 };
 
 } // namespace Moer::Render::Raster

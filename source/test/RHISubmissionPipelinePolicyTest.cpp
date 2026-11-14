@@ -1,4 +1,5 @@
 #include "rhi/RHISubmissionPipelinePolicy.h"
+#include "misc/Types.h"
 
 #include <atomic>
 #include <barrier>
@@ -18,12 +19,12 @@ void Expect(bool _condition, const char* _message) {
 }
 
 constexpr RHIQueueTopology MakeTopology(
-    bool     _graphics_available,
-    uint32_t _graphics_native,
-    bool     _compute_available,
-    uint32_t _compute_native,
-    bool     _copy_available,
-    uint32_t _copy_native
+    bool         _graphics_available,
+    Moer::uint32 _graphics_native,
+    bool         _compute_available,
+    Moer::uint32 _compute_native,
+    bool         _copy_available,
+    Moer::uint32 _copy_native
 ) {
     RHIQueueTopology topology{};
     topology.graphics.available       = _graphics_available;
@@ -47,7 +48,7 @@ void ClampContract() {
     static_assert(ClampBatchWindow(8) == 8);
     static_assert(ClampBatchWindow(9) == 8);
     static_assert(
-        ClampBatchWindow(std::numeric_limits<uint32_t>::max()) == 8
+        ClampBatchWindow(std::numeric_limits<Moer::uint32>::max()) == 8
     );
 }
 
@@ -213,13 +214,13 @@ void BatchWorkStateSequentialContract() {
 void BatchWorkStateSealFinishRaceHasOneTerminalOwner() {
     using RHISubmissionPipelinePolicy::PipelineBatchWorkState;
 
-    constexpr uint32_t iterations = 20000;
+    constexpr Moer::uint32               iterations = 20000;
     std::barrier        phase(3);
     std::atomic<PipelineBatchWorkState*> active_state{nullptr};
-    std::atomic<uint32_t>                terminal_owners{0};
+    std::atomic<Moer::uint32>            terminal_owners{0};
 
     std::jthread seal_thread([&] {
-        for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+        for (Moer::uint32 iteration = 0; iteration < iterations; ++iteration) {
             phase.arrive_and_wait();
             PipelineBatchWorkState* state =
                 active_state.load(std::memory_order_acquire);
@@ -235,7 +236,7 @@ void BatchWorkStateSealFinishRaceHasOneTerminalOwner() {
         }
     });
     std::jthread finish_thread([&] {
-        for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+        for (Moer::uint32 iteration = 0; iteration < iterations; ++iteration) {
             phase.arrive_and_wait();
             PipelineBatchWorkState* state =
                 active_state.load(std::memory_order_acquire);
@@ -251,8 +252,8 @@ void BatchWorkStateSealFinishRaceHasOneTerminalOwner() {
         }
     });
 
-    uint32_t mismatch_count = 0;
-    for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+    Moer::uint32 mismatch_count = 0;
+    for (Moer::uint32 iteration = 0; iteration < iterations; ++iteration) {
         PipelineBatchWorkState state{};
         state.AddWork();
         terminal_owners.store(0, std::memory_order_relaxed);

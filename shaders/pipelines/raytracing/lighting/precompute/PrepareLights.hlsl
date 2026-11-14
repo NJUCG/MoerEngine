@@ -10,7 +10,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include <pipelines/raytracing/lighting/common/PolymorphicLight.hlsli>
 #include <shared/utils/Packing.h>
 
-[[vk::push_constant]] ConstantBuffer<Moer::PrepareLightsParams> param;
+DEFINE_SHADER_CONSTANT(Moer::PrepareLightsParams, param)
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Moer::PolymorphicLightInfo> light_data : register(u0);
 [[vk::binding(1, 0)]] RWBuffer<uint>                                 light_index_mapping : register(u1);
@@ -66,7 +66,7 @@ bool IsValidBindlessHandle(uint handle) {
 bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
     // binary search in task buffer
     int left  = 0;
-    int right = int(param.num_tasks) - 1;
+    int right = int(moer_constants.param.num_tasks) - 1;
 
     while (left <= right) {
         int mid = (left + right) / 2;
@@ -116,22 +116,22 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
         uint primitive_id = task.primitive_id; // 直接使用，不再需要解析
 
         // 1. 加载 GPrimitive
-        ArrayBuffer      primitive_buf = ArrayBuffer(param.primitive_buf_hdl);
+        ArrayBuffer      primitive_buf = ArrayBuffer(moer_constants.param.primitive_buf_hdl);
         Moer::GPrimitive primitive     = primitive_buf.Load<Moer::GPrimitive>(primitive_id);
 
         // 2. 加载 GMaterial
-        ArrayBuffer     material_buf = ArrayBuffer(param.material_buf_hdl);
+        ArrayBuffer     material_buf = ArrayBuffer(moer_constants.param.material_buf_hdl);
         Moer::GMaterial material     = material_buf.Load<Moer::GMaterial>(primitive.material_idx);
 
         // 3. 从 MegaBuffers 读取索引数据
-        ArrayBuffer index_buf = ArrayBuffer(param.index_buf_hdl);
+        ArrayBuffer index_buf = ArrayBuffer(moer_constants.param.index_buf_hdl);
         // GPrimitive 已经有 index_start_idx，CPU 侧从 CPrimitive.index.start_idx 填充。
         // PrepareLightsTask 也保存同一个起点，单位是 uint 元素，不是字节偏移。
 
         // 4. 获取对应的 GInstance（使用第一个 Instance）
         // 注意：一个 Primitive 可能有多个 Instance，这里我们使用第一个
         // C++ 代码已经为我们计算了第一个 Instance 的索引并存储在 task.first_instance_idx 中
-        ArrayBuffer instance_buf = ArrayBuffer(param.instance_buf_hdl);
+        ArrayBuffer instance_buf = ArrayBuffer(moer_constants.param.instance_buf_hdl);
         float4x4    model2world  = float4x4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1); // 默认单位矩阵
         if (task.first_instance_idx != 0xFFFFFFFF) {                                         // UINT_MAX
             Moer::GInstance instance = instance_buf.Load<Moer::GInstance>(task.first_instance_idx);
@@ -144,7 +144,7 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
         uint3 idx             = index_buf.Load<uint3>(tri_idx, index_start_idx * sizeof(uint));
 
         // 6. 从 MegaBuffers 读取顶点位置
-        ArrayBuffer position_buf = ArrayBuffer(param.position_buf_hdl);
+        ArrayBuffer position_buf = ArrayBuffer(moer_constants.param.position_buf_hdl);
         float3      p0;
         float3      p1;
         float3      p2;
@@ -175,7 +175,7 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
             float2        uv2;
             // 从 MegaBuffers 读取 UV 坐标
             if (primitive.attribute_mask & Moer::GPrimitiveEAttributeMask::Texcoord0) {
-                ArrayBuffer texcoord0_buf = ArrayBuffer(param.texcoord0_buf_hdl);
+                ArrayBuffer texcoord0_buf = ArrayBuffer(moer_constants.param.texcoord0_buf_hdl);
                 uint        texcoord0_start_idx = primitive.texcoord0_start_idx;
                 uv0                             = texcoord0_buf.Load<float2>(texcoord0_start_idx + idx.x);
                 uv1                             = texcoord0_buf.Load<float2>(texcoord0_start_idx + idx.y);
@@ -200,15 +200,15 @@ bool FindTask(uint dtid, out Moer::PrepareLightsTask task) {
     }
 
     uint light_buf_idx                                 = task.light_offset + tri_idx;
-    light_data[param.cur_light_offset + light_buf_idx] = light_info;
+    light_data[moer_constants.param.cur_light_offset + light_buf_idx] = light_info;
 
     if (task.prev_light_offset >= 0) {
         uint prev_light_buf_idx = task.prev_light_offset + tri_idx;
-        light_index_mapping[prev_light_buf_idx + param.prev_light_offset] =
-            light_buf_idx + param.cur_light_offset + 1;
+        light_index_mapping[prev_light_buf_idx + moer_constants.param.prev_light_offset] =
+            light_buf_idx + moer_constants.param.cur_light_offset + 1;
 
-        light_index_mapping[light_buf_idx + param.cur_light_offset] =
-            prev_light_buf_idx + param.prev_light_offset + 1;
+        light_index_mapping[light_buf_idx + moer_constants.param.cur_light_offset] =
+            prev_light_buf_idx + moer_constants.param.prev_light_offset + 1;
     }
 
     uint2 pdf_position            = Math::LinearIndexToZCurve(light_buf_idx);

@@ -1,9 +1,10 @@
 #include "RenderScene.h"
+#include "misc/Types.h"
 
 #include "RenderThread.h"
 #include "log/LogSystem.h"
 #include "rhi/RHI.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 
 namespace Moer::Render {
 
@@ -21,10 +22,11 @@ GpuScene::PendingCommandList RenderScene::ApplyUpdate(
     auto gaussian_update = std::move(update.gaussian_update);
     if (!update.HasMeshWork()) {
         GpuScene::PendingCommandList pending;
-        if (setup_command_lists) setup_command_lists(pending, false);
+        pending.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        if (setup_command_lists) setup_command_lists(pending);
         if (gaussian_update) {
             if (!m_gaussian_scene) m_gaussian_scene = MakeUnique<GaussianGpuScene>();
-            m_gaussian_scene->ApplyUpdate(std::move(gaussian_update), pending.gfx_queue_cmd_list);
+            m_gaussian_scene->ApplyUpdate(std::move(gaussian_update), pending);
         }
         return pending;
     }
@@ -37,7 +39,7 @@ GpuScene::PendingCommandList RenderScene::ApplyUpdate(
         update.update_lights ? 1 : 0,
         update.update_materials ? 1 : 0,
         update.update_meshes ? 1 : 0,
-        static_cast<uint>(update.raytracing_update)
+        static_cast<uint32>(update.raytracing_update)
     );
 
     if (update.full_rebuild) {
@@ -57,7 +59,7 @@ GpuScene::PendingCommandList RenderScene::ApplyUpdate(
     auto pending = std::move(m_gpu_scene->PopPendingCommandList());
     if (gaussian_update) {
         if (!m_gaussian_scene) m_gaussian_scene = MakeUnique<GaussianGpuScene>();
-        m_gaussian_scene->ApplyUpdate(std::move(gaussian_update), pending.gfx_queue_cmd_list);
+        m_gaussian_scene->ApplyUpdate(std::move(gaussian_update), pending);
     }
     return pending;
 }

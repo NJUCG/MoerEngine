@@ -2,10 +2,10 @@
 
 #include <toml++/toml.hpp>
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <fstream>
 #include <limits>
 #include <system_error>
@@ -26,13 +26,13 @@ namespace Moer::Render {
 
 namespace {
 
-constexpr std::int64_t k_window_state_version = 1;
+constexpr int64        k_window_state_version = 1;
 constexpr int          k_min_window_width     = 320;
 constexpr int          k_min_window_height    = 200;
 constexpr int          k_max_window_extent    = 65535;
 constexpr int          k_max_coordinate       = 1'000'000;
 
-std::atomic_uint64_t g_temporary_file_nonce{1};
+std::atomic<uint64> g_temporary_file_nonce{1};
 
 bool IsUsableFile(const std::filesystem::path& path) {
     std::error_code error;
@@ -48,17 +48,17 @@ bool IsSanePlacement(const WindowPlacement& placement) {
 }
 
 std::filesystem::path MakeTemporarySibling(const std::filesystem::path& target) {
-    const std::uint64_t nonce     = g_temporary_file_nonce.fetch_add(1, std::memory_order_relaxed);
+    const uint64        nonce     = g_temporary_file_nonce.fetch_add(1, std::memory_order_relaxed);
     const auto          timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
 #if defined(_WIN32)
-    const auto process_id = static_cast<std::uint64_t>(GetCurrentProcessId());
+    const auto process_id = static_cast<uint64>(GetCurrentProcessId());
 #else
-    const auto process_id = static_cast<std::uint64_t>(getpid());
+    const auto process_id = static_cast<uint64>(getpid());
 #endif
 
     std::filesystem::path temporary = target;
     temporary += ".tmp-" + std::to_string(process_id) + "-" +
-                 std::to_string(static_cast<std::uint64_t>(timestamp)) + "-" + std::to_string(nonce);
+                 std::to_string(static_cast<uint64>(timestamp)) + "-" + std::to_string(nonce);
     return temporary;
 }
 
@@ -89,28 +89,28 @@ bool PublishTemporaryFile(
 #endif
 }
 
-std::int64_t IntersectionArea(const WindowPlacement& placement, const MonitorWorkArea& area) {
-    const std::int64_t left  = std::max<std::int64_t>(placement.x, area.x);
-    const std::int64_t top   = std::max<std::int64_t>(placement.y, area.y);
-    const std::int64_t right = std::min<std::int64_t>(
-        static_cast<std::int64_t>(placement.x) + placement.width,
-        static_cast<std::int64_t>(area.x) + area.width
+int64 IntersectionArea(const WindowPlacement& placement, const MonitorWorkArea& area) {
+    const int64 left  = std::max<int64>(placement.x, area.x);
+    const int64 top   = std::max<int64>(placement.y, area.y);
+    const int64 right = std::min<int64>(
+        static_cast<int64>(placement.x) + placement.width,
+        static_cast<int64>(area.x) + area.width
     );
-    const std::int64_t bottom = std::min<std::int64_t>(
-        static_cast<std::int64_t>(placement.y) + placement.height,
-        static_cast<std::int64_t>(area.y) + area.height
+    const int64 bottom = std::min<int64>(
+        static_cast<int64>(placement.y) + placement.height,
+        static_cast<int64>(area.y) + area.height
     );
     return right > left && bottom > top ? (right - left) * (bottom - top) : 0;
 }
 
-std::uint64_t CenterDistanceSquared(const WindowPlacement& placement, const MonitorWorkArea& area) {
-    const std::int64_t placement_center_x = static_cast<std::int64_t>(placement.x) * 2 + placement.width;
-    const std::int64_t placement_center_y = static_cast<std::int64_t>(placement.y) * 2 + placement.height;
-    const std::int64_t area_center_x      = static_cast<std::int64_t>(area.x) * 2 + area.width;
-    const std::int64_t area_center_y      = static_cast<std::int64_t>(area.y) * 2 + area.height;
-    const std::int64_t dx                 = placement_center_x - area_center_x;
-    const std::int64_t dy                 = placement_center_y - area_center_y;
-    return static_cast<std::uint64_t>(dx * dx + dy * dy);
+uint64 CenterDistanceSquared(const WindowPlacement& placement, const MonitorWorkArea& area) {
+    const int64 placement_center_x = static_cast<int64>(placement.x) * 2 + placement.width;
+    const int64 placement_center_y = static_cast<int64>(placement.y) * 2 + placement.height;
+    const int64 area_center_x      = static_cast<int64>(area.x) * 2 + area.width;
+    const int64 area_center_y      = static_cast<int64>(area.y) * 2 + area.height;
+    const int64 dx                 = placement_center_x - area_center_x;
+    const int64 dy                 = placement_center_y - area_center_y;
+    return static_cast<uint64>(dx * dx + dy * dy);
 }
 
 } // namespace
@@ -126,21 +126,21 @@ std::optional<WindowPlacement> LoadWindowPlacement(const std::filesystem::path& 
             return std::nullopt;
         }
         const toml::table state = toml::parse(stream);
-        if (state["version"].value<std::int64_t>() != std::optional<std::int64_t>(k_window_state_version)) {
+        if (state["version"].value<int64>() != std::optional<int64>(k_window_state_version)) {
             return std::nullopt;
         }
 
-        const auto x         = state["x"].value<std::int64_t>();
-        const auto y         = state["y"].value<std::int64_t>();
-        const auto width     = state["width"].value<std::int64_t>();
-        const auto height    = state["height"].value<std::int64_t>();
+        const auto x         = state["x"].value<int64>();
+        const auto y         = state["y"].value<int64>();
+        const auto width     = state["width"].value<int64>();
+        const auto height    = state["height"].value<int64>();
         const auto maximized = state["maximized"].value<bool>();
         if (!x || !y || !width || !height || !maximized) {
             return std::nullopt;
         }
 
-        constexpr std::int64_t int_min = std::numeric_limits<int>::min();
-        constexpr std::int64_t int_max = std::numeric_limits<int>::max();
+        constexpr int64 int_min = std::numeric_limits<int>::min();
+        constexpr int64 int_max = std::numeric_limits<int>::max();
         if (*x < int_min || *x > int_max || *y < int_min || *y > int_max || *width < int_min ||
             *width > int_max || *height < int_min || *height > int_max) {
             return std::nullopt;
@@ -212,15 +212,15 @@ std::optional<WindowPlacement> SanitizeWindowPlacement(
     }
 
     const MonitorWorkArea* selected_area     = nullptr;
-    std::int64_t           selected_overlap  = -1;
-    std::uint64_t          selected_distance = std::numeric_limits<std::uint64_t>::max();
+    int64                  selected_overlap  = -1;
+    uint64                 selected_distance = std::numeric_limits<uint64>::max();
     for (const MonitorWorkArea& area : monitor_work_areas) {
         if (area.width <= 0 || area.height <= 0) {
             continue;
         }
 
-        const std::int64_t  overlap  = IntersectionArea(placement, area);
-        const std::uint64_t distance = CenterDistanceSquared(placement, area);
+        const int64  overlap  = IntersectionArea(placement, area);
+        const uint64 distance = CenterDistanceSquared(placement, area);
         if (overlap > selected_overlap ||
             (overlap == selected_overlap && overlap == 0 && distance < selected_distance)) {
             selected_area     = &area;

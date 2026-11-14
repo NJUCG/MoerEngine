@@ -1,3 +1,4 @@
+#include "misc/Types.h"
 #include "renderer/EditorConfig.h"
 #include "scene/camera/Camera.h"
 #include "window/WindowInput.h"
@@ -14,7 +15,7 @@ void Require(bool condition) {
     }
 }
 
-void RequireUint2(const uint2& actual, uint32_t x, uint32_t y) {
+void RequireUint2(const uint2& actual, uint32 x, uint32 y) {
     Require(actual.x == x);
     Require(actual.y == y);
 }
@@ -24,7 +25,7 @@ void RequireFloat2(const float2& actual, float x, float y) {
     Require(actual.y == y);
 }
 
-WindowInputSourceSnapshot MakeSource(uint64_t sequence) {
+WindowInputSourceSnapshot MakeSource(uint64 sequence) {
     WindowInputSourceSnapshot source{};
     source.capture_sequence  = sequence;
     source.gt_delta_time     = 1.0f / 60.0f;
@@ -132,7 +133,7 @@ int main() {
     WindowInputSourceSnapshot text_input_released = MakeSource(3);
     Require(text_input_tracker.BeginFrame(text_input_released));
     Require(!text_input_tracker.IsKeyToggled(KeyButtons::F));
-    const uint32_t resumed_free_look_owner = ResolveFreeLookCaptureViewportId(
+    const uint32 resumed_free_look_owner = ResolveFreeLookCaptureViewportId(
         text_input_released.focused_viewport_id, text_input_tracker.IsKeyToggled(KeyButtons::F), true, 17u, 0u
     );
     Require(resumed_free_look_owner == 0u);
@@ -149,7 +150,7 @@ int main() {
     WindowInputSourceSnapshot latent_toggle_source = MakeSource(1);
     latent_toggle_source.key_released[KeyButtons::F] = true;
     Require(latent_toggle_tracker.BeginFrame(latent_toggle_source));
-    const uint32_t rejected_free_look_owner = ResolveFreeLookCaptureViewportId(
+    const uint32 rejected_free_look_owner = ResolveFreeLookCaptureViewportId(
         latent_toggle_source.focused_viewport_id,
         latent_toggle_tracker.IsKeyToggled(KeyButtons::F),
         false,

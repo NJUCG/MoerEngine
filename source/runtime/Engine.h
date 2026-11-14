@@ -6,8 +6,8 @@
 #include "scripting/ScriptExecutionFuture.h"
 #include "scripting/ScriptExecutionRequest.h"
 
+#include "misc/Types.h"
 #include <chrono>
-#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -53,7 +53,7 @@ public:
     [[nodiscard]] Render::ProfileCaptureRequestSubmission
     RequestProfileCaptureStart(Render::ProfileCaptureStartOptions options) noexcept;
     [[nodiscard]] Render::ProfileCaptureRequestSubmission
-    RequestProfileCaptureStop(std::uint64_t expected_generation) noexcept;
+    RequestProfileCaptureStop(uint64 expected_generation) noexcept;
     [[nodiscard]] Render::ProfileCaptureControllerSnapshot
     GetProfileCaptureSnapshot() const noexcept;
     void                             ShutDown() noexcept;
@@ -114,7 +114,7 @@ private:
     UniquePtr<Render::RenderProfileCapture> m_render_profile_capture;
     UniquePtr<Render::ProfileCaptureController> m_profile_capture_controller;
 
-    uint m_max_frame_lag = 0;
+    uint32                             m_max_frame_lag = 0;
     Render::RenderGraphExecutionConfig m_raster_graph_config;
     Render::RenderGraphExecutionConfig m_raytracing_graph_config;
     bool m_thread_profile_logging = false;
@@ -128,10 +128,10 @@ private:
     // Validation state is accessed only by Game Thread hooks. Render work is drained before reload.
     ERendererSwitchValidationStage m_renderer_switch_validation_stage =
         ERendererSwitchValidationStage::Disabled;
-    uint m_renderer_switch_validation_ready_frames = 0;
+    uint32 m_renderer_switch_validation_ready_frames     = 0;
     bool m_renderer_switch_validation_reload_requested = false;
     bool m_raster_lifecycle_validation_enabled = false;
-    uint m_raster_lifecycle_validation_ready_frames = 0;
+    uint32 m_raster_lifecycle_validation_ready_frames    = 0;
 
     bool m_profile_capture_lifecycle_validation_enabled = false;
     bool m_profile_capture_validation_exit_requested    = false;
@@ -140,9 +140,9 @@ private:
             EProfileCaptureLifecycleValidationStage::Disabled;
     Render::ProfileCaptureRequestTicket m_profile_capture_validation_ticket;
     Render::ProfileCaptureStartOptions  m_profile_capture_validation_restart_options;
-    std::uint64_t m_profile_capture_validation_first_generation  = 0;
-    std::uint64_t m_profile_capture_validation_second_generation = 0;
-    std::uint64_t m_profile_capture_validation_gt_ticks          = 0;
+    uint64                              m_profile_capture_validation_first_generation  = 0;
+    uint64                              m_profile_capture_validation_second_generation = 0;
+    uint64                              m_profile_capture_validation_gt_ticks          = 0;
     std::chrono::steady_clock::time_point
         m_profile_capture_validation_deadline{};
 };

@@ -5,6 +5,8 @@
  */
 #pragma once
 
+#include "misc/Types.h"
+
 #if !defined(WITH_CUDA)
 #error "This header requires WITH_CUDA=1"
 #endif
@@ -44,7 +46,7 @@ struct TensorRTResource {
     CudaTexture motion;
     CudaTexture prev_ao;
 
-    CudaSemaphore semaphore;
+    CudaInteropBoundary interop;
 
     // no RAII
     TensorRTResource(
@@ -60,7 +62,7 @@ struct TensorRTResource {
         color(context, color_tex),
         motion(context, motion_tex),
         prev_ao(context, prev_ao_tex),
-        semaphore(context) {
+        interop(context, {ao_tex, depth_tex, color_tex, motion_tex, prev_ao_tex}) {
 
         ;
     };
@@ -96,6 +98,7 @@ struct TensorRTEngine {
     std::unique_ptr<INetworkDefinition>    network;
     std::unique_ptr<nvonnxparser::IParser> parser;
     std::unique_ptr<IBuilderConfig>        config;
+    std::unique_ptr<IRuntime>              runtime;
     std::unique_ptr<ICudaEngine>           engine;
     std::unique_ptr<IExecutionContext>     context;
 
@@ -115,11 +118,13 @@ public:
             LoadEngineFromOnnx();
         }
 
+        if (!engine) {
+            throw std::runtime_error("TensorRT engine creation failed");
+        }
         // Context
         context = std::unique_ptr<IExecutionContext>(engine->createExecutionContext());
         if (!context) {
-            LOG_ERROR("Context creation failed");
-            return;
+            throw std::runtime_error("TensorRT context creation failed");
         }
 
         LOG_INFO("Created TensorRT IExecutionContext.");
@@ -137,6 +142,7 @@ public:
 
         context.reset();
         engine.reset();
+        runtime.reset();
 
         config.reset();
         parser.reset();
@@ -170,10 +176,10 @@ public:
                 dim3   blockSize(256);
                 dim3   gridSize((N - 1) / blockSize.x / Moer::Cuda::RANDOMS_PER_THREAD);
 
-                static uint64_t seed = 114514;
+                static uint64 seed = 114514;
 
                 Moer::Cuda::FillRandomHalf(
-                    gridSize, blockSize, res.semaphore.stream_to_run, device_mem_addr_map[name], N, seed++
+                    gridSize, blockSize, res.interop.stream_to_run, device_mem_addr_map[name], N, seed++
                 );
             } else {
                 checkCudaErrors(cudaMemset(device_mem_addr_map[name], 0, device_mem_size_map[name]));
@@ -197,7 +203,7 @@ public:
     // MARK: Engine1 Load
     void Engine1_LoadTexturesToBuffers(
         TensorRTResource& res,
-        uint              ao_only_idx,
+        uint32            ao_only_idx,
         bool              is_verbose,
         bool              is_force_ldr
     ) {
@@ -237,7 +243,7 @@ public:
                     Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Uchar4(
                         gridSize,
                         blockSize,
-                        res.semaphore.stream_to_run,
+                        res.interop.stream_to_run,
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
@@ -252,7 +258,7 @@ public:
                     Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Uchar1(
                         gridSize,
                         blockSize,
-                        res.semaphore.stream_to_run,
+                        res.interop.stream_to_run,
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
@@ -267,7 +273,7 @@ public:
                     Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Float4(
                         gridSize,
                         blockSize,
-                        res.semaphore.stream_to_run,
+                        res.interop.stream_to_run,
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
@@ -282,7 +288,7 @@ public:
                     Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Float1(
                         gridSize,
                         blockSize,
-                        res.semaphore.stream_to_run,
+                        res.interop.stream_to_run,
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
@@ -297,7 +303,7 @@ public:
                     Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Half2(
                         gridSize,
                         blockSize,
-                        res.semaphore.stream_to_run,
+                        res.interop.stream_to_run,
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
@@ -312,7 +318,7 @@ public:
                     Moer::Cuda::CopySurfaceToBuffer_Resize_NCHW_Half_Half4(
                         gridSize,
                         blockSize,
-                        res.semaphore.stream_to_run,
+                        res.interop.stream_to_run,
                         // 0, // no stream object
                         src_tex.GetSurfaceObjectList(),
                         d_target,
@@ -448,7 +454,7 @@ public:
     void Run(const cudaStream_t& stream_to_run) {
         bool is_success = context->enqueueV3(stream_to_run);
         if (!is_success) {
-            LOG_ERROR("TRT Pass: enqueueV3 failed.");
+            throw std::runtime_error("TensorRT enqueueV3 failed");
         }
     }
 
@@ -485,7 +491,7 @@ private:
         file.read(engine_data.data(), size);
         file.close();
 
-        auto runtime = std::unique_ptr<IRuntime>(createInferRuntime(gLogger));
+        runtime = std::unique_ptr<IRuntime>(createInferRuntime(gLogger));
         if (!runtime) {
             LOG_ERROR("Failed to create TensorRT runtime for cache loading");
             return false;
@@ -538,7 +544,7 @@ private:
             }
 
             // 设置多线程构建
-            int32_t numThreads = std::thread::hardware_concurrency();
+            int32 numThreads = std::thread::hardware_concurrency();
             if (!builder->setMaxThreads(numThreads)) {
                 LOG_WARNING("Failed to set max threads to {}, using default", numThreads);
             } else {
@@ -639,9 +645,9 @@ private:
                 case DataType::kHALF:
                     return sizeof(__half);
                 case DataType::kINT8:
-                    return sizeof(int8_t);
+                    return sizeof(int8);
                 case DataType::kINT32:
-                    return sizeof(int32_t);
+                    return sizeof(int32);
                 default:
                     assert(false);
             };
@@ -767,9 +773,10 @@ public:
                                                  .string());
     }
     ~TensorRTPass() {
+        // Drain the CUDA stream before freeing buffers used by pending inference.
+        res.reset();
         engine2.reset();
         engine1.reset();
-        res.reset();
         cusolverDnDestroy(cusolver);
     }
 
@@ -821,8 +828,30 @@ public:
 
     */
 
-    TextureWithHandle Process(RasterContext& context, const RasterConfig& ui_config, uint ao_only_idx) {
+    TextureWithHandle Process(RasterContext& context, const RasterConfig& ui_config, uint32 ao_only_idx) {
         assert(ui_config.ai_is_cuda_enabled);
+        if (!context.cmd_list.IsEmpty()) {
+            throw std::logic_error("TensorRT requires a submitted compiled graphics prefix");
+        }
+
+        const bool  half        = ui_config.ao_half_resolution;
+        const auto& ao          = half ? context.textures.ao_output_ambient_only_half.tex :
+                                         context.textures.ao_output_ambient_only.tex;
+        const auto& previous_ao = half ? context.textures.ao_output_ambient_only_1_half.tex :
+                                         context.textures.ao_output_ambient_only_1.tex;
+        const auto& motion =
+            half ? context.textures.camera_motion_vector_half.tex : context.textures.camera_motion_vector.tex;
+        if (res->ao.moer_texture != ao || res->prev_ao.moer_texture != previous_ao ||
+            res->motion.moer_texture != motion) {
+            RecreateResource(
+                context,
+                ao,
+                context.textures.depth_linear_sampler.tex->CastToTextureRef(),
+                context.textures.lighting_output.tex,
+                motion,
+                previous_ao
+            );
+        }
 
         // log
 
@@ -830,13 +859,13 @@ public:
 
         // signal
 
-        res->semaphore.Signal();
+        res->interop.ReleaseToCuda();
 
         // cuda
 
-        // TODO: 优化一下 cudaStreamSynchronize(res->semaphore.stream_to_run)
+        // TODO: 优化一下 cudaStreamSynchronize(res->interop.stream_to_run)
         auto sync = [&]() {
-            checkCudaErrors(cudaStreamSynchronize(res->semaphore.stream_to_run));
+            checkCudaErrors(cudaStreamSynchronize(res->interop.stream_to_run));
         };
 
         // engine1->LoadRandomValueToBuffers(*res);
@@ -844,13 +873,13 @@ public:
         engine1->Engine1_LoadTexturesToBuffers(*res, ao_only_idx, false, ui_config.ai_trt_force_ldr);
         sync();
 
-        engine1->Run(res->semaphore.stream_to_run);
+        engine1->Run(res->interop.stream_to_run);
         sync();
 
-        engine2->Engine2_LoadEngine1OutputToBuffers(res->semaphore.stream_to_run, *engine1, cusolver);
+        engine2->Engine2_LoadEngine1OutputToBuffers(res->interop.stream_to_run, *engine1, cusolver);
         sync();
 
-        engine2->Run(res->semaphore.stream_to_run);
+        engine2->Run(res->interop.stream_to_run);
         sync();
 
         // CheckBuf();
@@ -859,7 +888,7 @@ public:
             (ui_config.ai_trt_visualize_buffer.starts_with("Engine1") ? *engine1 : *engine2),
             res->color,
             ui_config.ai_trt_visualize_buffer.substr(8).c_str(),
-            res->semaphore.stream_to_run,
+            res->interop.stream_to_run,
             1.0f,
             ui_config.ai_trt_force_ldr
         );
@@ -868,7 +897,7 @@ public:
 
         // wait
 
-        res->semaphore.Wait();
+        res->interop.AcquireFromCuda();
 
         // return
 

@@ -1,7 +1,11 @@
 #include "GaussianShadowPass.h"
 #include "RasterConfig.h"
+#include "RasterGraphResourceAccess.h"
 #include "math/Function.h"
 #include "rhi/RHI.h"
+
+#include <format>
+
 namespace Moer::Render::Raster {
 namespace {
 // CPU frame parameters retain mathematical matrices; transpose only for GPU upload.
@@ -47,10 +51,10 @@ GaussianShadowPass::GaussianShadowPass(
 }
 GaussianShadowPass::~GaussianShadowPass() {
     m_bindless->UnbindBuffer(m_data_handle);
-    for (uint i = 0; i < 4; ++i)
+    for (uint32 i = 0; i < 4; ++i)
         if (m_maps[i])
             m_bindless->UnbindTexture(m_handles[i]);
-    for (uint i = 0; i < 4; ++i)
+    for (uint32 i = 0; i < 4; ++i)
         if (m_mesh_maps[i])
             m_bindless->UnbindTexture(m_mesh_handles[i]);
 }
@@ -68,9 +72,9 @@ GaussianShadowPass::RecordParameters GaussianShadowPass::Prepare(
     result.gaussians   = scene.GetGaussianBuffer();
     result.instances   = scene.GetInstanceBuffer();
     auto&      data    = result.data;
-    const uint mask    = editor_view ? 2u : 1u;
+    const uint32 mask  = editor_view ? 2u : 1u;
     bool       has_receivers = false;
-    for (uint i = 0; i < scene.GetInstances().size(); ++i) {
+    for (uint32 i = 0; i < scene.GetInstances().size(); ++i) {
         const auto& instance = scene.GetInstances()[i];
         has_receivers |= (instance.range.w & mask) && (instance.range.w & 8u) && instance.range.y;
         if ((instance.range.w & mask) && (instance.range.w & 4u) && instance.range.y) {
@@ -92,7 +96,7 @@ GaussianShadowPass::RecordParameters GaussianShadowPass::Prepare(
                           (directional && updates.main_directional_light.has_value());
     data.config         = uint4(
         valid ? (cube ? 2u : 1u) : 0u,
-        cube ? 1u : uint(config.shadow_csm_num_of_cascades),
+        cube ? 1u : uint32(config.shadow_csm_num_of_cascades),
         config.shadow_csm_sm_size,
         valid && !result.draws.empty() ? 1u : 0u
     );
@@ -117,19 +121,19 @@ GaussianShadowPass::RecordParameters GaussianShadowPass::Prepare(
         auto projection = MakePerspectiveMatrixRH(1.57079632679f, 1.f, source.far_plane, source.near_plane);
         // Negative-height RHI viewports require this flip for standard cube-map addressing.
         projection[1][1] *= -1.f;
-        for (uint face = 0; face < 6; ++face)
+        for (uint32 face = 0; face < 6; ++face)
             data.world_to_clip[face] =
                 projection *
                 MakeLookatViewMatrixRH(source.light_pos, source.light_pos + directions[face], ups[face]);
     } else if (valid) {
         data.light = float4(-context.lighting_data.main_light_direction, 0);
-        for (uint i = 0; i < data.config.y; ++i) {
+        for (uint32 i = 0; i < data.config.y; ++i) {
             data.world_to_clip[i] = context.lighting_data.world2shadow_clip[i];
             data.mesh_maps[i]     = context.csm_data.shadow_map_textures[i].hdl;
         }
     }
     if (valid && has_receivers)
-        for (uint i = 0; i < data.config.y; ++i) {
+        for (uint32 i = 0; i < data.config.y; ++i) {
             TextureRef source =
                 cube ? TextureRef(context.point_shadow_data.shadow_cubes[0].tex) :
                        TextureRef(context.csm_data.shadow_map_textures[i].tex->GetView().GetTexture());
@@ -144,7 +148,7 @@ GaussianShadowPass::RecordParameters GaussianShadowPass::Prepare(
         }
     EnsureResources(context, config, data.config.w != 0);
     if (data.config.w)
-        for (uint i = 0; i < data.config.y; ++i) {
+        for (uint32 i = 0; i < data.config.y; ++i) {
             data.gaussian_maps[i] = m_handles[i];
             result.maps[i]        = m_maps[i];
         }
@@ -154,10 +158,10 @@ GaussianShadowPass::RecordParameters GaussianShadowPass::Prepare(
 void GaussianShadowPass::EnsureResources(RasterContext& context, const RasterConfig& config, bool cast) {
     if (!cast)
         return;
-    const bool cube  = config.shadow_map_mode == EShadowMapMode::POINT_CUBE;
-    const uint count = cube ? 1u : uint(config.shadow_csm_num_of_cascades);
-    for (uint i = 0; i < count; ++i) {
-        if (!m_maps[i] || m_maps[i]->GetWidth() != uint(config.shadow_csm_sm_size) || m_cube != cube) {
+    const bool   cube  = config.shadow_map_mode == EShadowMapMode::POINT_CUBE;
+    const uint32 count = cube ? 1u : uint32(config.shadow_csm_num_of_cascades);
+    for (uint32 i = 0; i < count; ++i) {
+        if (!m_maps[i] || m_maps[i]->GetWidth() != uint32(config.shadow_csm_sm_size) || m_cube != cube) {
             if (m_maps[i])
                 m_bindless->UnbindTexture(m_handles[i]);
             auto usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT |
@@ -165,16 +169,17 @@ void GaussianShadowPass::EnsureResources(RasterContext& context, const RasterCon
             m_maps[i] = cube ?
                             TextureRef(context.device.CreateCubeMap(
                                 "Gaussian point shadow",
-                                Extent2D(uint(config.shadow_csm_sm_size), uint(config.shadow_csm_sm_size)),
+                                Extent2D(uint32(config.shadow_csm_sm_size), uint32(config.shadow_csm_sm_size)),
                                 context.textures.depth_linear_sampler.tex->GetFormat(),
                                 usage
                             )) :
                             context.device.CreateTexture(
                                 "Gaussian cascade shadow",
-                                Extent3D(uint(config.shadow_csm_sm_size), uint(config.shadow_csm_sm_size), 1),
+                                Extent3D(uint32(config.shadow_csm_sm_size), uint32(config.shadow_csm_sm_size), 1),
                                 context.textures.depth_linear_sampler.tex->GetFormat(),
                                 usage
                             );
+            InitializeGraphicsTexture(m_maps[i]);
             m_handles[i] =
                 m_bindless->AllocateTexture(m_maps[i]->GetView(), Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
         }
@@ -182,15 +187,28 @@ void GaussianShadowPass::EnsureResources(RasterContext& context, const RasterCon
     m_cube = cube;
 }
 double GaussianShadowPass::GetGpuTime() {
-    if (m_timing.Valid() && m_timing.Status() != QueryStatus::Pending) {
-        auto result = m_timing.Get();
-        if (auto* timing = std::get_if<TimestampQueryResult>(&result.payload))
-            m_gpu_ms = timing->duration_ns / 1000000.;
-        m_timing = {};
+    if (m_timings.empty()) {
+        return m_gpu_ms;
     }
+    for (const auto& query : m_timings) {
+        if (query.Valid() && query.Status() == QueryStatus::Pending) {
+            return m_gpu_ms;
+        }
+    }
+    double duration_ns = 0.;
+    for (const auto& query : m_timings) {
+        if (query.Valid()) {
+            auto result = query.Get();
+            if (const auto* timing = std::get_if<TimestampQueryResult>(&result.payload)) {
+                duration_ns += timing->duration_ns;
+            }
+        }
+    }
+    m_gpu_ms = duration_ns / 1000000.;
+    m_timings.clear();
     return m_gpu_ms;
 }
-void GaussianShadowPass::Record(CommandList& commands, const RecordParameters& parameters) {
+void GaussianShadowPass::RecordUpload(CommandList& commands, const RecordParameters& parameters) {
     const auto gpu_data = PrepareGpuShadowData(parameters.data);
     commands.CopyFrom(
         std::span<const byte>(reinterpret_cast<const byte*>(&gpu_data), sizeof(gpu_data)),
@@ -198,49 +216,140 @@ void GaussianShadowPass::Record(CommandList& commands, const RecordParameters& p
         "Gaussian shadow views"
     );
     commands.UpdateBindlessArray(parameters.bindless);
-    QueryToken timing;
-    if (parameters.data.config.w) {
-        if (!m_timing.Valid()) {
-            timing   = commands.BeginTimestampQuery("Gaussian shadow casting");
-            m_timing = timing.GetFuture();
-        }
-        commands.PushScopeWithTimeScope("Gaussian ShadowDepth");
-        uint count = parameters.data.config.x == 2 ? 6u : parameters.data.config.y;
-        for (uint view = 0; view < count; ++view)
-            for (uint draw = 0; draw < parameters.draws.size(); ++draw) {
-                const auto&        instance = parameters.draws[draw];
-                GaussianShadowDraw param{};
-                param.world_to_clip = Transpose(parameters.data.world_to_clip[view]);
-                param.info =
-                    uint4(instance.range.x, parameters.instance_indices[draw], parameters.data.config.z, 0);
-                param.options = parameters.data.options;
-                auto texture  = parameters.maps[parameters.data.config.x == 2 ? 0 : view];
-                auto depth    = DepthAttachment(
-                    parameters.data.config.x == 2 ? texture->GetView().Slice(view, 1) : texture->GetView()
-                );
-                depth.action =
-                    draw == 0 ? EAttachmentAction::AC_DS_CLEAR_STORE : EAttachmentAction::AC_DS_LOAD_STORE;
-                Array<SingleDrawParam> draws;
-                draws.emplace_back(SingleDrawParam{6, instance.range.y, 0, 0, 0});
-                commands
-                    .Gfx(m_pipeline, param, parameters.gaussians->GetView(), parameters.instances->GetView())
-                    .Draw(
-                        "Gaussian shadow",
-                        Rect2D(0, 0, parameters.data.config.z, parameters.data.config.z),
-                        std::move(draws),
-                        depth
-                    );
-            }
-        commands.PopScopeWithTimeScope();
-    }
-    if (timing.Valid())
-        commands.EndTimestampQuery(timing);
     commands.AddCallback([parameters]() {});
 }
-TextureRef GaussianShadowPass::RecordDepthDebug(CommandList& commands, const RecordParameters& parameters) {
-    const uint size  = std::min(parameters.data.config.z, 512u);
-    const uint width = size * (parameters.data.config.x == 2 ? 3 : 2), height = size * 2;
-    if (!m_debug_depth || m_debug_depth->GetWidth() != width || m_debug_depth->GetHeight() != height)
+
+QueryFuture GaussianShadowPass::RecordDraw(
+    CommandList& commands, const RecordParameters& parameters,
+    uint32 view, uint32 draw, bool collect_timing
+) {
+    QueryToken timing;
+    if (collect_timing) {
+        timing = commands.BeginTimestampQuery("Gaussian shadow casting");
+    }
+    const auto&        instance = parameters.draws[draw];
+    GaussianShadowDraw param{};
+    param.world_to_clip = Transpose(parameters.data.world_to_clip[view]);
+    param.info = uint4(instance.range.x, parameters.instance_indices[draw], parameters.data.config.z, 0);
+    param.options = parameters.data.options;
+    const bool cube = parameters.data.config.x == 2;
+    auto texture = parameters.maps[cube ? 0 : view];
+    auto depth   = DepthAttachment(cube ? texture->GetView().Slice(view, 1) : texture->GetView());
+    depth.action = draw == 0 ? EAttachmentAction::AC_DS_CLEAR_STORE : EAttachmentAction::AC_DS_LOAD_STORE;
+    Array<SingleDrawParam> draws;
+    draws.emplace_back(SingleDrawParam{6, instance.range.y, 0, 0, 0});
+    commands.Gfx(m_pipeline, param, parameters.gaussians->GetView(), parameters.instances->GetView())
+        .Draw(
+            "Gaussian shadow",
+            Rect2D(0, 0, parameters.data.config.z, parameters.data.config.z),
+            std::move(draws),
+            depth
+        );
+    if (timing.Valid()) {
+        commands.EndTimestampQuery(timing);
+        return timing.GetFuture();
+    }
+    return {};
+}
+
+void GaussianShadowPass::Record(CommandList& commands, const RecordParameters& parameters) {
+    RecordUpload(commands, parameters);
+    if (!parameters.data.config.w) {
+        return;
+    }
+    const bool collect_timing = m_timings.empty();
+    const uint32 count = parameters.data.config.x == 2 ? 6u : parameters.data.config.y;
+    for (uint32 view = 0; view < count; ++view) {
+        for (uint32 draw = 0; draw < parameters.draws.size(); ++draw) {
+            auto timing = RecordDraw(commands, parameters, view, draw, collect_timing);
+            if (timing.Valid()) {
+                m_timings.push_back(std::move(timing));
+            }
+        }
+    }
+}
+
+RenderGraph::PassHandle GaussianShadowPass::AddToGraph(
+    RenderGraph& graph, std::shared_ptr<const RecordParameters> parameters
+) {
+    const auto data = ImportRasterBuffer(graph, "GaussianShadow.views", parameters->data_buffer.Get());
+    const auto table = graph.ImportToken("Raster.bindless", parameters->bindless.Get());
+    const auto upload = graph.AddRecordPass(
+        "GaussianShadow.Upload",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(data, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(table);
+        },
+        [this, parameters](CommandList& commands) {
+            RecordUpload(commands, *parameters);
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    if (!parameters->data.config.w) {
+        return upload;
+    }
+    const auto gaussians = ImportRasterBuffer(graph, "GaussianShadow.gaussians", parameters->gaussians.Get());
+    const auto instances = ImportRasterBuffer(graph, "GaussianShadow.instances", parameters->instances.Get());
+    const uint32 count = parameters->data.config.x == 2 ? 6u : parameters->data.config.y;
+    const bool collect_timing = m_timings.empty();
+    if (collect_timing) {
+        // Slots are fixed before parallel recording; each callback writes only its own future.
+        m_timings.resize(count * parameters->draws.size());
+    }
+    std::vector<RenderGraph::PassHandle> draws;
+    for (uint32 view = 0; view < count; ++view) {
+        const bool cube = parameters->data.config.x == 2;
+        const auto texture = ImportRasterTexture(
+            graph, "GaussianShadow.depth", parameters->maps[cube ? 0 : view].Get()
+        );
+        RenderGraph::TextureRange range{};
+        range.layer_first = cube ? view : 0;
+        range.layer_count = 1;
+        for (uint32 draw = 0; draw < parameters->draws.size(); ++draw) {
+            const size_t query_index = view * parameters->draws.size() + draw;
+            draws.push_back(graph.AddRecordPass(
+                std::format("GaussianShadow.View{}.Draw{}", view, draw),
+                [=](RenderGraph::PassBuilder& builder) {
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                        .Read(table)
+                        .Read(gaussians, RenderGraph::BufferAccessType::ShaderRead)
+                        .Read(instances, RenderGraph::BufferAccessType::ShaderRead);
+                    if (draw == 0) {
+                        builder.Write(texture, RenderGraph::TextureAccessType::DepthStencilAttachment, range);
+                    } else {
+                        builder.ReadWrite(texture, RenderGraph::TextureAccessType::DepthStencilAttachment, range);
+                    }
+                },
+                [this, parameters, view, draw, collect_timing, query_index](CommandList& commands) {
+                    auto timing = RecordDraw(commands, *parameters, view, draw, collect_timing);
+                    if (collect_timing) {
+                        m_timings[query_index] = std::move(timing);
+                    }
+                },
+                RenderGraph::PassRecordPolicy::ParallelAllowed
+            ));
+        }
+    }
+    return graph.AddRecordPass(
+        "GaussianShadow.Ready",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.DependsOn(upload).SideEffect();
+            for (auto draw : draws) {
+                builder.DependsOn(draw);
+            }
+        },
+        [](CommandList&) {},
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
+}
+
+TextureRef GaussianShadowPass::AddDepthDebugToGraph(
+    RenderGraph& graph, const RecordParameters& parameters
+) {
+    const uint32 size  = std::min(parameters.data.config.z, 512u);
+    const uint32 width = size * (parameters.data.config.x == 2 ? 3 : 2), height = size * 2;
+    if (!m_debug_depth || m_debug_depth->GetWidth() != width || m_debug_depth->GetHeight() != height) {
         m_debug_depth = RenderDevice::Get().CreateTexture(
             "Gaussian shadow depth atlas",
             Extent3D(width, height, 1),
@@ -248,20 +357,58 @@ TextureRef GaussianShadowPass::RecordDepthDebug(CommandList& commands, const Rec
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS |
                 ETextureUsageFlags::TRANSFER_SRC
         );
+        InitializeGraphicsTexture(m_debug_depth);
+    }
     auto uniform = RenderDevice::Get().CreateBuffer<byte>(
         "Gaussian shadow debug views",
         sizeof(GaussianShadowData),
         EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST
     );
-    const auto gpu_data = PrepareGpuShadowData(parameters.data);
-    commands.CopyFrom(
-        std::span<const byte>(reinterpret_cast<const byte*>(&gpu_data), sizeof(gpu_data)), uniform->GetView()
+    const auto data = ImportRasterBuffer(graph, "GaussianShadow.debug_views", uniform.Get());
+    const auto output = m_debug_depth;
+    const auto image = ImportRasterTexture(graph, "GaussianShadow.debug_atlas", output.Get());
+    const auto table = graph.ImportToken("Raster.bindless", parameters.bindless.Get());
+    std::vector<RenderGraph::TextureHandle> maps;
+    for (const auto& texture : parameters.maps) {
+        if (texture) {
+            maps.push_back(ImportRasterTexture(graph, "GaussianShadow.debug_map", texture.Get()));
+        }
+    }
+    graph.AddRecordPass(
+        "GaussianShadow.DebugUpload",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(data, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(table);
+        },
+        [parameters, uniform](CommandList& commands) {
+            const auto gpu_data = PrepareGpuShadowData(parameters.data);
+            commands.CopyFrom(
+                std::span<const byte>(reinterpret_cast<const byte*>(&gpu_data), sizeof(gpu_data)),
+                uniform->GetView()
+            );
+            commands.UpdateBindlessArray(parameters.bindless);
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
-    commands.UpdateBindlessArray(parameters.bindless);
-    commands.Compute(m_inspect, uniform->GetView(), m_debug_depth->GetView(), parameters.bindless)
-        .Dispatch(uint3((width + 7) / 8, (height + 7) / 8, 1), "Gaussian shadow depth atlas");
-    auto output = m_debug_depth;
-    commands.AddCallback([parameters, uniform, output]() {});
+    graph.AddRecordPass(
+        "GaussianShadow.DebugInspect",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                .Read(data, RenderGraph::BufferAccessType::ShaderRead)
+                .Read(table)
+                .Write(image, RenderGraph::TextureAccessType::Storage);
+            for (auto map : maps) {
+                builder.Read(map, RenderGraph::TextureAccessType::Sampled);
+            }
+        },
+        [this, parameters, uniform, output, width, height](CommandList& commands) {
+            commands.Compute(m_inspect, uniform->GetView(), output->GetView(), parameters.bindless)
+                .Dispatch(uint3((width + 7) / 8, (height + 7) / 8, 1), "Gaussian shadow depth atlas");
+            commands.AddCallback([parameters, uniform, output]() {});
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
     return output;
 }
 } // namespace Moer::Render::Raster

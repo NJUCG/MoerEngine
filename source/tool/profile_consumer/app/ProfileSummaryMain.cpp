@@ -3,7 +3,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -232,11 +232,11 @@ using Json = nlohmann::ordered_json;
     return "unknown";
 }
 
-[[nodiscard]] std::string U64(std::uint64_t _value) {
+[[nodiscard]] std::string U64(Moer::uint64 _value) {
     return std::to_string(_value);
 }
 
-[[nodiscard]] Json OptionalU64(std::uint64_t _value) {
+[[nodiscard]] Json OptionalU64(Moer::uint64 _value) {
     return _value == kInvalidSessionIndex ? Json(nullptr) : Json(U64(_value));
 }
 

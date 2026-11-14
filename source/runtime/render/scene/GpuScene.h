@@ -2,6 +2,7 @@
 
 #include "GpuSceneUpdate.h"
 #include "RenderAPI.h"
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHIResource.h"
 
@@ -9,13 +10,15 @@
 
 namespace Moer::Render {
 
+class RenderDevice;
+
 /**
  * GpuScene 持有真正的 GPU 资源，是 renderer 读取场景数据的入口。
  *
  * 结构:
  * - Res: 纹理、buffer、ray tracing scene
  * - m_map_texture_key_to_bindless_handle: 稳定纹理 key -> bindless handle
- * - PendingCommandList: copy/gfx queue 待执行命令
+ * - PendingCommandList: compiled Graphics queue 待执行命令
  *
  * 改这里:
  * - 加新的 GPU 资源或 bindless 绑定: GpuScene.h / GpuScene.cpp
@@ -29,9 +32,8 @@ namespace Moer::Render {
 class RENDER_API GpuScene {
 
 public:
-    struct PendingCommandList;
-    using PendingCommandListSetupCallback =
-        std::function<void(PendingCommandList&, bool full_rebuild)>;
+    using PendingCommandList              = CommandList;
+    using PendingCommandListSetupCallback = std::function<void(PendingCommandList&)>;
 
     explicit GpuScene(BindlessArrayRef bindless_array);
     ~GpuScene() noexcept;
@@ -74,7 +76,11 @@ private:
     void UpdateTexcoord0MegaBuffer(CommandList& cmd_list, const Array<float2>& texcoords0);
     void UpdateIndexMegaBuffer(CommandList& cmd_list, const Array<uint32>& indices);
 
+    // Full rebuild records uploads before publishing the new bindless resources.
     void InitializeResources(GpuSceneUpdate& update);
+    void InitializeTextureResources(RenderDevice& device, const Array<GpuSceneTextureData>& textures);
+    void InitializeBufferResources(RenderDevice& device, const GpuSceneUpdate& update);
+
     void ResolveMaterialTextureHandles(
         Array<GMaterial>&                         materials,
         const Array<GpuSceneMaterialTextureRefs>& texture_refs
@@ -118,10 +124,6 @@ public:
         BufferWithHandle rt_primitive_table_buf;     // uint[]，GeometryIndex → primitive_id 映射表
     };
 
-    struct PendingCommandList {
-        CommandList copy_queue_cmd_list{EQueueType::Copy};
-        CommandList gfx_queue_cmd_list{EQueueType::Graphics};
-    };
 
     /**
      * GpuScene::Res
@@ -140,7 +142,7 @@ public:
     }
 
     PendingCommandList&& PopPendingCommandList() {
-        return std::move(m_pending_cmd_lists);
+        return std::move(m_pending_commands);
     }
 
     /**
@@ -184,7 +186,7 @@ private:
     Res              m_res;
     BindlessArrayRef m_bindless_array; // TODO: 移动到RenderDevice里？
 
-    UnorderedMap<GpuSceneResourceKey, uint> m_map_texture_key_to_bindless_handle;
+    UnorderedMap<GpuSceneResourceKey, uint32> m_map_texture_key_to_bindless_handle;
 
     // RT Scene Cache: BLAS 按 CMesh 存储（1 CMesh = 1 BLAS，每个 CPrimitive 对应一个 geometry）
     UnorderedMap<GpuSceneResourceKey, RaytracingGeometryRef> m_mesh_key_to_blas;
@@ -199,7 +201,7 @@ private:
     Array<DrawIndexedCmdData> m_draw_commands;
 
     // 记录场景上传命令，交给 renderer 统一提交。
-    PendingCommandList m_pending_cmd_lists;
+    PendingCommandList m_pending_commands;
 };
 
 } // namespace Moer::Render

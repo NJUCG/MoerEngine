@@ -2,9 +2,9 @@
 #define PLATFORM_H
 #include "API_Macro.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <initializer_list>
 #include <string_view>
 #include <variant>
@@ -24,16 +24,16 @@
 #endif
 #define PLATFORM_CACHELINE_SIZE 64
 struct PlatformMemoryInfo {
-    uint64_t total_physical_memory = 0;
-    uint64_t total_virtual_memory  = 0;
+    Moer::uint64 total_physical_memory = 0;
+    Moer::uint64 total_virtual_memory  = 0;
 
-    uint64_t page_size              = 0;
-    uint64_t allocation_granularity = 0;
+    Moer::uint64 page_size              = 0;
+    Moer::uint64 allocation_granularity = 0;
 
-    uint64_t addrress_limit = 0xffffffffffffffff;
+    Moer::uint64 addrress_limit = 0xffffffffffffffff;
 
     // MB
-    uint32_t total_physical_memory_mb = 0;
+    Moer::uint32 total_physical_memory_mb = 0;
 };
 
 inline constexpr std::size_t kPlatformMaxStackFrames = 64;
@@ -41,7 +41,7 @@ inline constexpr std::size_t kPlatformCrashPathCapacity = 1024;
 
 struct PlatformStackTrace {
     std::array<std::uintptr_t, kPlatformMaxStackFrames> frames{};
-    std::uint32_t                                       frame_count{0};
+    Moer::uint32                                        frame_count{0};
 };
 
 struct PlatformCrashArtifactRequest {
@@ -51,8 +51,8 @@ struct PlatformCrashArtifactRequest {
     std::string_view   function{};
     std::string_view   message{};
     std::string_view   profile_flush_status{};
-    std::uint32_t      line{0};
-    std::uint32_t      thread_id{0};
+    Moer::uint32       line{0};
+    Moer::uint32       thread_id{0};
     bool               message_truncated{false};
     PlatformStackTrace stack{};
 };
@@ -66,8 +66,8 @@ struct PlatformCrashArtifactResult {
     bool request_completed{false};
     bool timed_out{false};
 
-    std::uint32_t metadata_error{0};
-    std::uint32_t dump_error{0};
+    Moer::uint32 metadata_error{0};
+    Moer::uint32 dump_error{0};
 
     std::array<char, kPlatformCrashPathCapacity> metadata_path{};
     std::array<char, kPlatformCrashPathCapacity> dump_path{};
@@ -75,11 +75,11 @@ struct PlatformCrashArtifactResult {
 
 struct Core {
     struct Windows {
-        uint8_t group;
-        uint8_t idx;
+        Moer::uint8 group;
+        Moer::uint8 idx;
     };
     struct PThread {
-        uint16_t idx;
+        Moer::uint16 idx;
     };
     union {
         Windows windows;
@@ -100,7 +100,7 @@ struct CORE_API Affinity {
 #else
     static constexpr bool supported = false;
 #endif
-    inline Core operator[](uint32_t _idx) const {
+    inline Core operator[](Moer::uint32 _idx) const {
         return cores[_idx];
     }
     inline size_t GetSize() const {
@@ -114,25 +114,25 @@ struct CORE_API Affinity {
     Moer::Array<Core> cores;
     ~Affinity() = default;
     static Affinity All();
-    static Affinity AnyOf(uint32_t _thread_id, Affinity&& _in_affinity);
+    static Affinity AnyOf(Moer::uint32 _thread_id, Affinity&& _in_affinity);
 };
 class Platform {
 
 protected:
 public:
-    CORE_API static void SetThreadAffinity(void* current_thread_handle, uint64_t mask);
+    CORE_API static void SetThreadAffinity(void* current_thread_handle, Moer::uint64 mask);
     CORE_API static void SetCurrentThreadAffinity(Affinity&& _affinity);
     CORE_API static void SetCurrentThreadName(std::string_view _name);
     CORE_API static void
-    SetThreadGroupAffinity(void* current_thread_handle, uint16_t group_mask, uint64_t affinity_mask);
-    CORE_API static int32_t  GetProcessorWorkGroupCount();
-    CORE_API static int32_t  GetProcessorCoreCountInGroup(uint32_t groupID);
-    CORE_API static int32_t  GetProcessorCoreCount();
-    CORE_API static uint32_t GetCurrentThreadID();
+                                 SetThreadGroupAffinity(void* current_thread_handle, Moer::uint16 group_mask, Moer::uint64 affinity_mask);
+    CORE_API static Moer::int32  GetProcessorWorkGroupCount();
+    CORE_API static Moer::int32  GetProcessorCoreCountInGroup(Moer::uint32 groupID);
+    CORE_API static Moer::int32  GetProcessorCoreCount();
+    CORE_API static Moer::uint32 GetCurrentThreadID();
     CORE_API static void     SetEnv(const char* _name, const char* _value);
 
     CORE_API static PlatformStackTrace
-    CaptureStackTrace(std::uint32_t _frames_to_skip = 0, std::uint32_t _max_frames = 64) noexcept;
+    CaptureStackTrace(Moer::uint32 _frames_to_skip = 0, Moer::uint32 _max_frames = 64) noexcept;
     // Startup-only. Prepares the process-lifetime crash worker and its stable
     // output root before any fault path needs them.
     CORE_API static bool InitializeCrashDiagnostics() noexcept;
@@ -140,10 +140,10 @@ public:
     // request describes a controlled fatal snapshot and carries no SEH
     // exception context.
     CORE_API static PlatformCrashArtifactResult
-    WriteCrashArtifacts(
-        const PlatformCrashArtifactRequest& _request,
-        std::uint32_t _timeout_ms = 750
-    ) noexcept;
+                                      WriteCrashArtifacts(
+                                          const PlatformCrashArtifactRequest& _request,
+                                          Moer::uint32                        _timeout_ms = 750
+                                      ) noexcept;
     [[noreturn]] CORE_API static void FailFast(std::string_view _reason) noexcept;
 
     CORE_API static const PlatformMemoryInfo& GetMemoryInfo();

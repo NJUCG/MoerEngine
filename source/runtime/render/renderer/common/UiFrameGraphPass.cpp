@@ -1,5 +1,6 @@
 #include "UiFrameGraphPass.h"
-
+#include "GraphResourceBoundary.h"
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 
 #include <algorithm>
@@ -12,13 +13,13 @@ namespace {
 RenderGraph::TextureAspect TextureAspects(const TextureRef& texture) {
     RenderGraph::TextureAspect aspects = RenderGraph::TextureAspect::None;
     const auto                 rhi_aspects = texture->GetAspectFlags();
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::COLOR) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Color;
     }
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::DEPTH_SLICE) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Depth;
     }
-    if (uint32_t(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
+    if (uint32(rhi_aspects & ETextureAspectFlags::STENCIL_SLICE) != 0) {
         aspects = aspects | RenderGraph::TextureAspect::Stencil;
     }
     return aspects;
@@ -85,8 +86,8 @@ bool HasTextureUsage(
     if (!texture) {
         return false;
     }
-    const auto usage_bits = static_cast<uint32_t>(texture->GetUsage());
-    const auto required_bits = static_cast<uint32_t>(required);
+    const auto usage_bits    = static_cast<uint32>(texture->GetUsage());
+    const auto required_bits = static_cast<uint32>(required);
     return (usage_bits & required_bits) == required_bits;
 }
 
@@ -94,8 +95,8 @@ bool IsColorOnlyTexture(const TextureRef& texture) {
     if (!texture) {
         return false;
     }
-    const auto aspects = static_cast<uint32_t>(texture->GetAspectFlags());
-    return aspects == static_cast<uint32_t>(ETextureAspectFlags::COLOR);
+    const auto aspects = static_cast<uint32>(texture->GetAspectFlags());
+    return aspects == static_cast<uint32>(ETextureAspectFlags::COLOR);
 }
 
 bool SupportsUiPresentation(const TextureRef& texture) {
@@ -103,7 +104,6 @@ bool SupportsUiPresentation(const TextureRef& texture) {
            HasTextureUsage(
                texture,
                ETextureUsageFlags::COLOR_ATTACHMENT |
-                   ETextureUsageFlags::PRESENTATION_SOURCE |
                    ETextureUsageFlags::TRANSFER_SRC |
                    ETextureUsageFlags::TRANSFER_DST
            );
@@ -370,9 +370,9 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
         }
         graph.SetInitialState(
             handle,
-            RenderGraph::TextureState::Undefined,
-            RenderGraph::QueueRole::None,
-            RenderGraph::AccessMode::None
+            RenderGraph::TextureAccessType::TransferSource,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
         );
         if (targets[index].Get() == main_output.Get()) {
             main_output_handle = handle;
@@ -386,21 +386,22 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
         return false;
     }
 
+    // These callbacks advance one frame packet from BeginRecording to
+    // FinishRecording. GPU dependencies alone do not order those CPU mutations.
     passes.clear = graph.AddRecordPass(
         "UI.ClearTargets",
         [presentation_ready, target_handles](RenderGraph::PassBuilder& builder) {
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Copy
+                    RenderGraph::GpuWorkType::Transfer
                 )
                 .Read(presentation_ready)
-                .SideEffect()
-                .SerialRecord();
+                .SideEffect();
             for (const auto target : target_handles) {
                 builder.Write(
                     target,
-                    RenderGraph::TextureState::TransferDestination
+                    RenderGraph::TextureAccessType::TransferDestination
                 );
             }
         },
@@ -417,7 +418,7 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
             );
             RecordClear(cmd_list, targets);
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     passes.compose = graph.AddRecordPass(
@@ -428,19 +429,18 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Graphics
+                    RenderGraph::GpuWorkType::Graphics
                 )
                 .DependsOn(clear)
                 .Read(
                     scene_color_handle,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Write(
                     compose_target_handle,
-                    RenderGraph::TextureState::RenderTarget
+                    RenderGraph::TextureAccessType::ColorAttachment
                 )
-                .SideEffect()
-                .SerialRecord();
+                .SideEffect();
         },
         [frame, compose_recorder = std::move(compose_recorder)](
             CommandList& cmd_list
@@ -452,27 +452,46 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
             }
             compose_recorder(cmd_list);
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
+
+    Array<RenderGraph::TextureHandle> sampled_handles;
+    const auto& draw_packet = frame->GetDrawFrame();
+    if (draw_packet.backend) {
+        size_t sample_index = 0;
+        for (const auto& texture : draw_packet.backend->CollectSampledTextures(draw_packet)) {
+            const auto sample = ImportUiGraphTexture(graph, std::format("UI.sample.{}", sample_index++), texture);
+            const bool output   = std::any_of(targets.begin(), targets.end(), [&](const auto& target) {
+                return target.Get() == texture.Get();
+            });
+            const auto boundary = output ? RenderGraph::TextureAccessType::TransferSource : RenderGraph::TextureAccessType::Sampled;
+            graph.SetInitialState(sample, boundary, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+            graph.Export(sample, boundary, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+            sampled_handles.push_back(sample);
+        }
+    }
 
     passes.draw = graph.AddRecordPass(
         "UI.DrawCopiedFrame",
-        [target_handles, compose = passes.compose](
+        [target_handles, sampled_handles, compose = passes.compose](
             RenderGraph::PassBuilder& builder
         ) {
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Graphics
+                    RenderGraph::GpuWorkType::Graphics
                 )
                 .DependsOn(compose)
                 .SideEffect()
-                .SerialRecord()
+
                 .TranslateSerialControl();
+            for (auto sample : sampled_handles) {
+                builder.Read(sample, RenderGraph::TextureAccessType::Sampled);
+            }
             for (const auto target : target_handles) {
                 builder.ReadWrite(
                     target,
-                    RenderGraph::TextureState::RenderTarget
+                    RenderGraph::TextureAccessType::ColorAttachment
                 );
             }
         },
@@ -490,13 +509,13 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
                 );
             }
         },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     for (const auto target : target_handles) {
         graph.Export(
             target,
-            RenderGraph::TextureState::PresentationSource,
+            RenderGraph::TextureAccessType::TransferSource,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -507,112 +526,76 @@ bool UiFrameGraphPass::AddPassesWithComposeRecorder(
     return passes.IsValid();
 }
 
-bool UiFrameGraphPass::ProcessLinear(
-    CommandList&            cmd_list,
-    UiCombinePass&          combine_pass,
-    const PreparedFrameRef& frame,
-    const TextureRef&       scene_color,
-    const TextureRef&       main_output
+bool UiFrameGraphPass::ProcessCompiled(
+    CommandList& commands, UiCombinePass& combine_pass, const PreparedFrameRef& frame,
+    const TextureRef& scene_color, const TextureRef& main_output
 ) {
-    return ProcessLinearWithComposeRecorder(
-        cmd_list,
-        [&combine_pass, frame, scene_color, main_output](
-            CommandList& recording_list
-        ) {
-            RecordCompose(
-                recording_list,
-                combine_pass,
-                *frame,
-                scene_color,
-                main_output
-            );
-        },
-        frame,
-        scene_color,
-        main_output
-    );
-}
-
-bool UiFrameGraphPass::ProcessLinearWithComposeRecorder(
-    CommandList&            cmd_list,
-    ComposeRecorder         compose_recorder,
-    const PreparedFrameRef& frame,
-    const TextureRef&       scene_color,
-    const TextureRef&       main_output
-) {
-    Array<TextureRef> targets{};
-    if (!compose_recorder ||
-        !CollectValidatedPresentationTargets(
-            frame,
-            scene_color,
-            main_output,
-            targets
-        ) ||
-        !frame->BeginRecording()) {
-        return false;
-    }
-
-    try {
-        RecordClear(cmd_list, targets);
-        compose_recorder(cmd_list);
-        RecordDraw(cmd_list, *frame, main_output);
-
-        if (!RecordPresentationBoundary(
-                cmd_list,
-                frame->GetComposition(),
-                frame->GetDrawFrame(),
-                main_output
-            )) {
-            frame->Abandon();
-            return false;
-        }
-
-        frame->FinishRecording();
-        return frame->GetRecordingState() == ERecordingState::Recorded;
-    } catch (...) {
+    RenderGraph graph("UI.Frame", RenderGraph::QueueTopology::FromRHI());
+    const auto color = ImportUiGraphTexture(graph, "SceneColor", scene_color);
+    graph.SetInitialState(color, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    graph.Export(color, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    const auto ready = graph.ImportToken("SceneReady", scene_color.Get());
+    GraphPasses passes;
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    if (!AddPasses(graph, combine_pass, frame, color, scene_color, main_output, ready, passes) ||
+        !graph.Compile() || !graph.RecordAndMergeFrontendCommands(commands, false)) {
         frame->Abandon();
-        throw;
+        throw std::runtime_error("UI compiled graph: " + graph.GetCompileError());
     }
+    return true;
 }
 
-bool UiFrameGraphPass::RecordPresentationBoundary(
-    CommandList&                  cmd_list,
+void UiFrameGraphPass::RecordCompiledDraw(
+    CommandList&                  commands,
     const UiCompositionFrameData& composition,
     const UiDrawFramePacket&      draw_frame,
-    const TextureRef&             main_output
+    const TextureRef&             main_output,
+    EUiDrawExecutionThread        execution_thread
 ) {
-    Array<TextureRef> targets{};
-    if (!CollectValidatedPresentationTargets(
-            composition, draw_frame, main_output, targets
-        )) {
-        return false;
+    RenderGraph       graph("UI.FrameTail", RenderGraph::QueueTopology::FromRHI());
+    Array<TextureRef> targets;
+    if (!CollectValidatedPresentationTargets(composition, draw_frame, main_output, targets)) {
+        throw std::runtime_error("invalid UI presentation targets");
     }
-
-    // Linear warm-up/fallback and Raster frame-tail packets remain
-    // BackendTracked. Declare their presentation boundary with a terminal
-    // legacy read instead of switching a mixed command stream to Explicit
-    // ownership. Vulkan restores these targets to their semantic preferred
-    // GENERAL layout and publishes readiness only after native acceptance.
-    Array<ReadTexture> presentation_sources{};
-    presentation_sources.reserve(targets.size());
+    Array<RenderGraph::TextureHandle> outputs, samples;
+    const auto                        import = [&](const TextureRef& texture, const char* name, RenderGraph::TextureAccessType state) {
+        const auto handle = ImportUiGraphTexture(
+            graph, std::format("{}@{:x}", name, reinterpret_cast<uintptr_t>(texture.Get())), texture
+        );
+        graph.SetInitialState(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        graph.Export(handle, state, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        return handle;
+    };
     for (const auto& target : targets) {
-        presentation_sources.emplace_back(ReadTexture{
-            target->GetView(
-                0,
-                static_cast<uint8>(target->GetNumMips())
-            ),
-            ETextureState::TRANSFER,
-            true,
-        });
+        outputs.push_back(import(target, "Output", RenderGraph::TextureAccessType::TransferSource));
     }
-    cmd_list.TextureBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Copy,
-        std::move(presentation_sources),
-        {}
+    if (draw_frame.backend) {
+        for (const auto& texture : draw_frame.backend->CollectSampledTextures(draw_frame)) {
+            const bool output = std::any_of(targets.begin(), targets.end(), [&](const auto& target) {
+                return target.Get() == texture.Get();
+            });
+            samples.push_back(import(texture, "Sample", output ? RenderGraph::TextureAccessType::TransferSource : RenderGraph::TextureAccessType::Sampled));
+        }
+    }
+    graph.AddRecordPass(
+        "UI.DrawCopiedFrame",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.SideEffect().TranslateSerialControl();
+            for (auto target : outputs) {
+                builder.ReadWrite(target, RenderGraph::TextureAccessType::ColorAttachment);
+            }
+            for (auto sample : samples) {
+                builder.Read(sample, RenderGraph::TextureAccessType::Sampled);
+            }
+        },
+        [&](CommandList& list) {
+            RenderUiDrawFrame(list, main_output->GetView(), draw_frame, execution_thread);
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
-    return true;
+    if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(commands, false)) {
+        throw std::runtime_error("UI frame graph failed: " + graph.GetCompileError());
+    }
 }
 
 void UiFrameGraphPass::RecordClear(

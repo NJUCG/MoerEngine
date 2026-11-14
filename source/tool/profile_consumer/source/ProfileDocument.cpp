@@ -1,4 +1,5 @@
 #include "profile_consumer/ProfileDocument.h"
+#include "misc/Types.h"
 
 #include <condition_variable>
 #include <limits>
@@ -13,7 +14,7 @@ namespace Moer::ProfileDump {
 
 ProfileDocument::ProfileDocument(
     std::filesystem::path _source_path,
-    std::uint64_t         _request_generation,
+    uint64                _request_generation,
     SessionLoadResult     _load_result,
     ProfileSession        _session,
     ProfileTimelineIndex  _timeline_index
@@ -33,7 +34,7 @@ struct ProfileDocumentLoader::Impl final {
     struct Request {
         std::filesystem::path      path{};
         ProfileDocumentLoadOptions options{};
-        std::uint64_t              generation{kInvalidProfileDocumentGeneration};
+        uint64                     generation{kInvalidProfileDocumentGeneration};
     };
 
     mutable std::mutex            mutex{};
@@ -41,9 +42,8 @@ struct ProfileDocumentLoader::Impl final {
     std::condition_variable       work_available{};
     std::optional<Request>        pending{};
     std::stop_source              active_stop{};
-    bool                          active{false};
-    bool                          accepting{true};
-    std::uint64_t                 next_generation{kInvalidProfileDocumentGeneration};
+    uint64                        next_generation{kInvalidProfileDocumentGeneration};
+    // The mutex-protected snapshot owns admission and active-request state.
     ProfileDocumentLoaderSnapshot snapshot{};
     std::jthread                  worker{};
 
@@ -54,7 +54,6 @@ struct ProfileDocumentLoader::Impl final {
                 WorkerMain(_worker_stop);
             });
         } catch (...) {
-            accepting                   = false;
             snapshot.accepting_requests = false;
             snapshot.phase              = ProfileDocumentLoadPhase::Failed;
             snapshot.diagnostic         = ProfileDocumentLoadDiagnostic::WorkerUnavailable;
@@ -72,8 +71,8 @@ struct ProfileDocumentLoader::Impl final {
         }
     }
 
-    [[nodiscard]] bool IsLatestLocked(std::uint64_t _generation) const noexcept {
-        return accepting && snapshot.request_generation == _generation;
+    [[nodiscard]] bool IsLatestLocked(uint64 _generation) const noexcept {
+        return snapshot.accepting_requests && snapshot.request_generation == _generation;
     }
 
     [[nodiscard]] static bool IsTerminalPhase(ProfileDocumentLoadPhase _phase) noexcept {
@@ -81,11 +80,10 @@ struct ProfileDocumentLoader::Impl final {
                _phase == ProfileDocumentLoadPhase::Cancelled || _phase == ProfileDocumentLoadPhase::Shutdown;
     }
 
-    void CompleteActiveGenerationLocked(std::uint64_t _generation) noexcept {
+    void CompleteActiveGenerationLocked(uint64 _generation) noexcept {
         if (snapshot.active_generation != _generation) {
             return;
         }
-        active                     = false;
         snapshot.active_request    = false;
         snapshot.active_generation = kInvalidProfileDocumentGeneration;
     }
@@ -107,7 +105,7 @@ struct ProfileDocumentLoader::Impl final {
         return true;
     }
 
-    void BeginRequestLocked(std::uint64_t _generation, std::filesystem::path _latest_attempt_path) noexcept {
+    void BeginRequestLocked(uint64 _generation, std::filesystem::path _latest_attempt_path) noexcept {
         snapshot.request_generation             = _generation;
         snapshot.phase                          = ProfileDocumentLoadPhase::Opening;
         snapshot.latest_attempt_path            = std::move(_latest_attempt_path);
@@ -124,7 +122,7 @@ struct ProfileDocumentLoader::Impl final {
     void PublishOpeningSnapshot(
         const Request& _request,
         bool           _total_available,
-        std::uint64_t  _total_bytes
+        uint64         _total_bytes
     ) noexcept {
         std::lock_guard lock(mutex);
         if (!IsLatestLocked(_request.generation)) {
@@ -180,6 +178,7 @@ struct ProfileDocumentLoader::Impl final {
         const Request&                  _request,
         const SessionLoadResult&        _session_result,
         const TimelineIndexBuildResult& _timeline_result,
+        ProfileDocumentLoadDiagnostic   _diagnostic,
         std::stop_token                 _request_stop
     ) noexcept {
         std::lock_guard lock(mutex);
@@ -195,32 +194,7 @@ struct ProfileDocumentLoader::Impl final {
         snapshot.timeline_result            = _timeline_result;
         snapshot.reported_input_bytes       = _session_result.input_bytes;
         snapshot.reported_input_bytes_final = true;
-        snapshot.diagnostic                 = _session_result.HasUsableSession() ?
-                                                  ProfileDocumentLoadDiagnostic::TimelineBuildFailed :
-                                                  ProfileDocumentLoadDiagnostic::SessionLoadFailed;
-        CompleteActiveGenerationLocked(_request.generation);
-    }
-
-    void CompleteUnexpectedFailure(
-        const Request&                  _request,
-        const SessionLoadResult&        _session_result,
-        const TimelineIndexBuildResult& _timeline_result,
-        std::stop_token                 _request_stop
-    ) noexcept {
-        std::lock_guard lock(mutex);
-        if (!IsLatestLocked(_request.generation)) {
-            return;
-        }
-        if (CompleteCancellationIfRequestedLocked(_request_stop, _session_result, _timeline_result)) {
-            CompleteActiveGenerationLocked(_request.generation);
-            return;
-        }
-        snapshot.phase                      = ProfileDocumentLoadPhase::Failed;
-        snapshot.session_result             = _session_result;
-        snapshot.timeline_result            = _timeline_result;
-        snapshot.reported_input_bytes       = _session_result.input_bytes;
-        snapshot.reported_input_bytes_final = true;
-        snapshot.diagnostic                 = ProfileDocumentLoadDiagnostic::DocumentAllocationFailed;
+        snapshot.diagnostic                 = _diagnostic;
         CompleteActiveGenerationLocked(_request.generation);
     }
 
@@ -277,9 +251,9 @@ struct ProfileDocumentLoader::Impl final {
         const std::uintmax_t file_size = std::filesystem::file_size(_request.path, file_size_error);
         const bool           total_available =
             !file_size_error &&
-            file_size <= static_cast<std::uintmax_t>(std::numeric_limits<std::uint64_t>::max());
+            file_size <= static_cast<std::uintmax_t>(std::numeric_limits<uint64>::max());
         PublishOpeningSnapshot(
-            _request, total_available, total_available ? static_cast<std::uint64_t>(file_size) : 0
+            _request, total_available, total_available ? static_cast<uint64>(file_size) : 0
         );
 
         PublishReadingSnapshot(_request);
@@ -301,7 +275,13 @@ struct ProfileDocumentLoader::Impl final {
             return;
         }
         if (!session_result.HasUsableSession()) {
-            CompleteFailed(_request, session_result, {}, _request_stop.get_token());
+            CompleteFailed(
+                _request,
+                session_result,
+                {},
+                ProfileDocumentLoadDiagnostic::SessionLoadFailed,
+                _request_stop.get_token()
+            );
             return;
         }
 
@@ -317,7 +297,13 @@ struct ProfileDocumentLoader::Impl final {
             return;
         }
         if (!timeline_result.Succeeded()) {
-            CompleteFailed(_request, session_result, timeline_result, _request_stop.get_token());
+            CompleteFailed(
+                _request,
+                session_result,
+                timeline_result,
+                ProfileDocumentLoadDiagnostic::TimelineBuildFailed,
+                _request_stop.get_token()
+            );
             return;
         }
 
@@ -333,7 +319,13 @@ struct ProfileDocumentLoader::Impl final {
                 _request, session_result, timeline_result, std::move(document), _request_stop.get_token()
             );
         } catch (...) {
-            CompleteUnexpectedFailure(_request, session_result, timeline_result, _request_stop.get_token());
+            CompleteFailed(
+                _request,
+                session_result,
+                timeline_result,
+                ProfileDocumentLoadDiagnostic::DocumentAllocationFailed,
+                _request_stop.get_token()
+            );
         }
     }
 
@@ -344,10 +336,10 @@ struct ProfileDocumentLoader::Impl final {
             {
                 std::unique_lock lock(mutex);
                 work_available.wait(lock, [this, _worker_stop]() noexcept {
-                    return _worker_stop.stop_requested() || !accepting || pending.has_value();
+                    return _worker_stop.stop_requested() || !snapshot.accepting_requests ||
+                           pending.has_value();
                 });
-                if (_worker_stop.stop_requested() || !accepting) {
-                    active                     = false;
+                if (_worker_stop.stop_requested() || !snapshot.accepting_requests) {
                     snapshot.active_request    = false;
                     snapshot.active_generation = kInvalidProfileDocumentGeneration;
                     return;
@@ -358,7 +350,6 @@ struct ProfileDocumentLoader::Impl final {
                 UpdatePendingCountLocked();
 
                 active_stop                = request_stop;
-                active                     = true;
                 snapshot.active_request    = true;
                 snapshot.active_generation = request.generation;
                 if (snapshot.request_generation == request.generation) {
@@ -371,7 +362,6 @@ struct ProfileDocumentLoader::Impl final {
             {
                 std::lock_guard lock(mutex);
                 if (snapshot.active_generation == request.generation) {
-                    active                     = false;
                     snapshot.active_request    = false;
                     snapshot.active_generation = kInvalidProfileDocumentGeneration;
                 }
@@ -388,10 +378,9 @@ struct ProfileDocumentLoader::Impl final {
             // admission because this worker can no longer service requests.
             try {
                 std::lock_guard lock(mutex);
-                if (!accepting) {
+                if (!snapshot.accepting_requests) {
                     return;
                 }
-                accepting                           = false;
                 snapshot.accepting_requests         = false;
                 snapshot.phase                      = ProfileDocumentLoadPhase::Failed;
                 snapshot.session_result             = {};
@@ -405,7 +394,6 @@ struct ProfileDocumentLoader::Impl final {
                 pending.reset();
                 UpdatePendingCountLocked();
                 static_cast<void>(active_stop.request_stop());
-                active                     = false;
                 snapshot.active_request    = false;
                 snapshot.active_generation = kInvalidProfileDocumentGeneration;
             } catch (...) {
@@ -417,7 +405,6 @@ struct ProfileDocumentLoader::Impl final {
         std::lock_guard shutdown_lock(shutdown_mutex);
         {
             std::lock_guard lock(mutex);
-            accepting                   = false;
             snapshot.accepting_requests = false;
             snapshot.phase              = ProfileDocumentLoadPhase::Shutdown;
             pending.reset();
@@ -433,7 +420,6 @@ struct ProfileDocumentLoader::Impl final {
         }
         {
             std::lock_guard lock(mutex);
-            active                     = false;
             snapshot.active_request    = false;
             snapshot.active_generation = kInvalidProfileDocumentGeneration;
             snapshot.phase             = ProfileDocumentLoadPhase::Shutdown;
@@ -453,7 +439,7 @@ ProfileDocumentLoader::~ProfileDocumentLoader() {
     Shutdown();
 }
 
-std::uint64_t ProfileDocumentLoader::RequestLoad(
+uint64 ProfileDocumentLoader::RequestLoad(
     const std::filesystem::path&      _path,
     const ProfileDocumentLoadOptions& _options
 ) {
@@ -468,26 +454,26 @@ std::uint64_t ProfileDocumentLoader::RequestLoad(
     std::filesystem::path latest_attempt_path = _path;
 
     std::lock_guard lock(impl_->mutex);
-    if (!impl_->accepting) {
+    if (!impl_->snapshot.accepting_requests) {
         return kInvalidProfileDocumentGeneration;
     }
-    if (impl_->next_generation == std::numeric_limits<std::uint64_t>::max()) {
+    if (impl_->next_generation == std::numeric_limits<uint64>::max()) {
         impl_->snapshot.generation_exhausted = true;
         return kInvalidProfileDocumentGeneration;
     }
 
     request.generation = impl_->next_generation + 1;
-    if (impl_->active || impl_->pending.has_value()) {
+    if (impl_->snapshot.active_request || impl_->pending.has_value()) {
         ++impl_->snapshot.superseded_request_count;
     }
-    if (impl_->active) {
+    if (impl_->snapshot.active_request) {
         static_cast<void>(impl_->active_stop.request_stop());
     }
     impl_->pending         = std::move(request);
     impl_->next_generation = impl_->pending->generation;
     impl_->BeginRequestLocked(impl_->pending->generation, std::move(latest_attempt_path));
     impl_->UpdatePendingCountLocked();
-    const std::uint64_t generation = impl_->next_generation;
+    const uint64 generation = impl_->next_generation;
     impl_->work_available.notify_one();
     return generation;
 }
@@ -498,11 +484,12 @@ bool ProfileDocumentLoader::CancelLatest() noexcept {
     }
 
     std::lock_guard lock(impl_->mutex);
-    if (!impl_->accepting || impl_->snapshot.request_generation == kInvalidProfileDocumentGeneration) {
+    if (!impl_->snapshot.accepting_requests ||
+        impl_->snapshot.request_generation == kInvalidProfileDocumentGeneration) {
         return false;
     }
 
-    const std::uint64_t generation = impl_->snapshot.request_generation;
+    const uint64 generation = impl_->snapshot.request_generation;
     if (Impl::IsTerminalPhase(impl_->snapshot.phase)) {
         return false;
     }
@@ -517,7 +504,7 @@ bool ProfileDocumentLoader::CancelLatest() noexcept {
         impl_->snapshot.diagnostic                 = ProfileDocumentLoadDiagnostic::Cancelled;
         return true;
     }
-    if (impl_->active && impl_->snapshot.active_generation == generation) {
+    if (impl_->snapshot.active_request && impl_->snapshot.active_generation == generation) {
         impl_->snapshot.cancel_requested = true;
         static_cast<void>(impl_->active_stop.request_stop());
         return true;

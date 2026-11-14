@@ -1,4 +1,5 @@
 #include "RaytracingUI.h"
+#include "misc/Types.h"
 
 // 提供 ReSTIR DI、降噪、后处理和捕获配置的控制项。
 
@@ -75,7 +76,7 @@ void RaytracingUI::ShowConfig() {
     if (ImGui::TreeNode("Grid Config")) {
 
         if (ImGui::TreeNode("Presample Mode")) {
-            for (uint index = 0; index < k_grid_light_presample_mode_names.size(); ++index) {
+            for (uint32 index = 0; index < k_grid_light_presample_mode_names.size(); ++index) {
                 if (ImGui::Selectable(
                         k_grid_light_presample_mode_names[index].data(),
                         m_config.grid_config.grid_mode == index
@@ -94,7 +95,7 @@ void RaytracingUI::ShowConfig() {
     if (ImGui::TreeNode("ReSTIRDI")) {
         if (ImGui::TreeNode("InitialSampleSettings")) {
             if (ImGui::TreeNode("LocalLightSelection")) {
-                for (uint index = 0; index < k_local_light_sample_mode_names.size(); ++index) {
+                for (uint32 index = 0; index < k_local_light_sample_mode_names.size(); ++index) {
                     if (ImGui::Selectable(
                             k_local_light_sample_mode_names[index].data(),
                             m_config.restir_di_cfg.initial_sample_config.local_light_sample_mode == index
@@ -121,7 +122,7 @@ void RaytracingUI::ShowConfig() {
 
         if (ImGui::TreeNode("TemporalResampleSettings")) {
             if (ImGui::TreeNode("BiasCorrection")) {
-                for (uint index = 0; index < k_bias_correction_mode_names.size(); ++index) {
+                for (uint32 index = 0; index < k_bias_correction_mode_names.size(); ++index) {
                     if (ImGui::Selectable(
                             k_bias_correction_mode_names[index].data(),
                             m_config.restir_di_cfg.temporal_resample_config.bias_correction == index
@@ -148,7 +149,7 @@ void RaytracingUI::ShowConfig() {
 
         if (ImGui::TreeNode("SpatialResampleSettings")) {
             if (ImGui::TreeNode("BiasCorrection")) {
-                for (uint index = 0; index < k_bias_correction_mode_names.size(); ++index) {
+                for (uint32 index = 0; index < k_bias_correction_mode_names.size(); ++index) {
                     if (ImGui::Selectable(
                             k_bias_correction_mode_names[index].data(),
                             m_config.restir_di_cfg.spatial_resample_config.bias_correction == index
@@ -184,7 +185,7 @@ void RaytracingUI::ShowConfig() {
     ImGui::Separator();
     ImGui::Text("NRD Config");
     if (ImGui::TreeNode("DenoiserConfig")) {
-        for (uint index = 0; index < k_denoiser_mode_names.size(); ++index) {
+        for (uint32 index = 0; index < k_denoiser_mode_names.size(); ++index) {
             if (ImGui::Selectable(
                     k_denoiser_mode_names[index].data(), m_config.denoiser_cfg.denoiser_type == index
                 )) {
@@ -239,7 +240,7 @@ void RaytracingUI::ShowConfig() {
     }
     if (ImGui::TreeNode("AntiAlias")) {
         if (ImGui::TreeNode("AA Settings")) {
-            for (uint index = 0; index < EAnitiAliasMode::EAA_Num; ++index) {
+            for (uint32 index = 0; index < EAnitiAliasMode::EAA_Num; ++index) {
                 if (ImGui::Selectable(
                         k_aa_mode_names[index].data(), m_config.aa_cfg.aa_mode == index
                     )) {
@@ -250,10 +251,10 @@ void RaytracingUI::ShowConfig() {
         }
 
         if (ImGui::TreeNode("Jitter Settings")) {
-            for (uint index = 0; index < static_cast<uint>(EJitter::WhiteNoise) + 1; ++index) {
+            for (uint32 index = 0; index < static_cast<uint32>(EJitter::WhiteNoise) + 1; ++index) {
                 if (ImGui::Selectable(
                         k_jitter_mode_names[index].data(),
-                        static_cast<uint>(m_config.aa_cfg.jitter_mode) == index
+                        static_cast<uint32>(m_config.aa_cfg.jitter_mode) == index
                     )) {
                     m_config.aa_cfg.jitter_mode = static_cast<EJitter>(index);
                 }
@@ -274,7 +275,7 @@ void RaytracingUI::ShowConfig() {
 
     ImGui::Separator();
     ImGui::Text("Capture Settings");
-    for (uint index = 0; index < EOutputTexture::EOT_Num; ++index) {
+    for (uint32 index = 0; index < EOutputTexture::EOT_Num; ++index) {
         if (ImGui::Selectable(
                 k_exported_texture_names[index].data(), m_config.export_cfg.output_texture == index
             )) {

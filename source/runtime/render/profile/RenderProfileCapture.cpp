@@ -1,5 +1,5 @@
 #include "profile/RenderProfileCapture.h"
-
+#include "misc/Types.h"
 #include "profile/ProfileDumpTemplates.h"
 #include "rhi/RHICommand.h"
 
@@ -17,14 +17,14 @@ namespace Moer::Render {
 
 namespace {
 
-enum class EmitDisposition : std::uint8_t {
+enum class EmitDisposition : uint8 {
     Accepted,
     Dropped,
     Fatal,
 };
 
 #if defined(MOER_RENDER_PROFILE_CAPTURE_TEST_HOOKS)
-enum class InjectedStartValidationException : std::uint8_t {
+enum class InjectedStartValidationException : uint8 {
     None = 0,
     BadAlloc,
     Other,
@@ -35,7 +35,7 @@ struct StartValidationExceptionForTesting final {};
 std::atomic<InjectedStartValidationException> g_start_validation_exception{
     InjectedStartValidationException::None
 };
-std::atomic<std::atomic_uint32_t*> g_start_publish_pause_entered{nullptr};
+std::atomic<std::atomic<uint32>*>  g_start_publish_pause_entered{nullptr};
 std::atomic<std::atomic_bool*>     g_start_publish_pause_release{nullptr};
 
 void ThrowInjectedStartValidationExceptionForTesting() {
@@ -53,7 +53,7 @@ void ThrowInjectedStartValidationExceptionForTesting() {
 }
 
 void PauseBeforeStartPublishForTesting() noexcept {
-    std::atomic_uint32_t* entered =
+    std::atomic<uint32>* entered =
         g_start_publish_pause_entered.exchange(nullptr, std::memory_order_acq_rel);
     if (entered == nullptr) {
         return;
@@ -87,20 +87,20 @@ RenderProfileSessionStartResult ValidateSessionStart(
         // GpuFrame()/GpuScope() use function-local static descriptors whose
         // first construction allocates strings and field arrays. Keep that
         // lazy initialization inside this noexcept translation boundary.
-        const std::uint64_t expected_frame_hash =
+        const uint64 expected_frame_hash =
             ProfileDump::ComputeSchemaHash(ProfileDump::Templates::GpuFrame());
-        const std::uint64_t expected_scope_hash =
+        const uint64 expected_scope_hash =
             ProfileDump::ComputeSchemaHash(ProfileDump::Templates::GpuScope());
         if (_gpu_frame_schema.hash != expected_frame_hash ||
             _gpu_scope_schema.hash != expected_scope_hash) {
             return RenderProfileSessionStartResult::InvalidSchema;
         }
 
-        const std::uint64_t generation_before =
+        const uint64 generation_before =
             ProfileDump::GetRuntimeGeneration();
         const ProfileDump::RuntimeState runtime_state =
             ProfileDump::GetRuntimeState();
-        const std::uint64_t generation_after =
+        const uint64 generation_after =
             ProfileDump::GetRuntimeGeneration();
         if (runtime_state != ProfileDump::RuntimeState::Running ||
             generation_before == 0 ||
@@ -123,7 +123,7 @@ RenderProfileSessionStartResult ValidateSessionStart(
 
 namespace RenderProfileDetail {
 
-enum class SessionTerminal : std::uint8_t {
+enum class SessionTerminal : uint8 {
     None = 0,
     Closed,
     ClosedWithLoss,
@@ -132,8 +132,8 @@ enum class SessionTerminal : std::uint8_t {
 };
 
 struct FrameMetadata {
-    std::uint64_t frame_id{0};
-    std::uint64_t source_bind_failures{0};
+    uint64 frame_id{0};
+    uint64 source_bind_failures{0};
 };
 
 struct CaptureState {
@@ -149,9 +149,9 @@ struct CaptureState {
         frame_metadata(_stream_config.max_resident_frames) {}
 
     [[nodiscard]] bool RuntimeWritableUnlocked() const noexcept {
-        const std::uint64_t             generation_before = ProfileDump::GetRuntimeGeneration();
+        const uint64                    generation_before = ProfileDump::GetRuntimeGeneration();
         const ProfileDump::RuntimeState runtime_state     = ProfileDump::GetRuntimeState();
-        const std::uint64_t             generation_after  = ProfileDump::GetRuntimeGeneration();
+        const uint64                    generation_after  = ProfileDump::GetRuntimeGeneration();
         return generation != 0 && generation_before == generation && generation_after == generation &&
                runtime_state == ProfileDump::RuntimeState::Running;
     }
@@ -203,7 +203,7 @@ struct CaptureState {
         ClearMetadataUnlocked();
     }
 
-    [[nodiscard]] bool ReserveMetadataUnlocked(std::uint64_t _frame_id) noexcept {
+    [[nodiscard]] bool ReserveMetadataUnlocked(uint64 _frame_id) noexcept {
         for (FrameMetadata& metadata : frame_metadata) {
             if (metadata.frame_id == 0) {
                 metadata.frame_id = _frame_id;
@@ -213,7 +213,7 @@ struct CaptureState {
         return false;
     }
 
-    void ReleaseMetadataUnlocked(std::uint64_t _frame_id) noexcept {
+    void ReleaseMetadataUnlocked(uint64 _frame_id) noexcept {
         for (FrameMetadata& metadata : frame_metadata) {
             if (metadata.frame_id == _frame_id) {
                 metadata = {};
@@ -222,7 +222,7 @@ struct CaptureState {
         }
     }
 
-    [[nodiscard]] FrameMetadata TakeMetadataUnlocked(std::uint64_t _frame_id) noexcept {
+    [[nodiscard]] FrameMetadata TakeMetadataUnlocked(uint64 _frame_id) noexcept {
         for (FrameMetadata& metadata : frame_metadata) {
             if (metadata.frame_id == _frame_id) {
                 const FrameMetadata result = metadata;
@@ -233,7 +233,7 @@ struct CaptureState {
         return {};
     }
 
-    void MarkSourceFailureUnlocked(std::uint64_t _frame_id) noexcept {
+    void MarkSourceFailureUnlocked(uint64 _frame_id) noexcept {
         ++sources_rejected;
         for (FrameMetadata& metadata : frame_metadata) {
             if (metadata.frame_id == _frame_id) {
@@ -275,17 +275,17 @@ struct CaptureState {
     }
 
     [[nodiscard]] EmitDisposition EmitFrameRecordUnlocked(
-        std::uint64_t         _frame_id,
+        uint64                _frame_id,
         GpuFrameCaptureStatus _status,
         bool                  _valid,
-        std::uint64_t         _admitted_scope_count,
-        std::uint64_t         _dropped_scope_count,
-        std::uint64_t         _error_scope_count,
+        uint64                _admitted_scope_count,
+        uint64                _dropped_scope_count,
+        uint64                _error_scope_count,
         std::string_view      _reason
     ) noexcept {
         const std::array<ProfileDump::FieldValueView, 7> values{
             _frame_id,
-            static_cast<std::uint32_t>(_status),
+            static_cast<uint32>(_status),
             _valid,
             _admitted_scope_count,
             _dropped_scope_count,
@@ -296,18 +296,18 @@ struct CaptureState {
     }
 
     [[nodiscard]] EmitDisposition
-    EmitScopeRecordUnlocked(std::uint64_t _frame_id, const GpuScopeNode& _scope) noexcept {
+    EmitScopeRecordUnlocked(uint64 _frame_id, const GpuScopeNode& _scope) noexcept {
         const std::array<ProfileDump::FieldValueView, 18> values{
             _frame_id,
             _scope.scope_id,
             _scope.parent_scope_id,
             _scope.source_order,
             _scope.local_order,
-            static_cast<std::uint32_t>(_scope.queue_binding.queue),
+            static_cast<uint32>(_scope.queue_binding.queue),
             _scope.queue_binding.native_queue_id,
             _scope.queue_binding.family_id,
             std::string_view(_scope.name),
-            static_cast<std::uint32_t>(_scope.status),
+            static_cast<uint32>(_scope.status),
             _scope.begin_tick,
             _scope.end_tick,
             _scope.valid_bits,
@@ -320,7 +320,7 @@ struct CaptureState {
         return HandleEmitUnlocked(ProfileDump::Emit(gpu_scope_schema, values), false);
     }
 
-    [[nodiscard]] bool EmitScopeTreeUnlocked(std::uint64_t _frame_id, const GpuScopeNode& _scope) noexcept {
+    [[nodiscard]] bool EmitScopeTreeUnlocked(uint64 _frame_id, const GpuScopeNode& _scope) noexcept {
         if (EmitScopeRecordUnlocked(_frame_id, _scope) == EmitDisposition::Fatal) {
             return false;
         }
@@ -412,30 +412,30 @@ struct CaptureState {
 
     ProfileDump::SchemaHandle  gpu_frame_schema{};
     ProfileDump::SchemaHandle  gpu_scope_schema{};
-    std::uint64_t              generation{0};
+    uint64                     generation{0};
     GpuScopeStream             stream;
     std::vector<FrameMetadata> frame_metadata{};
 
     mutable std::mutex mutex{};
-    std::uint64_t      next_frame_id{1};
+    uint64             next_frame_id{1};
     bool               accepting{true};
     bool               stop_requested{false};
     bool               closed{false};
     SessionTerminal    terminal{SessionTerminal::None};
 
-    std::uint64_t frames_attempted{0};
-    std::uint64_t frames_admitted{0};
-    std::uint64_t frames_admission_rejected{0};
-    std::uint64_t frames_sealed{0};
-    std::uint64_t frames_emitted{0};
-    std::uint64_t frames_invalid{0};
-    std::uint64_t frame_records_dropped{0};
-    std::uint64_t sources_bound{0};
-    std::uint64_t sources_rejected{0};
-    std::uint64_t scopes_emitted{0};
-    std::uint64_t scope_records_dropped{0};
-    std::uint64_t terminal_faults{0};
-    std::uint64_t shutdown_abandoned_frames{0};
+    uint64 frames_attempted{0};
+    uint64 frames_admitted{0};
+    uint64 frames_admission_rejected{0};
+    uint64 frames_sealed{0};
+    uint64 frames_emitted{0};
+    uint64 frames_invalid{0};
+    uint64 frame_records_dropped{0};
+    uint64 sources_bound{0};
+    uint64 sources_rejected{0};
+    uint64 scopes_emitted{0};
+    uint64 scope_records_dropped{0};
+    uint64 terminal_faults{0};
+    uint64 shutdown_abandoned_frames{0};
 };
 
 } // namespace RenderProfileDetail
@@ -443,7 +443,7 @@ struct CaptureState {
 RenderProfileFrameToken::RenderProfileFrameToken(
     std::shared_ptr<RenderProfileDetail::CaptureState> _state,
     GpuScopeFrameHandle                                _frame,
-    std::uint64_t                                      _frame_id
+    uint64                                             _frame_id
 ) noexcept :
     state_(std::move(_state)),
     frame_(std::move(_frame)),
@@ -491,7 +491,7 @@ bool RenderProfileFrameToken::Valid() const noexcept {
     return frame_.Valid();
 }
 
-std::uint64_t RenderProfileFrameToken::FrameId() const noexcept {
+uint64 RenderProfileFrameToken::FrameId() const noexcept {
     return frame_id_;
 }
 
@@ -725,7 +725,7 @@ RenderProfileFrameToken RenderProfileCapture::BeginFrame() noexcept {
         return {};
     }
 
-    const std::uint64_t frame_id = state->next_frame_id++;
+    const uint64 frame_id = state->next_frame_id++;
     ++state->frames_attempted;
     if (frame_id == 0 || state->next_frame_id == 0) {
         state->CloseUnlocked(RenderProfileDetail::SessionTerminal::Faulted);
@@ -755,7 +755,7 @@ RenderProfileBindResult RenderProfileCapture::BindSource(
     RenderProfileFrameToken& _frame,
     CommandList&             _command_list,
     RHIQueueBinding          _queue_binding,
-    std::uint64_t            _source_order
+    uint64                   _source_order
 ) noexcept {
     const auto state = state_.load(std::memory_order_acquire);
     if (!state || _frame.state_.get() != state.get() || _frame.sealed_ || !_frame.frame_.Valid()) {
@@ -913,7 +913,7 @@ void ClearStartValidationException() noexcept {
     );
 }
 
-void InstallStartPublishPause(std::atomic_uint32_t& _entered_count, std::atomic_bool& _release) noexcept {
+void InstallStartPublishPause(std::atomic<uint32>& _entered_count, std::atomic_bool& _release) noexcept {
     g_start_publish_pause_release.store(&_release, std::memory_order_release);
     g_start_publish_pause_entered.store(&_entered_count, std::memory_order_release);
 }

@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include "math/Function.h"
+#include "misc/Types.h"
+#include "rendergraph/RenderGraphUpload.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
@@ -10,6 +12,8 @@
 #include "RasterResource.h"
 #include "RasterTool.h"
 #include "rendergraph/RenderGraph.h"
+
+#include <string_view>
 
 namespace Moer::Render::Raster {
 
@@ -140,79 +144,47 @@ public:
         assert(format == tex.aa_texture_2.tex->GetFormat());
         assert(format == tex.aa_texture_3.tex->GetFormat());
 
+        const auto create_fullscreen_pipeline = [&]<typename Pipeline>(
+                                                    Pipeline&        pipeline,
+                                                    std::string_view vertex_path,
+                                                    std::string_view pixel_path,
+                                                    std::string_view vertex_entry = "main",
+                                                    std::string_view pixel_entry  = "main"
+                                                ) {
+            GfxPsoCreateInfo pso_full_screen_info(
+                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
+            );
+            pipeline = context.manager.Raster()
+                           .Vertex(vertex_path, vertex_entry)
+                           .Pixel(pixel_path, pixel_entry)
+                           .Build<Pipeline>(std::move(pso_full_screen_info));
+        };
+
         // smaa
-        smaa_edge_detection_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAAEdgeDetectionVS_Wrapper")
-                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAALumaEdgeDetectionPS_Wrapper")
-                .Build<SmaaEdgeDetectionPipeline>(std::move(pso_full_screen_info));
-        }();
-
-        smaa_blending_weight_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex(
-                    "pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper"
-                )
-                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
-                .Build<SmaaBlendingWeightPipeline>(std::move(pso_full_screen_info));
-        }();
-
-        smaa_neighborhood_blending_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
-                .Build<SmaaNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
-        }();
-
-        smaa_t2x_neighborhood_blending_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
-                .Build<SmaaT2xNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
-        }();
-
-        smaa_t2x_resolve_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAAResolveVS_Wrapper")
-                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAAResolvePS_Wrapper")
-                .Build<SmaaT2xResolvePipeline>(std::move(pso_full_screen_info));
-        }();
+        constexpr std::string_view smaa_path = "pipelines/postprocess/aa/SmaaWrapper.hlsl";
+        create_fullscreen_pipeline(
+            smaa_edge_detection_pipeline, smaa_path, smaa_path, "SMAAEdgeDetectionVS_Wrapper", "SMAALumaEdgeDetectionPS_Wrapper"
+        );
+        create_fullscreen_pipeline(
+            smaa_blending_weight_pipeline, smaa_path, smaa_path, "SMAABlendingWeightCalculationVS_Wrapper", "SMAABlendingWeightCalculationPS_Wrapper"
+        );
+        create_fullscreen_pipeline(
+            smaa_neighborhood_blending_pipeline, smaa_path, smaa_path, "SMAANeighborhoodBlendingVS_Wrapper", "SMAANeighborhoodBlendingPS_Wrapper"
+        );
+        create_fullscreen_pipeline(
+            smaa_t2x_neighborhood_blending_pipeline, smaa_path, smaa_path, "SMAANeighborhoodBlendingVS_Wrapper", "SMAANeighborhoodBlendingPS_Wrapper"
+        );
+        create_fullscreen_pipeline(
+            smaa_t2x_resolve_pipeline, smaa_path, smaa_path, "SMAAResolveVS_Wrapper", "SMAAResolvePS_Wrapper"
+        );
 
         // fxaa
-        fxaa_precompute_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("core/utils/FullScreenQuad.hlsl")
-                .Pixel("pipelines/postprocess/aa/FxaaPrecompute.hlsl")
-                .Build<FxaaPrecomputePipeline>(std::move(pso_full_screen_info));
-        }();
-
-        fxaa_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("core/utils/FullScreenQuad.hlsl")
-                .Pixel("pipelines/postprocess/aa/Fxaa.hlsl")
-                .Build<FxaaPipeline>(std::move(pso_full_screen_info));
-        }();
+        create_fullscreen_pipeline(
+            fxaa_precompute_pipeline, "core/utils/FullScreenQuad.hlsl", "pipelines/postprocess/aa/FxaaPrecompute.hlsl"
+        );
+        create_fullscreen_pipeline(
+            fxaa_pipeline, "core/utils/FullScreenQuad.hlsl", "pipelines/postprocess/aa/Fxaa.hlsl"
+        );
 
         // Other resources initialization
         aa_texture_34[0] = &tex.aa_texture_3;
@@ -244,7 +216,8 @@ public:
             PF_R8G8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
-        context.cmd_list.CopyFrom(
+        RecordNewGraphicsTextureUpload(
+            context.cmd_list,
             std::span<byte>(
                 (byte*)&SmaaPrecomputedTextures::areaTexBytes, sizeof(SmaaPrecomputedTextures::areaTexBytes)
             ),
@@ -259,7 +232,8 @@ public:
             PF_R8_UNORM,
             ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
         );
-        context.cmd_list.CopyFrom(
+        RecordNewGraphicsTextureUpload(
+            context.cmd_list,
             std::span<byte>(
                 (byte*)&SmaaPrecomputedTextures::searchTexBytes,
                 sizeof(SmaaPrecomputedTextures::searchTexBytes)
@@ -308,17 +282,17 @@ public:
         //       但是SMAA.hlsl并不支持我们的bindless后的rhi，所以我修改了SMAA.hlsl，并试图提取出了独立的texture和sampler
         //       因此，我需要texture index和sampler index
         //       texture index直接使用context.bdls->AllocateTexture就可以解决
-        //       sampler index是通过VulkanDevice::GetSamplerIdx()得到的，但这个函数所在的头文件并不能被include（因为不位于include目录下）
+        //       sampler index是通过VulkanDevice::GetSamplerIndex()得到的，但这个函数所在的头文件并不能被include（因为不位于include目录下）
         //       那么为了获取sampler index，我们有两种方案 1. 复制GetSamplerIdx的实现；2. 通过AllocateTexture得到handle后再解压出sampler index
         //       第一种方案可能导致代码不一致，而第二种方案过于不可控，而且我不确定是否有潜在的性能开销，所以我同时写了两种方案，并且写下了这段说明
         //       目前使用第一种
         //       有更好的方案的话，直接修改下面这段代码即可
         auto GetSamplerIdx = [&](const Sampler& sampler) {
             // method 1
-            uint filter  = uint(sampler.filter);
-            uint address = uint(sampler.address_mode);
-            uint compare = uint(sampler.compare_function);
-            return (uint(SF_Num) * uint(SAM_Num)) * compare + (uint(SF_Num)) * address + filter;
+            uint32 filter  = uint32(sampler.filter);
+            uint32 address = uint32(sampler.address_mode);
+            uint32 compare = uint32(sampler.compare_function);
+            return (uint32(SF_Num) * uint32(SAM_Num)) * compare + (uint32(SF_Num)) * address + filter;
             // method 2
             // uint bdls_tex_handle = context.bdls->AllocateTexture(antialiasing_output, sampler);
             // uint sampler_idx     = bdls_tex_handle & 0xff;
@@ -367,73 +341,58 @@ public:
         return parameters;
     }
 
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
-        if (parameters.mode == EAaMode::NONE ||
-            parameters.mode == EAaMode::FXAA_SIMPLIFIED ||
-            parameters.mode == EAaMode::FXAA_QUALITY) {
+    void RecordEdgesOrLuma(CommandList& cmd_list, const RecordParameters& parameters) {
+        if (parameters.mode <= EAaMode::FXAA_QUALITY) {
             cmd_list.Gfx(fxaa_precompute_pipeline, parameters.bindless, parameters.fxaa_precompute)
-                .Draw(
-                    "FXAA Precompute Pass",
-                    parameters.texture_1.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.texture_1.tex)
-                );
-            cmd_list.Gfx(fxaa_pipeline, parameters.bindless, parameters.fxaa)
-                .Draw(
-                    "FXAA Pass",
-                    parameters.output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.output.tex)
-                );
-            return;
-        }
-
-        cmd_list.Gfx(smaa_edge_detection_pipeline, parameters.bindless, parameters.smaa)
-            .Draw(
-                "SMAA Edge Detection Pass",
-                parameters.texture_1.GetRect2D(),
-                std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(parameters.texture_1.tex)
-            );
-
-        cmd_list.Gfx(smaa_blending_weight_pipeline, parameters.bindless, parameters.smaa)
-            .Draw(
-                "SMAA Blending Weight Calculation Pass",
-                parameters.texture_2.GetRect2D(),
-                std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(parameters.texture_2.tex)
-            );
-
-        if (parameters.mode == EAaMode::SMAA_1X) {
-            cmd_list.Gfx(smaa_neighborhood_blending_pipeline, parameters.bindless, parameters.smaa)
-                .Draw(
-                    "SMAA Neighborhood Blending Pass",
-                    parameters.output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.output.tex)
-                );
-        } else if (parameters.mode == EAaMode::SMAA_T2X) {
-            cmd_list.Gfx(smaa_t2x_neighborhood_blending_pipeline, parameters.bindless, parameters.smaa)
-                .Draw(
-                    "SMAA T2x Neighborhood Blending Pass",
-                    parameters.temporal_output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.temporal_output.tex)
-                );
-
-            cmd_list.Gfx(smaa_t2x_resolve_pipeline, parameters.bindless, parameters.smaa)
-                .Draw(
-                    "SMAA T2x Resolve Pass",
-                    parameters.output.GetRect2D(),
-                    std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.output.tex)
-                );
+                .Draw("FXAA Precompute Pass", parameters.texture_1.GetRect2D(),
+                      RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.texture_1.tex));
         } else {
-            assert(false && "Invalid antialiasing mode");
+            cmd_list.Gfx(smaa_edge_detection_pipeline, parameters.bindless, parameters.smaa)
+                .Draw("SMAA Edge Detection Pass", parameters.texture_1.GetRect2D(),
+                      RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.texture_1.tex));
         }
     }
 
-    RenderGraph::PreparedPassHandle AddToGraph(
+    void RecordWeights(CommandList& cmd_list, const RecordParameters& parameters) {
+        cmd_list.Gfx(smaa_blending_weight_pipeline, parameters.bindless, parameters.smaa)
+            .Draw("SMAA Blending Weight Calculation Pass", parameters.texture_2.GetRect2D(),
+                  RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.texture_2.tex));
+    }
+
+    void RecordBlend(CommandList& cmd_list, const RecordParameters& parameters) {
+        if (parameters.mode <= EAaMode::FXAA_QUALITY) {
+            cmd_list.Gfx(fxaa_pipeline, parameters.bindless, parameters.fxaa)
+                .Draw("FXAA Pass", parameters.output.GetRect2D(), RasterTool::GetFullScreenDrawDatas(),
+                      ColorAttachment(parameters.output.tex));
+        } else if (parameters.mode == EAaMode::SMAA_1X) {
+            cmd_list.Gfx(smaa_neighborhood_blending_pipeline, parameters.bindless, parameters.smaa)
+                .Draw("SMAA Neighborhood Blending Pass", parameters.output.GetRect2D(),
+                      RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.output.tex));
+        } else {
+            cmd_list.Gfx(smaa_t2x_neighborhood_blending_pipeline, parameters.bindless, parameters.smaa)
+                .Draw("SMAA T2x Neighborhood Blending Pass", parameters.temporal_output.GetRect2D(),
+                      RasterTool::GetFullScreenDrawDatas(), ColorAttachment(parameters.temporal_output.tex));
+        }
+    }
+
+    void RecordResolve(CommandList& cmd_list, const RecordParameters& parameters) {
+        cmd_list.Gfx(smaa_t2x_resolve_pipeline, parameters.bindless, parameters.smaa)
+            .Draw("SMAA T2x Resolve Pass", parameters.output.GetRect2D(), RasterTool::GetFullScreenDrawDatas(),
+                  ColorAttachment(parameters.output.tex));
+    }
+
+    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
+        RecordEdgesOrLuma(cmd_list, parameters);
+        if (parameters.mode >= EAaMode::SMAA_1X) {
+            RecordWeights(cmd_list, parameters);
+        }
+        RecordBlend(cmd_list, parameters);
+        if (parameters.mode == EAaMode::SMAA_T2X) {
+            RecordResolve(cmd_list, parameters);
+        }
+    }
+
+    void AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
         const RasterConfig& ui_config,

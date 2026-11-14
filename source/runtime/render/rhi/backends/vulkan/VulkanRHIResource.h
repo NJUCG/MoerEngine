@@ -1,0 +1,194 @@
+#pragma once
+
+#include "VulkanCommon.h"
+#include "VulkanMemoryAllocator.h"
+#include "misc/Types.h"
+#include "rhi/RHIResource.h"
+
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <span>
+
+namespace Moer::Render {
+
+class VulkanDevice;
+class VulkanResourceStateValidator;
+struct VulkanResourceStateSnapshot;
+
+struct VulkanBufferDescriptorKey {
+    uint64   byte_offset{0};
+    uint64   byte_size{0};
+    VkFormat format{VK_FORMAT_UNDEFINED};
+
+    bool operator==(const VulkanBufferDescriptorKey& _other) const = default;
+
+    struct Hasher {
+        size_t operator()(const VulkanBufferDescriptorKey& _key) const {
+            size_t hash = std::hash<uint64>()(_key.byte_offset);
+            hash ^= std::hash<uint64>()(_key.byte_size) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+            hash ^= std::hash<uint32>()(uint32(_key.format)) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+            return hash;
+        }
+    };
+};
+
+using VulkanBufferDescriptorCacheSlots =
+    UnorderedMap<VulkanBufferDescriptorKey, uint32, VulkanBufferDescriptorKey::Hasher>;
+
+// Native allocation policy used during creation; resource lifetime stays with its owner.
+struct VulkanBufferAllocationInfo {
+    VkBufferUsageFlags       vk_usage{0};
+    VmaAllocationCreateFlags allocation_flags{0};
+    VmaMemoryUsage           memory_usage{VMA_MEMORY_USAGE_AUTO};
+    // Borrowed only during creation. Two or more distinct families use concurrent sharing.
+    std::span<const uint32>   queue_family_indices{};
+    VkDeviceSize              min_alignment = 1;
+};
+
+class VulkanBuffer : public Buffer {
+public:
+    struct BufferAlloc {
+        VkBuffer      buffer{VK_NULL_HANDLE};
+        VmaAllocation alloc{VK_NULL_HANDLE};
+    };
+    // Resource lifetime and debug naming.
+    VulkanBuffer() = delete;
+    virtual ~VulkanBuffer();
+    virtual void       Destroy() override;
+    void               SetName(const std::string_view _name) override;
+    [[nodiscard]] bool SupportsOwningReadback() const noexcept override {
+        return true;
+    }
+
+    // Native allocation policy and handles.
+    VulkanBuffer(std::string_view _name, const BufferInfo& _info, VulkanDevice& _device);
+    VulkanBuffer(
+        std::string_view                  _name,
+        const BufferInfo&                 _info,
+        VulkanDevice&                     _device,
+        const VulkanBufferAllocationInfo& _allocation_info
+    );
+    uint64                     DeviceAddress() const;
+    inline const VmaAllocation GetAllocation() const {
+        return m_alloc.alloc;
+    }
+
+    inline VkBuffer GetHandle() const {
+        return m_alloc.buffer;
+    }
+
+private:
+    friend class VulkanDescriptorHeap;
+    friend class VulkanResourceStateValidator;
+    // Published only after native submission accepts a state transaction.
+    std::shared_ptr<const VulkanResourceStateSnapshot> accepted_resource_state;
+
+    VulkanDevice* m_device;
+
+    // DescriptorHeap serializes descriptor cache access with its cache mutex.
+    VulkanBufferDescriptorCacheSlots& GetDescriptorCacheSlots(VkDescriptorType _type);
+    VulkanBufferDescriptorCacheSlots  m_descriptor_cache_slots[4];
+
+    // Owned allocation and immutable creation metadata.
+    BufferAlloc m_alloc;
+    bool        concurrent_sharing{false};
+    uint64      m_device_address = 0;
+};
+
+struct VulkanTextureDescriptorKey {
+    VkDescriptorType descriptor_type;
+    VkImageLayout    layout;
+    uint8            mip_level;
+    uint8            mip_cnt;
+    uint8            array_layer;
+    uint8            array_count;
+
+    bool operator==(const VulkanTextureDescriptorKey& _other) const = default;
+
+    struct Hasher {
+        size_t operator()(const VulkanTextureDescriptorKey& _key) const {
+            size_t hash = std::hash<uint32>()(uint32(_key.descriptor_type));
+            hash ^= std::hash<uint32>()(uint32(_key.layout)) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+            const uint32 subresources = (uint32(_key.mip_level) << 24) | (uint32(_key.mip_cnt) << 16) |
+                                        (uint32(_key.array_layer) << 8) | uint32(_key.array_count);
+            hash ^= std::hash<uint32>()(subresources) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+            return hash;
+        }
+    };
+};
+class VulkanTexture final : public Texture {
+public:
+    // Resource lifetime, owned allocations and imported swapchain images.
+    VulkanTexture() = delete;
+    ~VulkanTexture();
+    //for inner usage only
+    explicit VulkanTexture(const TextureInfo& _info, VulkanDevice* _device, VkImage _image = VK_NULL_HANDLE);
+
+    inline const VmaAllocation GetAllocation() const {
+        return m_alloc.alloc;
+    }
+
+    inline VkImage GetHandle() const {
+        return m_alloc.image;
+    }
+
+    uint32             GetMipByteSize(uint32 _mip_idx) const override;
+    [[nodiscard]] bool SupportsOwningReadback() const noexcept override {
+        return true;
+    }
+    // Lazily cached image views; shared recording access uses m_views_mutex.
+    VkImageView GetView(
+        uint32 _mip_level  = 0,
+        uint32 _mip_cnt    = 1,
+        uint32 _base_layer = 0,
+        uint32 _layer_cnt  = VK_REMAINING_ARRAY_LAYERS
+    );
+    VkImageView
+    GetAttachmentView(uint32 _mip_level = 0, uint32 _mip_cnt = 1, uint32 _base_layer = 0, uint32 _layer_cnt = 1);
+
+    void SetName(const std::string_view _name) override;
+
+private:
+    friend class VulkanDescriptorHeap;
+    friend class VulkanResourceStateValidator;
+    // Published by the Submission owner on native acceptance.
+    std::shared_ptr<const VulkanResourceStateSnapshot> accepted_resource_state;
+
+    VulkanDevice* m_device;
+
+    // DescriptorHeap owns synchronization for descriptor cache slots.
+    UnorderedMap<VulkanTextureDescriptorKey, uint32, VulkanTextureDescriptorKey::Hasher>
+        m_descriptor_cache_slots;
+
+    void        Destroy() override;
+    VkImageView GetOrCreateView(
+        UnorderedMap<uint64, VkImageView>& cache,
+        VkImageViewType                    view_type,
+        uint32                             mip_level,
+        uint32                             mip_count,
+        uint32                             base_layer,
+        uint32                             layer_count
+    );
+    // A null allocation denotes a borrowed native image.
+    struct TextureAlloc {
+        VkImage       image;
+        VmaAllocation alloc;
+    } m_alloc;
+    UnorderedMap<uint64, VkImageView> m_views;
+    UnorderedMap<uint64, VkImageView> m_attachment_views;
+    mutable std::mutex                m_views_mutex;
+};
+
+using VulkanBufferRef  = CountableRef<VulkanBuffer>;
+using VulkanTextureRef = CountableRef<VulkanTexture>;
+
+inline VulkanBuffer* ResourceCast(Buffer* resource) {
+    return static_cast<VulkanBuffer*>(resource);
+}
+
+inline VulkanTexture* ResourceCast(Texture* resource) {
+    return static_cast<VulkanTexture*>(resource);
+}
+
+} // namespace Moer::Render

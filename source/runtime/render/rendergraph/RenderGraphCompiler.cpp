@@ -1,8 +1,14 @@
 #include "rendergraph/RenderGraphCompiler.h"
+#include "misc/Types.h"
+#include "profile/ProfileScope.h"
+#include "profile/RdgDiagnostics.h"
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cassert>
+#include <functional>
+#include <queue>
 #include <sstream>
 #include <tuple>
 
@@ -14,39 +20,38 @@ using ResourceKind  = RenderGraph::ResourceKind;
 using TextureAspect = RenderGraph::TextureAspect;
 using ResourceRange = RenderGraph::ResourceRange;
 
-[[nodiscard]] constexpr uint8_t AspectMask(TextureAspect aspect) {
-    return static_cast<uint8_t>(aspect);
+[[nodiscard]] constexpr uint8 AspectMask(TextureAspect aspect) {
+    return static_cast<uint8>(aspect);
 }
 
 [[nodiscard]] bool HasAspect(TextureAspect mask, TextureAspect aspect) {
     return (AspectMask(mask) & AspectMask(aspect)) != 0;
 }
 
-template<typename T>
-void SortUnique(std::vector<T>& values) {
+template<typename T, typename Allocator>
+void SortUnique(std::vector<T, Allocator>& values) {
     std::sort(values.begin(), values.end());
     values.erase(std::unique(values.begin(), values.end()), values.end());
 }
 
+[[nodiscard]] auto OutgoingEdges(const std::vector<RenderGraph::CompiledEdge>& edges, uint32 pass_index) {
+    // Both callers consume the canonical edge order (source, then destination).
+    return std::ranges::equal_range(edges, pass_index, {}, [](const auto& edge) {
+        return edge.src.pass_id;
+    });
+}
+
 [[nodiscard]] auto RangeSortKey(const ResourceRange& range) {
-    return std::tuple{
-        static_cast<uint8_t>(range.kind),
-        AspectMask(range.texture.aspects),
-        range.texture.mip_first,
-        range.texture.mip_count,
-        range.texture.layer_first,
-        range.texture.layer_count,
-        range.buffer.offset,
-        range.buffer.size
-    };
+    // Keep resource-kind ordering independent of the variant's alternative order.
+    return std::tuple<ResourceKind, const ResourceRange&>{RenderGraph::GetRangeKind(range), range};
 }
 
 [[nodiscard]] bool
 ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::CompiledEdgeReason& rhs) {
     const auto lhs_key =
-        std::tuple{static_cast<uint8_t>(lhs.kind), lhs.resource.index, lhs.input_version, lhs.output_version};
+        std::tuple{static_cast<uint8>(lhs.kind), lhs.resource.resource_id, lhs.input_version, lhs.output_version};
     const auto rhs_key =
-        std::tuple{static_cast<uint8_t>(rhs.kind), rhs.resource.index, rhs.input_version, rhs.output_version};
+        std::tuple{static_cast<uint8>(rhs.kind), rhs.resource.resource_id, rhs.input_version, rhs.output_version};
     if (lhs_key != rhs_key) {
         return lhs_key < rhs_key;
     }
@@ -70,55 +75,38 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
            mode == RenderGraph::AccessMode::ReadWrite;
 }
 
-[[nodiscard]] bool TextureStateSupports(
-    RenderGraph::TextureState state,
-    RenderGraph::AccessMode   mode
-) {
-    using State = RenderGraph::TextureState;
-    if (mode == RenderGraph::AccessMode::Unknown) {
+[[nodiscard]] bool TextureAccessSupports(RenderGraph::TextureAccessType type, RenderGraph::AccessMode mode) {
+    using Type = RenderGraph::TextureAccessType;
+    using Mode = RenderGraph::AccessMode;
+    if (mode == Mode::Unknown || type == Type::Unspecified) {
         return true;
     }
-    if (mode == RenderGraph::AccessMode::None) {
-        return state == State::Undefined || state == State::Automatic;
-    }
-    switch (state) {
-        case State::Automatic:
+    switch (type) {
+        case Type::TransferSource:
+        case Type::Sampled:
+            return mode == Mode::Read;
+        case Type::TransferDestination:
+            return mode == Mode::Write;
+        case Type::ColorAttachment:
+            return mode == Mode::Write || mode == Mode::ReadWrite;
+        case Type::Storage:
+        case Type::DepthStencilAttachment:
+            return mode == Mode::Read || mode == Mode::Write || mode == Mode::ReadWrite;
+        case Type::Unspecified:
             return true;
-        case State::Undefined:
-            return false;
-        case State::TransferSource:
-        case State::PresentationSource:
-        case State::ShaderResource:
-        case State::Sampled:
-        case State::DepthStencilRead:
-        case State::Present:
-            return HasRead(mode) && !HasWrite(mode);
-        case State::TransferDestination:
-            return mode == RenderGraph::AccessMode::Write;
-        case State::RenderTarget:
-        case State::DepthStencilWrite:
-            return HasWrite(mode);
-        case State::UnorderedAccess:
-            return HasRead(mode) || HasWrite(mode);
     }
     return false;
 }
 
-[[nodiscard]] bool TextureStateSupportsAspects(
-    RenderGraph::TextureState state,
-    TextureAspect             aspects
-) {
-    const uint8_t selected = AspectMask(aspects);
-    switch (state) {
-        case RenderGraph::TextureState::RenderTarget:
-        case RenderGraph::TextureState::UnorderedAccess:
-        case RenderGraph::TextureState::PresentationSource:
-        case RenderGraph::TextureState::Present:
+[[nodiscard]] bool TextureAccessSupportsAspects(RenderGraph::TextureAccessType type, TextureAspect aspects) {
+    using Type             = RenderGraph::TextureAccessType;
+    const uint8 selected   = AspectMask(aspects);
+    switch (type) {
+        case Type::ColorAttachment:
+        case Type::Storage:
             return selected == AspectMask(TextureAspect::Color);
-        case RenderGraph::TextureState::DepthStencilRead:
-        case RenderGraph::TextureState::DepthStencilWrite: {
-            const uint8_t depth_stencil = AspectMask(TextureAspect::Depth) |
-                                          AspectMask(TextureAspect::Stencil);
+        case Type::DepthStencilAttachment: {
+            const uint8 depth_stencil = AspectMask(TextureAspect::Depth) | AspectMask(TextureAspect::Stencil);
             return selected != 0 && (selected & depth_stencil) == selected;
         }
         default:
@@ -126,50 +114,57 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
     }
 }
 
-[[nodiscard]] bool BufferStateSupports(
-    RenderGraph::BufferState state,
-    RenderGraph::AccessMode  mode
-) {
-    using State = RenderGraph::BufferState;
-    if (mode == RenderGraph::AccessMode::Unknown) {
+[[nodiscard]] bool BufferAccessSupports(RenderGraph::BufferAccessType type, RenderGraph::AccessMode mode) {
+    using Type = RenderGraph::BufferAccessType;
+    using Mode = RenderGraph::AccessMode;
+    if (mode == Mode::Unknown || type == Type::Unspecified) {
         return true;
     }
-    if (mode == RenderGraph::AccessMode::None) {
-        return state == State::Undefined || state == State::Automatic;
-    }
-    switch (state) {
-        case State::Automatic:
+    switch (type) {
+        case Type::TransferSource:
+        case Type::VertexBuffer:
+        case Type::IndexBuffer:
+        case Type::IndirectArgument:
+        case Type::ShaderRead:
+        case Type::AccelerationStructureBuildInput:
+        case Type::AccelerationStructureRead:
+            return mode == Mode::Read;
+        case Type::TransferDestination:
+        case Type::AccelerationStructureWrite:
+            return mode == Mode::Write;
+        case Type::Storage:
+            return mode == Mode::Read || mode == Mode::Write || mode == Mode::ReadWrite;
+        case Type::Unspecified:
             return true;
-        case State::Undefined:
-            return false;
-        case State::TransferSource:
-        case State::VertexBuffer:
-        case State::IndexBuffer:
-        case State::IndirectArgument:
-        case State::ShaderResource:
-        case State::AccelerationStructureBuildInput:
-        case State::AccelerationStructureRead:
-            return HasRead(mode) && !HasWrite(mode);
-        case State::TransferDestination:
-        case State::AccelerationStructureWrite:
-            return mode == RenderGraph::AccessMode::Write;
-        case State::UnorderedAccess:
-            return HasRead(mode) || HasWrite(mode);
     }
     return false;
+}
+
+[[nodiscard]] bool BoundarySupportsAccess(const RenderGraph::ResourceState& state, RenderGraph::AccessMode mode) {
+    if (const auto* texture = std::get_if<RenderGraph::TextureAccessType>(&state)) {
+        return TextureAccessSupports(*texture, mode);
+    }
+    if (const auto* buffer = std::get_if<RenderGraph::BufferAccessType>(&state)) {
+        return BufferAccessSupports(*buffer, mode);
+    }
+    if (RenderGraph::IsUndefined(state)) {
+        return mode == RenderGraph::AccessMode::None;
+    }
+    return false;
+}
+
+[[nodiscard]] bool TextureBoundarySupportsAspects(const RenderGraph::ResourceState& state, TextureAspect aspects) {
+    if (const auto* type = std::get_if<RenderGraph::TextureAccessType>(&state)) {
+        return TextureAccessSupportsAspects(*type, aspects);
+    }
+    return RenderGraph::IsUndefined(state);
 }
 
 [[nodiscard]] bool StatesCompatible(
     const RenderGraph::ResourceState& previous,
     const RenderGraph::ResourceState& next
 ) {
-    if (previous.kind != next.kind || previous.IsAutomatic() || next.IsAutomatic()) {
-        return false;
-    }
-    if (previous == next) {
-        return true;
-    }
-    return false;
+    return previous == next && !RenderGraph::IsUnspecified(previous);
 }
 
 [[nodiscard]] RenderGraph::ResourceState CanonicalCompatibleState(
@@ -186,9 +181,9 @@ ReasonLess(const RenderGraph::CompiledEdgeReason& lhs, const RenderGraph::Compil
 template<typename ResourceDeclaration>
 [[nodiscard]] bool IsExclusive(const ResourceDeclaration& resource) {
     return resource.kind == ResourceKind::Texture ?
-               resource.texture_desc.sharing_mode == RenderGraph::TextureDesc::SharingMode::Exclusive :
+               resource.texture_desc.sharing_mode == RenderGraph::SharingMode::Exclusive :
            resource.kind == ResourceKind::Buffer ?
-               resource.buffer_desc.sharing_mode == RenderGraph::TextureDesc::SharingMode::Exclusive :
+               resource.buffer_desc.sharing_mode == RenderGraph::SharingMode::Exclusive :
                false;
 }
 
@@ -198,7 +193,7 @@ void RetainCurrentOwnerFamilySources(
     RenderGraph::QueueRole                           owner_queue
 ) {
     assert(owner_queue != RenderGraph::QueueRole::None);
-    const uint32_t owner_family = topology.Resolve(owner_queue).family_id;
+    const uint32 owner_family = topology.Resolve(owner_queue).family_id;
     std::erase_if(sources, [&](const RenderGraph::CompiledBarrierSource& source) {
         return source.domain.queue == RenderGraph::QueueRole::None ||
                topology.Resolve(source.domain.queue).family_id != owner_family;
@@ -208,12 +203,18 @@ void RetainCurrentOwnerFamilySources(
 } // namespace
 
 bool RenderGraphCompiler::Compile() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.Compile");
+    MOER_RDG_PHASE("RenderGraph.Compiler.Compile");
     graph.compiled = false;
     graph.compile_error.clear();
     graph.compiled_plan.Clear();
+    if (diagnostics == RenderGraph::DependencyDiagnostics::Enabled) {
+        graph.compiled_plan.dependency_reasons.emplace();
+    }
+    edge_keys.clear();
     for (auto& resource : graph.resources) {
-        resource.first_use = RenderGraph::PassHandle::InvalidIndex;
-        resource.last_use  = RenderGraph::PassHandle::InvalidIndex;
+        resource.first_use = RenderGraph::InvalidIndex;
+        resource.last_use  = RenderGraph::InvalidIndex;
     }
 
     if (!graph.declaration_errors.empty()) {
@@ -223,16 +224,19 @@ bool RenderGraphCompiler::Compile() {
         return Fail("graph contains no passes");
     }
 
-    normalized_accesses.assign(graph.passes.size(), {});
-    normalized_initial_states.assign(graph.resources.size(), {});
-    normalized_final_states.assign(graph.resources.size(), {});
-    resource_cells.assign(graph.resources.size(), {});
+    normalized_accesses.clear();
+    normalized_accesses.resize(graph.passes.size());
+    normalized_initial_states.clear();
+    normalized_initial_states.resize(graph.resources.size());
+    normalized_final_states.clear();
+    normalized_final_states.resize(graph.resources.size());
+    resource_cells.clear();
+    resource_cells.resize(graph.resources.size());
     resource_version_counts.assign(graph.resources.size(), 0);
     resource_ever_written.assign(graph.resources.size(), false);
 
     if (!ValidateQueueTopology() || !NormalizeDeclarations() || !BuildAtomicCells() ||
-        !BuildSemanticDependencies() || !BuildFinalBarriers() || !BuildTopologicalOrder() ||
-        !BuildExecutionOrder()) {
+        !BuildSemanticDependencies() || !BuildFinalBarriers() || !BuildExecutionOrder()) {
         return false;
     }
 
@@ -243,7 +247,6 @@ bool RenderGraphCompiler::Compile() {
         return false;
     }
     BuildQueuePlan();
-    BuildDependencyLevels();
     BuildFrontendRecordUnits();
     BuildFrontendDispatchGroups();
     graph.compiled = true;
@@ -251,20 +254,22 @@ bool RenderGraphCompiler::Compile() {
 }
 
 bool RenderGraphCompiler::ValidateQueueTopology() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.ValidateQueueTopology");
+    MOER_RDG_PHASE("RenderGraph.Compiler.ValidateQueueTopology");
     const std::array expected_roles{
         RenderGraph::QueueRole::Graphics,
         RenderGraph::QueueRole::Compute,
         RenderGraph::QueueRole::Copy,
     };
     std::array<RenderGraph::QueueBinding, 3> bindings{};
-    for (uint32_t index = 0; index < expected_roles.size(); ++index) {
+    for (uint32 index = 0; index < expected_roles.size(); ++index) {
         bindings[index] = graph.queue_topology.Resolve(expected_roles[index]);
         if (bindings[index].role != expected_roles[index]) {
             return Fail("queue topology contains a binding with the wrong logical role");
         }
     }
-    for (uint32_t lhs = 0; lhs < bindings.size(); ++lhs) {
-        for (uint32_t rhs = lhs + 1; rhs < bindings.size(); ++rhs) {
+    for (uint32 lhs = 0; lhs < bindings.size(); ++lhs) {
+        for (uint32 rhs = lhs + 1; rhs < bindings.size(); ++rhs) {
             if (bindings[lhs].native_queue_id == bindings[rhs].native_queue_id &&
                 bindings[lhs].family_id != bindings[rhs].family_id) {
                 return Fail("one native queue id cannot belong to multiple queue families");
@@ -275,42 +280,20 @@ bool RenderGraphCompiler::ValidateQueueTopology() {
 }
 
 bool RenderGraphCompiler::NormalizeDeclarations() {
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.NormalizeDeclarations");
+    MOER_RDG_PHASE("RenderGraph.Compiler.NormalizeDeclarations");
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         if (!ValidateExecutionDomain(pass_index)) {
             return false;
         }
         const auto& pass = graph.passes[pass_index];
-        const bool has_execute = static_cast<bool>(pass.execute);
-        const bool has_record  = static_cast<bool>(pass.record);
-        if (has_execute == has_record) {
-            return Fail(
-                "pass '" + pass.name + "' must declare exactly one execute or record callback"
-            );
+        normalized_accesses[pass_index].reserve(pass.accesses.size());
+        if (!pass.record) {
+            return Fail("pass '" + pass.name + "' has no record callback");
         }
-        const bool caller_thread =
-            pass.execution_class == RenderGraph::PassExecutionClass::MainThread ||
-            pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare ||
-            pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl;
-        if (has_execute && !caller_thread) {
-            return Fail(
-                "main-thread pass '" + pass.name + "' cannot use a command-recording class"
-            );
-        }
-        if (has_record && caller_thread) {
-            return Fail(
-                "record pass '" + pass.name + "' must use SerialRecord or ParallelRecordEligible"
-            );
-        }
-        if (has_execute &&
-            pass.translate_execution_class !=
-                ERHITranslateExecutionClass::Parallel) {
-            return Fail(
-                "caller-thread pass '" + pass.name +
-                "' cannot declare a backend translation policy"
-            );
-        }
-        if (pass.workload == 0) {
-            return Fail("pass '" + pass.name + "' has zero recording workload");
+        if (pass.record_policy != RenderGraph::PassRecordPolicy::Serial &&
+            pass.record_policy != RenderGraph::PassRecordPolicy::ParallelAllowed) {
+            return Fail("pass '" + pass.name + "' has an invalid recording policy");
         }
         for (const auto reference : pass.references) {
             if (!graph.IsValidResource(reference)) {
@@ -321,14 +304,7 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
             if (!graph.IsValidResource(access.resource)) {
                 return Fail("pass '" + pass.name + "' references an invalid resource");
             }
-            const auto&   resource = graph.resources[access.resource.index];
-            if (pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare &&
-                resource.kind != RenderGraph::ResourceKind::Token) {
-                return Fail(
-                    "cpu-prepare pass '" + pass.name +
-                    "' may only access token resources; use Reference for GPU resource identity"
-                );
-            }
+            const auto&   resource = graph.resources[access.resource.resource_id];
             ResourceRange normalized{};
             if (!NormalizeRange(resource, access.range, normalized) ||
                 !ValidateAccessState(
@@ -353,61 +329,37 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
         }
     }
 
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         auto normalize_states = [&](
                                     const std::vector<RenderGraph::StateDeclaration>& declarations,
-                                    std::vector<NormalizedStateDeclaration>&          normalized_states,
+                                    std::pmr::vector<NormalizedStateDeclaration>&     normalized_states,
                                     bool                                              initial
                                 ) -> bool {
+            normalized_states.reserve(declarations.size());
             for (const auto& declaration : declarations) {
-                if (declaration.state.IsAutomatic()) {
-                    return Fail("boundary state cannot be automatic on resource '" + resource.name + "'");
-                }
-                const bool presentation_source =
-                    resource.kind == ResourceKind::Texture &&
-                    declaration.state.texture ==
-                        RenderGraph::TextureState::PresentationSource;
-                if (presentation_source && initial) {
-                    return Fail(
-                        "PresentationSource is an export-boundary-only state on resource '" +
-                        resource.name + "'"
-                    );
-                }
-                if (presentation_source &&
-                    declaration.queue != RenderGraph::QueueRole::Graphics) {
-                    return Fail(
-                        "PresentationSource export requires the Graphics queue on resource '" +
-                        resource.name + "'"
-                    );
+                if (RenderGraph::IsUnspecified(declaration.state)) {
+                    return Fail("boundary state cannot be unspecified on resource '" + resource.name + "'");
                 }
                 if (declaration.queue == RenderGraph::QueueRole::None &&
-                    !declaration.state.IsUndefined()) {
+                    !RenderGraph::IsUndefined(declaration.state)) {
                     return Fail("a known boundary state requires an owner queue on resource '" + resource.name + "'");
                 }
-                if (!initial && declaration.state.IsUndefined()) {
+                if (!initial && RenderGraph::IsUndefined(declaration.state)) {
                     return Fail("an exported resource cannot require the undefined state: " + resource.name);
                 }
-                if (initial && !declaration.state.IsUndefined() &&
+                if (initial && !RenderGraph::IsUndefined(declaration.state) &&
                     declaration.boundary_access == RenderGraph::AccessMode::None) {
                     return Fail("a known imported state must describe its previous access on resource '" +
                                 resource.name + "'");
                 }
-                if (initial && declaration.state.IsUndefined() &&
+                if (initial && RenderGraph::IsUndefined(declaration.state) &&
                     declaration.boundary_access != RenderGraph::AccessMode::None) {
                     return Fail("an undefined imported state must have no previous access on resource '" +
                                 resource.name + "'");
                 }
                 if (declaration.boundary_access != RenderGraph::AccessMode::None) {
-                    const bool supported = resource.kind == ResourceKind::Texture ?
-                                               TextureStateSupports(
-                                                   declaration.state.texture,
-                                                   declaration.boundary_access
-                                               ) :
-                                               BufferStateSupports(
-                                                   declaration.state.buffer,
-                                                   declaration.boundary_access
-                                               );
+                    const bool supported = BoundarySupportsAccess(declaration.state, declaration.boundary_access);
                     if (!supported) {
                         return Fail("boundary access is incompatible with the state on resource '" +
                                     resource.name + "'");
@@ -418,8 +370,8 @@ bool RenderGraphCompiler::NormalizeDeclarations() {
                     return false;
                 }
                 if (resource.kind == ResourceKind::Texture &&
-                    !TextureStateSupportsAspects(
-                        declaration.state.texture, normalized.texture.aspects
+                    !TextureBoundarySupportsAspects(
+                        declaration.state, std::get<RenderGraph::TextureRange>(normalized).aspects
                     )) {
                     return Fail(
                         "boundary texture state is incompatible with the selected aspects on resource '" +
@@ -452,7 +404,7 @@ bool RenderGraphCompiler::NormalizeRange(
     const ResourceRange&                    requested,
     ResourceRange&                          normalized
 ) {
-    if (requested.kind != resource.kind) {
+    if (RenderGraph::GetRangeKind(requested) != resource.kind) {
         return Fail("resource range kind does not match resource '" + resource.name + "'");
     }
 
@@ -460,19 +412,19 @@ bool RenderGraphCompiler::NormalizeRange(
     switch (resource.kind) {
         case ResourceKind::Texture: {
             const auto&   desc          = resource.texture_desc;
-            const uint8_t desc_aspects  = AspectMask(desc.aspects);
-            const uint8_t known_aspects = AspectMask(TextureAspect::All);
+            const uint8   desc_aspects  = AspectMask(desc.aspects);
+            const uint8   known_aspects = AspectMask(TextureAspect::All);
             if (desc.mip_count == 0 || desc.layer_count == 0 || desc_aspects == 0 ||
                 (desc_aspects & known_aspects) != desc_aspects) {
                 return Fail("texture resource has an invalid descriptor: " + resource.name);
             }
 
-            auto& range = normalized.texture;
+            auto& range = std::get<RenderGraph::TextureRange>(normalized);
             if (range.aspects == TextureAspect::All) {
                 range.aspects = desc.aspects;
             }
-            const uint8_t requested_aspects = AspectMask(range.aspects);
-            const uint8_t available_aspects = AspectMask(desc.aspects);
+            const uint8 requested_aspects = AspectMask(range.aspects);
+            const uint8 available_aspects = AspectMask(desc.aspects);
             if (requested_aspects == 0 || (requested_aspects & available_aspects) != requested_aspects) {
                 return Fail("texture range requests unavailable aspects on resource '" + resource.name + "'");
             }
@@ -499,7 +451,7 @@ bool RenderGraphCompiler::NormalizeRange(
             break;
         }
         case ResourceKind::Buffer: {
-            auto& range = normalized.buffer;
+            auto& range = std::get<RenderGraph::BufferRange>(normalized);
             if (resource.buffer_desc.byte_size == 0) {
                 if (range.offset != 0 || range.size != RenderGraph::RemainingBufferRange) {
                     return Fail("an explicitly ranged buffer requires a known byte size: " + resource.name);
@@ -518,17 +470,17 @@ bool RenderGraphCompiler::NormalizeRange(
             break;
         }
         case ResourceKind::Token:
-            normalized = ResourceRange::Token();
+            normalized = std::monostate{};
             break;
     }
     return true;
 }
 
-bool RenderGraphCompiler::ValidateExecutionDomain(uint32_t pass_index) {
+bool RenderGraphCompiler::ValidateExecutionDomain(uint32 pass_index) {
     const auto& pass   = graph.passes[pass_index];
     const auto  queue  = pass.domain.queue;
-    const auto  domain = pass.domain.pipeline;
-    if (queue == RenderGraph::QueueRole::None || domain == RenderGraph::PipelineType::None) {
+    const auto  work   = pass.domain.work;
+    if (queue == RenderGraph::QueueRole::None || work == RenderGraph::GpuWorkType::None) {
         return Fail("pass '" + pass.name + "' has an incomplete execution domain");
     }
     if (!graph.queue_topology.Resolve(queue).available) {
@@ -536,14 +488,14 @@ bool RenderGraphCompiler::ValidateExecutionDomain(uint32_t pass_index) {
             "pass '" + pass.name + "' targets an unavailable logical queue"
         );
     }
-    if (queue == RenderGraph::QueueRole::Copy && domain != RenderGraph::PipelineType::Copy) {
-        return Fail("copy queue pass '" + pass.name + "' must use the copy pipeline domain");
+    if (queue == RenderGraph::QueueRole::Copy && work != RenderGraph::GpuWorkType::Transfer) {
+        return Fail("copy queue pass '" + pass.name + "' must declare Transfer work");
     }
-    if (domain == RenderGraph::PipelineType::Graphics &&
+    if (work == RenderGraph::GpuWorkType::Graphics &&
         queue != RenderGraph::QueueRole::Graphics) {
-        return Fail("graphics pipeline pass '" + pass.name + "' must use the graphics queue");
+        return Fail("graphics pass '" + pass.name + "' must use the graphics queue");
     }
-    if (domain == RenderGraph::PipelineType::RayTracing &&
+    if (work == RenderGraph::GpuWorkType::RayTracing &&
         queue == RenderGraph::QueueRole::Copy) {
         return Fail("ray tracing pass '" + pass.name + "' cannot use the copy queue");
     }
@@ -551,7 +503,7 @@ bool RenderGraphCompiler::ValidateExecutionDomain(uint32_t pass_index) {
 }
 
 bool RenderGraphCompiler::ValidateAccessState(
-    uint32_t                                pass_index,
+    uint32                                  pass_index,
     const RenderGraph::ResourceDeclaration& resource,
     const RenderGraph::ResourceRange&       range,
     RenderGraph::AccessMode                 mode,
@@ -561,10 +513,9 @@ bool RenderGraphCompiler::ValidateAccessState(
     if (resource.kind == ResourceKind::Token) {
         return true;
     }
-    if (!explicit_state || state.IsAutomatic()) {
+    if (!explicit_state || RenderGraph::IsUnspecified(state)) {
         if (explicit_state) {
-            return Fail("pass '" + graph.passes[pass_index].name +
-                        "' explicitly requested the automatic state");
+            return Fail("pass '" + graph.passes[pass_index].name + "' explicitly requested the unspecified state");
         }
         return true;
     }
@@ -573,33 +524,29 @@ bool RenderGraphCompiler::ValidateAccessState(
     bool        supported = false;
     bool        transfer_state = false;
     if (resource.kind == ResourceKind::Texture) {
-        supported = TextureStateSupports(state.texture, mode) &&
-                    state.texture != RenderGraph::TextureState::Undefined &&
-                    state.texture != RenderGraph::TextureState::Present &&
-                    state.texture !=
-                        RenderGraph::TextureState::PresentationSource;
-        transfer_state = state.texture == RenderGraph::TextureState::TransferSource ||
-                         state.texture == RenderGraph::TextureState::TransferDestination;
-        const bool attachment_state = state.texture == RenderGraph::TextureState::RenderTarget ||
-                                      state.texture == RenderGraph::TextureState::DepthStencilRead ||
-                                      state.texture == RenderGraph::TextureState::DepthStencilWrite;
-        if (attachment_state && pass.domain.pipeline != RenderGraph::PipelineType::Graphics) {
-            return Fail("attachment state requires the graphics pipeline in pass '" + pass.name + "'");
+        const auto texture = std::get<RenderGraph::TextureAccessType>(state);
+        supported          = TextureAccessSupports(texture, mode);
+        transfer_state     = texture == RenderGraph::TextureAccessType::TransferSource ||
+                         texture == RenderGraph::TextureAccessType::TransferDestination;
+        const bool attachment_state = texture == RenderGraph::TextureAccessType::ColorAttachment ||
+                                      texture == RenderGraph::TextureAccessType::DepthStencilAttachment;
+        if (attachment_state && pass.domain.work != RenderGraph::GpuWorkType::Graphics) {
+            return Fail("attachment state requires Graphics work in pass '" + pass.name + "'");
         }
-        if (!TextureStateSupportsAspects(state.texture, range.texture.aspects)) {
+        if (!TextureAccessSupportsAspects(texture, std::get<RenderGraph::TextureRange>(range).aspects)) {
             return Fail(
                 "texture state is incompatible with the selected aspects in pass '" + pass.name + "'"
             );
         }
     } else {
-        supported     = BufferStateSupports(state.buffer, mode) &&
-                    state.buffer != RenderGraph::BufferState::Undefined;
-        transfer_state = state.buffer == RenderGraph::BufferState::TransferSource ||
-                         state.buffer == RenderGraph::BufferState::TransferDestination;
-        const bool graphics_input = state.buffer == RenderGraph::BufferState::VertexBuffer ||
-                                    state.buffer == RenderGraph::BufferState::IndexBuffer;
-        if (graphics_input && pass.domain.pipeline != RenderGraph::PipelineType::Graphics) {
-            return Fail("vertex/index state requires the graphics pipeline in pass '" + pass.name + "'");
+        const auto buffer = std::get<RenderGraph::BufferAccessType>(state);
+        supported         = BufferAccessSupports(buffer, mode);
+        transfer_state    = buffer == RenderGraph::BufferAccessType::TransferSource ||
+                         buffer == RenderGraph::BufferAccessType::TransferDestination;
+        const bool graphics_input = buffer == RenderGraph::BufferAccessType::VertexBuffer ||
+                                    buffer == RenderGraph::BufferAccessType::IndexBuffer;
+        if (graphics_input && pass.domain.work != RenderGraph::GpuWorkType::Graphics) {
+            return Fail("vertex/index state requires Graphics work in pass '" + pass.name + "'");
         }
     }
     if (!supported) {
@@ -607,38 +554,56 @@ bool RenderGraphCompiler::ValidateAccessState(
                     pass.name + "'");
     }
     if ((pass.domain.queue == RenderGraph::QueueRole::Copy ||
-         pass.domain.pipeline == RenderGraph::PipelineType::Copy) &&
+         pass.domain.work == RenderGraph::GpuWorkType::Transfer) &&
         !transfer_state) {
-        return Fail("copy execution domain requires a transfer state in pass '" + pass.name + "'");
+        return Fail("Transfer work or a copy queue requires a transfer state in pass '" + pass.name + "'");
     }
     return true;
 }
 
 bool RenderGraphCompiler::BuildAtomicCells() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildAtomicCells");
+    MOER_RDG_PHASE("RenderGraph.Compiler.BuildAtomicCells");
     static constexpr std::array<TextureAspect, 3> texture_aspects{
         TextureAspect::Color, TextureAspect::Depth, TextureAspect::Stencil
     };
 
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    std::pmr::vector<std::pmr::vector<const ResourceRange*>> ranges_by_resource{&scratch_memory};
+    ranges_by_resource.resize(graph.resources.size());
+    for (const auto& accesses : normalized_accesses) {
+        for (const auto& access : accesses) {
+            ranges_by_resource[access.resource.resource_id].push_back(&access.range);
+        }
+    }
+
+    // Endpoints are temporary; reuse their capacity across resources.
+    std::pmr::vector<uint32> mip_boundaries{&scratch_memory};
+    std::pmr::vector<uint32> layer_boundaries{&scratch_memory};
+    std::pmr::vector<uint64> boundaries{&scratch_memory};
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         auto&       cells    = resource_cells[resource_index];
 
         if (resource.kind == ResourceKind::Texture) {
-            std::vector<uint32_t> mip_boundaries{0, resource.texture_desc.mip_count};
-            std::vector<uint32_t> layer_boundaries{0, resource.texture_desc.layer_count};
+            mip_boundaries.assign({0, resource.texture_desc.mip_count});
+            layer_boundaries.assign({0, resource.texture_desc.layer_count});
             auto add_texture_boundaries = [&](const ResourceRange& range) {
-                mip_boundaries.push_back(range.texture.mip_first);
-                mip_boundaries.push_back(range.texture.mip_first + range.texture.mip_count);
-                layer_boundaries.push_back(range.texture.layer_first);
-                layer_boundaries.push_back(range.texture.layer_first + range.texture.layer_count);
-            };
-            for (const auto& accesses : normalized_accesses) {
-                for (const auto& access : accesses) {
-                    if (access.resource.index != resource_index) {
-                        continue;
-                    }
-                    add_texture_boundaries(access.range);
+                const auto& texture = std::get<RenderGraph::TextureRange>(range);
+                if (texture.mip_first != 0) {
+                    mip_boundaries.push_back(texture.mip_first);
                 }
+                if (texture.mip_first + texture.mip_count != resource.texture_desc.mip_count) {
+                    mip_boundaries.push_back(texture.mip_first + texture.mip_count);
+                }
+                if (texture.layer_first != 0) {
+                    layer_boundaries.push_back(texture.layer_first);
+                }
+                if (texture.layer_first + texture.layer_count != resource.texture_desc.layer_count) {
+                    layer_boundaries.push_back(texture.layer_first + texture.layer_count);
+                }
+            };
+            for (const auto* range : ranges_by_resource[resource_index]) {
+                add_texture_boundaries(*range);
             }
             for (const auto& state : normalized_initial_states[resource_index]) {
                 add_texture_boundaries(state.range);
@@ -649,51 +614,60 @@ bool RenderGraphCompiler::BuildAtomicCells() {
             SortUnique(mip_boundaries);
             SortUnique(layer_boundaries);
 
+            const size_t mip_intervals   = mip_boundaries.size() - 1;
+            const size_t layer_intervals = layer_boundaries.size() - 1;
+            const size_t aspect_count    = std::popcount(AspectMask(resource.texture_desc.aspects));
+            // Valid descriptors and unique endpoints make every factor nonzero.
+            // Reserve the exact grid once; arena storage from growth cannot be reclaimed early.
+            if (mip_intervals > cells.max_size() / layer_intervals ||
+                mip_intervals * layer_intervals > cells.max_size() / aspect_count) {
+                return Fail("texture compiler interval count exceeds container capacity: " + resource.name);
+            }
+            cells.reserve(mip_intervals * layer_intervals * aspect_count);
+
             for (TextureAspect aspect : texture_aspects) {
                 if (!HasAspect(resource.texture_desc.aspects, aspect)) {
                     continue;
                 }
-                for (uint32_t mip_index = 0; mip_index + 1 < mip_boundaries.size(); ++mip_index) {
-                    for (uint32_t layer_index = 0; layer_index + 1 < layer_boundaries.size(); ++layer_index) {
-                        const uint32_t mip_first   = mip_boundaries[mip_index];
-                        const uint32_t mip_end     = mip_boundaries[mip_index + 1];
-                        const uint32_t layer_first = layer_boundaries[layer_index];
-                        const uint32_t layer_end   = layer_boundaries[layer_index + 1];
+                for (uint32 mip_index = 0; mip_index + 1 < mip_boundaries.size(); ++mip_index) {
+                    for (uint32 layer_index = 0; layer_index + 1 < layer_boundaries.size(); ++layer_index) {
+                        const uint32 mip_first   = mip_boundaries[mip_index];
+                        const uint32 mip_end     = mip_boundaries[mip_index + 1];
+                        const uint32 layer_first = layer_boundaries[layer_index];
+                        const uint32 layer_end   = layer_boundaries[layer_index + 1];
                         if (mip_first == mip_end || layer_first == layer_end) {
                             continue;
                         }
-                        AtomicCell cell{};
-                        cell.range       = ResourceRange::Texture(RenderGraph::TextureRange{
-                                  .aspects     = aspect,
-                                  .mip_first   = mip_first,
-                                  .mip_count   = mip_end - mip_first,
-                                  .layer_first = layer_first,
-                                  .layer_count = layer_end - layer_first
-                        });
+                        AtomicCell cell{&scratch_memory};
+                        cell.range       = RenderGraph::TextureRange{
+                            .aspects     = aspect,
+                            .mip_first   = mip_first,
+                            .mip_count   = mip_end - mip_first,
+                            .layer_first = layer_first,
+                            .layer_count = layer_end - layer_first
+                        };
                         cell.initialized = resource.imported;
                         cell.version     = resource.imported ? 0 : RenderGraph::InvalidVersion;
-                        cell.state       = RenderGraph::ResourceState::Texture(
-                            resource.imported ? RenderGraph::TextureState::Automatic :
-                                                RenderGraph::TextureState::Undefined
-                        );
+                        cell.state       = resource.imported ? RenderGraph::ResourceState{RenderGraph::TextureAccessType::Unspecified} :
+                                                               RenderGraph::ResourceState{RenderGraph::TextureBoundary::Undefined};
                         cell.state_known = !resource.imported;
                         cells.push_back(std::move(cell));
                     }
                 }
             }
         } else if (resource.kind == ResourceKind::Buffer && resource.buffer_desc.byte_size != 0) {
-            std::vector<uint64_t> boundaries{0, resource.buffer_desc.byte_size};
+            boundaries.assign({0, resource.buffer_desc.byte_size});
             auto add_buffer_boundaries = [&](const ResourceRange& range) {
-                boundaries.push_back(range.buffer.offset);
-                boundaries.push_back(range.buffer.offset + range.buffer.size);
-            };
-            for (const auto& accesses : normalized_accesses) {
-                for (const auto& access : accesses) {
-                    if (access.resource.index != resource_index) {
-                        continue;
-                    }
-                    add_buffer_boundaries(access.range);
+                const auto& buffer = std::get<RenderGraph::BufferRange>(range);
+                if (buffer.offset != 0) {
+                    boundaries.push_back(buffer.offset);
                 }
+                if (buffer.offset + buffer.size != resource.buffer_desc.byte_size) {
+                    boundaries.push_back(buffer.offset + buffer.size);
+                }
+            };
+            for (const auto* range : ranges_by_resource[resource_index]) {
+                add_buffer_boundaries(*range);
             }
             for (const auto& state : normalized_initial_states[resource_index]) {
                 add_buffer_boundaries(state.range);
@@ -702,35 +676,32 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                 add_buffer_boundaries(state.range);
             }
             SortUnique(boundaries);
-            for (uint32_t index = 0; index + 1 < boundaries.size(); ++index) {
+            cells.reserve(boundaries.size() - 1);
+            for (uint32 index = 0; index + 1 < boundaries.size(); ++index) {
                 if (boundaries[index] == boundaries[index + 1]) {
                     continue;
                 }
-                AtomicCell cell{};
-                cell.range       = ResourceRange::Buffer(RenderGraph::BufferRange{
-                          .offset = boundaries[index], .size = boundaries[index + 1] - boundaries[index]
-                });
+                AtomicCell cell{&scratch_memory};
+                cell.range       = RenderGraph::BufferRange{
+                    .offset = boundaries[index], .size = boundaries[index + 1] - boundaries[index]
+                };
                 cell.initialized = resource.imported;
                 cell.version     = resource.imported ? 0 : RenderGraph::InvalidVersion;
-                cell.state       = RenderGraph::ResourceState::Buffer(
-                    resource.imported ? RenderGraph::BufferState::Automatic :
-                                        RenderGraph::BufferState::Undefined
-                );
+                cell.state       = resource.imported ? RenderGraph::ResourceState{RenderGraph::BufferAccessType::Unspecified} :
+                                                       RenderGraph::ResourceState{RenderGraph::BufferBoundary::Undefined};
                 cell.state_known = !resource.imported;
                 cells.push_back(std::move(cell));
             }
         } else {
-            AtomicCell cell{};
-            cell.range       = ResourceRange::Whole(resource.kind);
+            AtomicCell cell{&scratch_memory};
+            cell.range       = RenderGraph::WholeResourceRange(resource.kind);
             cell.initialized = resource.imported;
             cell.version     = resource.imported ? 0 : RenderGraph::InvalidVersion;
             if (resource.kind == ResourceKind::Buffer) {
-                cell.state = RenderGraph::ResourceState::Buffer(
-                    resource.imported ? RenderGraph::BufferState::Automatic :
-                                        RenderGraph::BufferState::Undefined
-                );
+                cell.state = resource.imported ? RenderGraph::ResourceState{RenderGraph::BufferAccessType::Unspecified} :
+                                                 RenderGraph::ResourceState{RenderGraph::BufferBoundary::Undefined};
             } else {
-                cell.state = RenderGraph::ResourceState::Token();
+                cell.state = RenderGraph::ResourceState{};
             }
             cell.state_known = resource.kind == ResourceKind::Token || !resource.imported;
             cells.push_back(std::move(cell));
@@ -754,12 +725,12 @@ bool RenderGraphCompiler::BuildAtomicCells() {
                 }
                 cell.state                       = initial.state;
                 cell.state_known                 = true;
-                cell.initialized                 = !initial.state.IsUndefined();
+                cell.initialized                 = !RenderGraph::IsUndefined(initial.state);
                 if (!cell.initialized) {
                     cell.version = RenderGraph::InvalidVersion;
                 }
                 cell.last_domain                 = RenderGraph::ExecutionDomain{
-                    initial.queue, RenderGraph::PipelineType::None
+                    initial.queue, RenderGraph::GpuWorkType::None
                 };
                 cell.last_mode                    = initial.boundary_access;
                 cell.has_explicit_initial_state  = true;
@@ -774,36 +745,45 @@ bool RenderGraphCompiler::BuildAtomicCells() {
 }
 
 bool RenderGraphCompiler::BuildSemanticDependencies() {
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildSemanticDependencies");
+    MOER_RDG_PHASE("RenderGraph.Compiler.BuildSemanticDependencies");
+    // Reuse cell storage across passes, and visit only resources that the
+    // current pass accesses. Unused resources have no per-pass state to merge.
+    std::pmr::vector<std::pmr::vector<CellUsage>> usages{&scratch_memory};
+    usages.resize(graph.resources.size());
+    std::pmr::vector<uint32> accessed_resources{&scratch_memory};
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         const auto& pass = graph.passes[pass_index];
         for (const auto dependency : pass.explicit_dependencies) {
             if (!graph.IsValidPass(dependency)) {
                 return Fail("pass '" + pass.name + "' has an invalid explicit dependency");
             }
             AddEdge(
-                dependency.index,
+                dependency.pass_id,
                 pass_index,
-                RenderGraph::CompiledEdgeReason{.kind = RenderGraph::EdgeReasonKind::Explicit}
+                [&] { return RenderGraph::CompiledEdgeReason{.kind = RenderGraph::EdgeReasonKind::Explicit}; }
             );
         }
 
-        std::vector<std::vector<CellUsage>> usages(graph.resources.size());
-        for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
-            usages[resource_index].resize(resource_cells[resource_index].size());
-        }
-
+        accessed_resources.clear();
         for (const auto& access : normalized_accesses[pass_index]) {
-            auto&       resource_usages = usages[access.resource.index];
-            const auto& cells           = resource_cells[access.resource.index];
+            auto&       resource_usages = usages[access.resource.resource_id];
+            const auto& cells           = resource_cells[access.resource.resource_id];
+            if (resource_usages.empty()) {
+                resource_usages.resize(cells.size());
+                accessed_resources.push_back(access.resource.resource_id);
+            }
             bool        matched         = false;
-            for (uint32_t cell_index = 0; cell_index < cells.size(); ++cell_index) {
+            for (uint32 cell_index = 0; cell_index < cells.size(); ++cell_index) {
+                MOER_RDG_COUNT(CellTests, 1);
                 if (!RangesOverlap(access.range, cells[cell_index].range)) {
                     continue;
                 }
                 matched     = true;
+                MOER_RDG_COUNT(MergedAccesses, 1);
                 auto& usage = resource_usages[cell_index];
                 if (!MergeCellState(
-                        pass_index, graph.resources[access.resource.index], usage, access
+                        pass_index, graph.resources[access.resource.resource_id], usage, access
                     )) {
                     return false;
                 }
@@ -813,64 +793,38 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
             }
         }
 
-        for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+        // Keep the compiler's deterministic resource order independent of the
+        // order in which a pass declared its accesses.
+        std::sort(accessed_resources.begin(), accessed_resources.end());
+        for (const uint32 resource_index : accessed_resources) {
             auto&      resource_usages = usages[resource_index];
             const bool writes_resource =
                 std::any_of(resource_usages.begin(), resource_usages.end(), [](const CellUsage& usage) {
                     return usage.write;
                 });
-            const uint32_t output_version =
+            const uint32 output_version =
                 writes_resource ? ++resource_version_counts[resource_index] : RenderGraph::InvalidVersion;
 
-            for (uint32_t cell_index = 0; cell_index < resource_usages.size(); ++cell_index) {
+            for (uint32 cell_index = 0; cell_index < resource_usages.size(); ++cell_index) {
                 const CellUsage usage = resource_usages[cell_index];
                 if (!usage.read && !usage.write) {
                     continue;
                 }
 
                 auto&          cell            = resource_cells[resource_index][cell_index];
-                const uint32_t input_version   = cell.version;
+                const uint32   input_version   = cell.version;
                 const auto     resource_handle = RenderGraph::ResourceHandle{resource_index, graph.graph_id};
                 const auto&    resource        = graph.resources[resource_index];
                 const auto     access_mode     = ToAccessMode(usage.read, usage.write);
                 const auto     next_state      = usage.explicit_state ?
-                                                    usage.state :
-                                                    RenderGraph::ResourceState{.kind = resource.kind};
+                                                     usage.state :
+                                                     RenderGraph::UnspecifiedResourceState(resource.kind);
 
                 const bool physical_resource = resource.kind != ResourceKind::Token;
                 const bool source_state_unknown = physical_resource && !cell.state_known;
                 const bool state_transition =
                     physical_resource && usage.explicit_state &&
                     (source_state_unknown || !StatesCompatible(cell.state, next_state));
-
-                std::vector<RenderGraph::CompiledBarrierSource> barrier_sources{};
-                auto append_source = [&](const RenderGraph::CompiledBarrierSource& source) {
-                    if (!source.pass.IsValid()) {
-                        return;
-                    }
-                    if (std::find(barrier_sources.begin(), barrier_sources.end(), source) ==
-                        barrier_sources.end()) {
-                        barrier_sources.push_back(source);
-                    }
-                };
-                if (usage.read && cell.last_writer != RenderGraph::PassHandle::InvalidIndex) {
-                    append_source(cell.last_writer_source);
-                }
-                if (usage.write) {
-                    if (cell.last_writer != RenderGraph::PassHandle::InvalidIndex) {
-                        append_source(cell.last_writer_source);
-                    }
-                    for (const auto& reader : cell.readers) {
-                        append_source(reader);
-                    }
-                }
-
-                const bool boundary_memory_dependency =
-                    cell.last_access == RenderGraph::PassHandle::InvalidIndex &&
-                    cell.last_mode != RenderGraph::AccessMode::None &&
-                    (HasWrite(cell.last_mode) || usage.write);
-                const bool memory_dependency =
-                    physical_resource && (!barrier_sources.empty() || boundary_memory_dependency);
 
                 bool queue_ownership = false;
                 if (physical_resource && cell.last_domain.queue != RenderGraph::QueueRole::None) {
@@ -880,9 +834,34 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                                       src_queue.family_id != dst_queue.family_id;
                 }
 
+                std::vector<RenderGraph::CompiledBarrierSource> barrier_sources{};
+                // Each pass/cell is merged once. Readers have distinct pass identities,
+                // and the last writer is never also a reader. Tokens need only hazard
+                // edges, so they do not build a physical barrier source frontier.
+                if (physical_resource) {
+                    const size_t source_count = (cell.last_writer != RenderGraph::InvalidIndex ? 1 : 0) +
+                        ((usage.write || state_transition || queue_ownership) ? cell.readers.size() : 0);
+                    barrier_sources.reserve(source_count);
+                    if (cell.last_writer != RenderGraph::InvalidIndex) {
+                        barrier_sources.push_back(cell.last_writer_source);
+                    }
+                    if (usage.write) {
+                        barrier_sources.insert(barrier_sources.end(), cell.readers.begin(), cell.readers.end());
+                    }
+                }
+
+                const bool boundary_memory_dependency =
+                    cell.last_access == RenderGraph::InvalidIndex &&
+                    cell.last_mode != RenderGraph::AccessMode::None &&
+                    (HasWrite(cell.last_mode) || usage.write);
+                const bool memory_dependency =
+                    physical_resource && (!barrier_sources.empty() || boundary_memory_dependency);
+
                 if (state_transition || queue_ownership) {
-                    for (const auto& reader : cell.readers) {
-                        append_source(reader);
+                    // Writes already included the readers for their memory dependency.
+                    // Read-only transitions add them here, after that decision.
+                    if (!usage.write) {
+                        barrier_sources.insert(barrier_sources.end(), cell.readers.begin(), cell.readers.end());
                     }
                     if (queue_ownership) {
                         // Only accesses in the currently owning family can participate in the
@@ -892,9 +871,9 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                             barrier_sources, graph.queue_topology, cell.last_domain.queue
                         );
                     }
-                    if (cell.last_access != RenderGraph::PassHandle::InvalidIndex &&
+                    if (cell.last_access != RenderGraph::InvalidIndex &&
                         barrier_sources.empty()) {
-                        append_source(RenderGraph::CompiledBarrierSource{
+                        barrier_sources.push_back(RenderGraph::CompiledBarrierSource{
                             .pass   = RenderGraph::PassHandle{cell.last_access, graph.graph_id},
                             .state  = cell.state,
                             .access = cell.last_mode,
@@ -904,27 +883,31 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     for (const auto& source : barrier_sources) {
                         if (state_transition) {
                             AddEdge(
-                                source.pass.index,
+                                source.pass.pass_id,
                                 pass_index,
-                                RenderGraph::CompiledEdgeReason{
-                                    .kind           = RenderGraph::EdgeReasonKind::StateTransition,
-                                    .resource       = resource_handle,
-                                    .range          = cell.range,
-                                    .input_version  = cell.version,
-                                    .output_version = cell.version
+                                [&] {
+                                    return RenderGraph::CompiledEdgeReason{
+                                        .kind           = RenderGraph::EdgeReasonKind::StateTransition,
+                                        .resource       = resource_handle,
+                                        .range          = cell.range,
+                                        .input_version  = cell.version,
+                                        .output_version = cell.version
+                                    };
                                 }
                             );
                         }
                         if (queue_ownership) {
                             AddEdge(
-                                source.pass.index,
+                                source.pass.pass_id,
                                 pass_index,
-                                RenderGraph::CompiledEdgeReason{
-                                    .kind           = RenderGraph::EdgeReasonKind::QueueOwnership,
-                                    .resource       = resource_handle,
-                                    .range          = cell.range,
-                                    .input_version  = cell.version,
-                                    .output_version = cell.version
+                                [&] {
+                                    return RenderGraph::CompiledEdgeReason{
+                                        .kind           = RenderGraph::EdgeReasonKind::QueueOwnership,
+                                        .resource       = resource_handle,
+                                        .range          = cell.range,
+                                        .input_version  = cell.version,
+                                        .output_version = cell.version
+                                    };
                                 }
                             );
                         }
@@ -932,22 +915,24 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                 }
 
                 if (physical_resource && !state_transition && !queue_ownership &&
-                    cell.availability_established_pass != RenderGraph::PassHandle::InvalidIndex &&
+                    cell.availability_established_pass != RenderGraph::InvalidIndex &&
                     cell.availability_established_pass != pass_index) {
                     AddEdge(
                         cell.availability_established_pass,
                         pass_index,
-                        RenderGraph::CompiledEdgeReason{
-                            .kind           = RenderGraph::EdgeReasonKind::StateTransition,
-                            .resource       = resource_handle,
-                            .range          = cell.range,
-                            .input_version  = cell.version,
-                            .output_version = cell.version
+                        [&] {
+                            return RenderGraph::CompiledEdgeReason{
+                                .kind           = RenderGraph::EdgeReasonKind::StateTransition,
+                                .resource       = resource_handle,
+                                .range          = cell.range,
+                                .input_version  = cell.version,
+                                .output_version = cell.version
+                            };
                         }
                     );
                 }
                 if (!state_transition && !queue_ownership &&
-                    cell.ownership_established_pass != RenderGraph::PassHandle::InvalidIndex &&
+                    cell.ownership_established_pass != RenderGraph::InvalidIndex &&
                     cell.ownership_established_pass != pass_index) {
                     const auto& established_pass = graph.passes[cell.ownership_established_pass];
                     if (graph.queue_topology.Resolve(established_pass.domain.queue).native_queue_id !=
@@ -955,19 +940,21 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                         AddEdge(
                             cell.ownership_established_pass,
                             pass_index,
-                            RenderGraph::CompiledEdgeReason{
-                                .kind           = RenderGraph::EdgeReasonKind::QueueOwnership,
-                                .resource       = resource_handle,
-                                .range          = cell.range,
-                                .input_version  = cell.version,
-                                .output_version = cell.version
+                            [&] {
+                                return RenderGraph::CompiledEdgeReason{
+                                    .kind           = RenderGraph::EdgeReasonKind::QueueOwnership,
+                                    .resource       = resource_handle,
+                                    .range          = cell.range,
+                                    .input_version  = cell.version,
+                                    .output_version = cell.version
+                                };
                             }
                         );
                     }
                 }
 
                 const bool import_boundary = resource.imported &&
-                                             cell.last_access == RenderGraph::PassHandle::InvalidIndex;
+                                             cell.last_access == RenderGraph::InvalidIndex;
                 if (physical_resource &&
                     (state_transition || memory_dependency || queue_ownership ||
                      (import_boundary && cell.has_explicit_initial_state))) {
@@ -998,45 +985,51 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                             "' is read before its first producer in pass '" + pass.name + "'"
                         );
                     }
-                    if (cell.last_writer != RenderGraph::PassHandle::InvalidIndex) {
+                    if (cell.last_writer != RenderGraph::InvalidIndex) {
                         AddEdge(
                             cell.last_writer,
                             pass_index,
-                            RenderGraph::CompiledEdgeReason{
-                                .kind           = RenderGraph::EdgeReasonKind::ReadAfterWrite,
-                                .resource       = resource_handle,
-                                .range          = cell.range,
-                                .input_version  = cell.version,
-                                .output_version = cell.version
+                            [&] {
+                                return RenderGraph::CompiledEdgeReason{
+                                    .kind           = RenderGraph::EdgeReasonKind::ReadAfterWrite,
+                                    .resource       = resource_handle,
+                                    .range          = cell.range,
+                                    .input_version  = cell.version,
+                                    .output_version = cell.version
+                                };
                             }
                         );
                     }
                 }
 
                 if (usage.write) {
-                    if (cell.last_writer != RenderGraph::PassHandle::InvalidIndex) {
+                    if (cell.last_writer != RenderGraph::InvalidIndex) {
                         AddEdge(
                             cell.last_writer,
                             pass_index,
-                            RenderGraph::CompiledEdgeReason{
-                                .kind           = RenderGraph::EdgeReasonKind::WriteAfterWrite,
-                                .resource       = resource_handle,
-                                .range          = cell.range,
-                                .input_version  = cell.version,
-                                .output_version = output_version
+                            [&] {
+                                return RenderGraph::CompiledEdgeReason{
+                                    .kind           = RenderGraph::EdgeReasonKind::WriteAfterWrite,
+                                    .resource       = resource_handle,
+                                    .range          = cell.range,
+                                    .input_version  = cell.version,
+                                    .output_version = output_version
+                                };
                             }
                         );
                     }
                     for (const auto& reader : cell.readers) {
                         AddEdge(
-                            reader.pass.index,
+                            reader.pass.pass_id,
                             pass_index,
-                            RenderGraph::CompiledEdgeReason{
-                                .kind           = RenderGraph::EdgeReasonKind::WriteAfterRead,
-                                .resource       = resource_handle,
-                                .range          = cell.range,
-                                .input_version  = cell.version,
-                                .output_version = output_version
+                            [&] {
+                                return RenderGraph::CompiledEdgeReason{
+                                    .kind           = RenderGraph::EdgeReasonKind::WriteAfterRead,
+                                    .resource       = resource_handle,
+                                    .range          = cell.range,
+                                    .input_version  = cell.version,
+                                    .output_version = output_version
+                                };
                             }
                         );
                     }
@@ -1060,19 +1053,16 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                         // The previous writer's visibility and dependency are now carried
                         // transitively by this read. Preserve the logical version, but drop the
                         // old writer endpoint so queue planning cannot lower a stale direct sync.
-                        cell.last_writer        = RenderGraph::PassHandle::InvalidIndex;
+                        cell.last_writer        = RenderGraph::InvalidIndex;
                         cell.last_writer_source = {};
                     }
-                    const auto reader = RenderGraph::CompiledBarrierSource{
+                    // Earlier declarations for this pass were merged into usage above.
+                    cell.readers.push_back(RenderGraph::CompiledBarrierSource{
                         .pass   = RenderGraph::PassHandle{pass_index, graph.graph_id},
                         .state  = next_state,
                         .access = access_mode,
                         .domain = pass.domain,
-                    };
-                    if (std::find(cell.readers.begin(), cell.readers.end(), reader) ==
-                        cell.readers.end()) {
-                        cell.readers.push_back(reader);
-                    }
+                    });
                 }
 
                 graph.compiled_plan.accesses.push_back(RenderGraph::CompiledAccess{
@@ -1095,7 +1085,7 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                 if (physical_resource &&
                     (usage.write || import_availability || state_transition || queue_ownership)) {
                     // This pass has ordered the complete prior frontier and becomes the source of
-                    // state/data availability for later accesses. Automatic accesses still inherit
+                    // state/data availability for later accesses. Unspecified accesses still inherit
                     // this dependency even though they make the logical state unknown.
                     cell.availability_established_pass = pass_index;
                 }
@@ -1108,34 +1098,33 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
                     cell.ownership_established_pass = pass_index;
                 }
             }
+            resource_usages.clear();
         }
     }
 
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
-        const bool has_gpu_access = std::any_of(
-            graph.compiled_plan.accesses.begin(),
-            graph.compiled_plan.accesses.end(),
-            [&](const RenderGraph::CompiledAccess& access) {
-                return access.resource.index == resource_index;
+        if (!resource.imported && !resource_ever_written[resource_index]) {
+            const auto& cells = resource_cells[resource_index];
+            const bool has_gpu_access = std::any_of(cells.begin(), cells.end(), [](const AtomicCell& cell) {
+                return cell.last_access != RenderGraph::InvalidIndex;
+            });
+            const bool has_opaque_reference = std::any_of(
+                graph.passes.begin(),
+                graph.passes.end(),
+                [&](const RenderGraph::PassDeclaration& pass) {
+                    return std::any_of(
+                        pass.references.begin(),
+                        pass.references.end(),
+                        [&](RenderGraph::ResourceHandle reference) {
+                            return reference.resource_id == resource_index;
+                        }
+                    );
+                }
+            );
+            if (has_gpu_access || has_opaque_reference) {
+                return Fail("transient resource has no producer: " + resource.name);
             }
-        );
-        const bool has_opaque_reference = std::any_of(
-            graph.passes.begin(),
-            graph.passes.end(),
-            [&](const RenderGraph::PassDeclaration& pass) {
-                return std::any_of(
-                    pass.references.begin(),
-                    pass.references.end(),
-                    [&](RenderGraph::ResourceHandle reference) {
-                        return reference.index == resource_index;
-                    }
-                );
-            }
-        );
-        if (!resource.imported && (has_gpu_access || has_opaque_reference) &&
-            !resource_ever_written[resource_index]) {
-            return Fail("transient resource has no producer: " + resource.name);
         }
         if (resource.exported) {
             const auto& final_states = normalized_final_states[resource_index];
@@ -1171,7 +1160,7 @@ bool RenderGraphCompiler::BuildSemanticDependencies() {
 }
 
 bool RenderGraphCompiler::MergeCellState(
-    uint32_t                                pass_index,
+    uint32                                  pass_index,
     const RenderGraph::ResourceDeclaration& resource,
     CellUsage&                              usage,
     const NormalizedAccess&                 access
@@ -1199,11 +1188,11 @@ bool RenderGraphCompiler::MergeCellState(
 
     if (usage.explicit_state) {
         const auto combined_mode = ToAccessMode(usage.read, usage.write);
-        const bool supported = resource.kind == ResourceKind::Texture ?
-                                   TextureStateSupports(usage.state.texture, combined_mode) :
-                               resource.kind == ResourceKind::Buffer ?
-                                   BufferStateSupports(usage.state.buffer, combined_mode) :
-                                   true;
+        const bool supported     = resource.kind == ResourceKind::Texture ?
+                                       TextureAccessSupports(std::get<RenderGraph::TextureAccessType>(usage.state), combined_mode) :
+                                   resource.kind == ResourceKind::Buffer ?
+                                       BufferAccessSupports(std::get<RenderGraph::BufferAccessType>(usage.state), combined_mode) :
+                                       true;
         if (!supported) {
             return Fail("combined accesses in pass '" + graph.passes[pass_index].name +
                         "' are incompatible with the explicit state of resource '" + resource.name +
@@ -1214,26 +1203,27 @@ bool RenderGraphCompiler::MergeCellState(
 }
 
 void RenderGraphCompiler::AddBarrier(
-    uint32_t                     resource_index,
-    const AtomicCell&            cell,
-    RenderGraph::PassHandle      dst_pass,
-    RenderGraph::ResourceState   next_state,
-    RenderGraph::ExecutionDomain next_domain,
-    RenderGraph::AccessMode      next_mode,
-    bool                         state_transition,
-    bool                         memory_dependency,
-    bool                         queue_ownership,
-    bool                         import_boundary,
-    bool                         export_boundary,
-    bool                         source_state_unknown,
+    uint32                                          resource_index,
+    const AtomicCell&                               cell,
+    RenderGraph::PassHandle                         dst_pass,
+    RenderGraph::ResourceState                      next_state,
+    RenderGraph::ExecutionDomain                    next_domain,
+    RenderGraph::AccessMode                         next_mode,
+    bool                                            state_transition,
+    bool                                            memory_dependency,
+    bool                                            queue_ownership,
+    bool                                            import_boundary,
+    bool                                            export_boundary,
+    bool                                            source_state_unknown,
     std::vector<RenderGraph::CompiledBarrierSource> sources
 ) {
+    MOER_RDG_COUNT(BarrierSources, sources.size());
     const auto primary_source = std::max_element(
         sources.begin(),
         sources.end(),
         [](const RenderGraph::CompiledBarrierSource& lhs,
            const RenderGraph::CompiledBarrierSource& rhs) {
-            return lhs.pass.index < rhs.pass.index;
+            return lhs.pass.pass_id < rhs.pass.pass_id;
         }
     );
     const auto src_pass = primary_source == sources.end() ? RenderGraph::PassHandle{} :
@@ -1276,7 +1266,7 @@ void RenderGraphCompiler::AddBarrier(
         .execution_dependency = execution_dependency,
         .queue_dependency     = queue_dependency,
         .queue_ownership      = queue_ownership,
-        .discard_previous_contents = cell.state_known && cell.state.IsUndefined(),
+        .discard_previous_contents = cell.state_known && RenderGraph::IsUndefined(cell.state),
         .import_boundary      = import_boundary,
         .export_boundary      = export_boundary,
         .source_state_unknown = source_state_unknown,
@@ -1285,7 +1275,9 @@ void RenderGraphCompiler::AddBarrier(
 }
 
 bool RenderGraphCompiler::BuildFinalBarriers() {
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildFinalBarriers");
+    MOER_RDG_PHASE("RenderGraph.Compiler.BuildFinalBarriers");
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         const auto& finals   = normalized_final_states[resource_index];
         if (finals.empty()) {
@@ -1311,7 +1303,9 @@ bool RenderGraphCompiler::BuildFinalBarriers() {
             const bool source_state_unknown = !cell.state_known;
             const bool state_transition =
                 source_state_unknown || !StatesCompatible(cell.state, final->state);
-            std::vector<RenderGraph::CompiledBarrierSource> sources = cell.readers;
+            std::vector<RenderGraph::CompiledBarrierSource> sources;
+            sources.reserve(cell.readers.size() + (cell.last_writer_source.pass.IsValid() ? 1 : 0));
+            sources.insert(sources.end(), cell.readers.begin(), cell.readers.end());
             if (cell.last_writer_source.pass.IsValid() &&
                 std::find(sources.begin(), sources.end(), cell.last_writer_source) == sources.end()) {
                 sources.push_back(cell.last_writer_source);
@@ -1326,7 +1320,7 @@ bool RenderGraphCompiler::BuildFinalBarriers() {
                 RetainCurrentOwnerFamilySources(
                     sources, graph.queue_topology, cell.last_domain.queue
                 );
-                if (sources.empty() && cell.last_access != RenderGraph::PassHandle::InvalidIndex) {
+                if (sources.empty() && cell.last_access != RenderGraph::InvalidIndex) {
                     sources.push_back(RenderGraph::CompiledBarrierSource{
                         .pass   = RenderGraph::PassHandle{cell.last_access, graph.graph_id},
                         .state  = cell.state,
@@ -1349,7 +1343,7 @@ bool RenderGraphCompiler::BuildFinalBarriers() {
                 cell,
                 RenderGraph::PassHandle{},
                 final->state,
-                RenderGraph::ExecutionDomain{final->queue, RenderGraph::PipelineType::None},
+                RenderGraph::ExecutionDomain{final->queue, RenderGraph::GpuWorkType::None},
                 final->boundary_access,
                 state_transition,
                 memory_dependency,
@@ -1368,7 +1362,9 @@ bool RenderGraphCompiler::BuildFinalBarriers() {
 }
 
 void RenderGraphCompiler::AuditStatePlanCompleteness() {
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.AuditStatePlanCompleteness");
+    MOER_RDG_PHASE("RenderGraph.Compiler.AuditStatePlanCompleteness");
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         if (resource.kind == ResourceKind::Token) {
             continue;
@@ -1384,7 +1380,7 @@ void RenderGraphCompiler::AuditStatePlanCompleteness() {
                                            }
                                        );
             const bool participates_in_plan = exported_cell ||
-                                              cell.last_access != RenderGraph::PassHandle::InvalidIndex;
+                                              cell.last_access != RenderGraph::InvalidIndex;
             if (participates_in_plan && !cell.state_known) {
                 graph.compiled_plan.state_plan_complete = false;
                 return;
@@ -1393,140 +1389,121 @@ void RenderGraphCompiler::AuditStatePlanCompleteness() {
     }
 }
 
-void RenderGraphCompiler::AddEdge(uint32_t src, uint32_t dst, RenderGraph::CompiledEdgeReason reason) {
-    if (src == dst || src == RenderGraph::PassHandle::InvalidIndex ||
-        dst == RenderGraph::PassHandle::InvalidIndex) {
+template<typename MakeReason>
+void RenderGraphCompiler::AddEdge(uint32 src, uint32 dst, MakeReason&& make_reason) {
+    MOER_RDG_COUNT(AddEdgeCalls, 1);
+    if (src == dst || src == RenderGraph::InvalidIndex ||
+        dst == RenderGraph::InvalidIndex) {
         return;
     }
-
-    const auto src_handle = RenderGraph::PassHandle{src, graph.graph_id};
-    const auto dst_handle = RenderGraph::PassHandle{dst, graph.graph_id};
-    auto       edge       = std::find_if(
-        graph.compiled_plan.edges.begin(),
-        graph.compiled_plan.edges.end(),
-        [&](const RenderGraph::CompiledEdge& candidate) {
-            return candidate.src == src_handle && candidate.dst == dst_handle;
-        }
-    );
-    if (edge == graph.compiled_plan.edges.end()) {
-        graph.compiled_plan.edges.push_back(
-            RenderGraph::CompiledEdge{src_handle, dst_handle, {std::move(reason)}}
-        );
-        return;
+    const RenderGraph::CompiledEdge edge{
+        {src, graph.graph_id}, {dst, graph.graph_id}
+    };
+    const uint64 key = (uint64{src} << 32) | dst;
+    if (edge_keys.insert(key).second) {
+        graph.compiled_plan.edges.push_back(edge);
     }
-    if (std::find(edge->reasons.begin(), edge->reasons.end(), reason) == edge->reasons.end()) {
-        edge->reasons.push_back(std::move(reason));
+    if (auto& reasons = graph.compiled_plan.dependency_reasons) {
+        MOER_RDG_COUNT(ReasonAppends, 1);
+        MOER_RDG_COUNT(ReasonGrowths, reasons->size() == reasons->capacity());
+        reasons->push_back({edge, make_reason()});
     }
 }
 
-bool RenderGraphCompiler::BuildTopologicalOrder() {
+void RenderGraphCompiler::SortEdges() {
+    MOER_RDG_PHASE("RenderGraph.Compiler.SortEdges");
     std::sort(
         graph.compiled_plan.edges.begin(),
         graph.compiled_plan.edges.end(),
         [](const RenderGraph::CompiledEdge& lhs, const RenderGraph::CompiledEdge& rhs) {
-            return lhs.src.index < rhs.src.index ||
-                   (lhs.src.index == rhs.src.index && lhs.dst.index < rhs.dst.index);
+            return lhs.src.pass_id < rhs.src.pass_id ||
+                   (lhs.src.pass_id == rhs.src.pass_id && lhs.dst.pass_id < rhs.dst.pass_id);
         }
     );
-    for (auto& edge : graph.compiled_plan.edges) {
-        std::sort(edge.reasons.begin(), edge.reasons.end(), ReasonLess);
+    if (auto& reasons = graph.compiled_plan.dependency_reasons) {
+        std::sort(reasons->begin(), reasons->end(), [](const auto& lhs, const auto& rhs) {
+            const auto lhs_endpoints = std::pair{lhs.edge.src.pass_id, lhs.edge.dst.pass_id};
+            const auto rhs_endpoints = std::pair{rhs.edge.src.pass_id, rhs.edge.dst.pass_id};
+            return lhs_endpoints < rhs_endpoints ||
+                   (lhs_endpoints == rhs_endpoints && ReasonLess(lhs.reason, rhs.reason));
+        });
+        reasons->erase(std::unique(reasons->begin(), reasons->end()), reasons->end());
     }
-
-    std::vector<uint32_t> indegree(graph.passes.size(), 0);
-    for (const auto& edge : graph.compiled_plan.edges) {
-        ++indegree[edge.dst.index];
-    }
-
-    std::vector<bool> scheduled(graph.passes.size(), false);
-    while (graph.compiled_plan.topological_order.size() < graph.passes.size()) {
-        uint32_t next = RenderGraph::PassHandle::InvalidIndex;
-        for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
-            if (!scheduled[pass_index] && indegree[pass_index] == 0) {
-                next = pass_index;
-                break;
-            }
-        }
-        if (next == RenderGraph::PassHandle::InvalidIndex) {
-            return Fail("pass dependency cycle detected");
-        }
-        scheduled[next] = true;
-        graph.compiled_plan.topological_order.push_back(RenderGraph::PassHandle{next, graph.graph_id});
-        for (const auto& edge : graph.compiled_plan.edges) {
-            if (edge.src.index == next) {
-                assert(indegree[edge.dst.index] > 0);
-                --indegree[edge.dst.index];
-            }
-        }
-    }
-    return true;
 }
 
 bool RenderGraphCompiler::BuildExecutionOrder() {
-    graph.compiled_plan.execution_order.reserve(graph.passes.size());
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
-        graph.compiled_plan.execution_order.push_back(RenderGraph::PassHandle{pass_index, graph.graph_id});
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildExecutionOrder");
+    MOER_RDG_PHASE("RenderGraph.Compiler.BuildExecutionOrder");
+    SortEdges();
+    std::pmr::vector<uint32> indegree(graph.passes.size(), 0, &scratch_memory);
+    for (const auto& edge : graph.compiled_plan.edges) {
+        ++indegree[edge.dst.pass_id];
     }
 
-    for (const auto& edge : graph.compiled_plan.edges) {
-        if (edge.src.index >= edge.dst.index) {
-            return Fail("serial declaration order cannot satisfy a compiled dependency");
+    // Preserve the lowest declaration index tie-break without rescanning all passes.
+    std::priority_queue<uint32, std::pmr::vector<uint32>, std::greater<>> ready{
+        std::greater<>{}, std::pmr::vector<uint32>{&scratch_memory}
+    };
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+        if (indegree[pass_index] == 0) {
+            ready.push(pass_index);
         }
+    }
+    execution_position.assign(graph.passes.size(), RenderGraph::InvalidIndex);
+    graph.compiled_plan.execution_order.reserve(graph.passes.size());
+    while (!ready.empty()) {
+        const uint32 next = ready.top();
+        ready.pop();
+        execution_position[next] = static_cast<uint32>(graph.compiled_plan.execution_order.size());
+        graph.compiled_plan.execution_order.push_back(RenderGraph::PassHandle{next, graph.graph_id});
+        for (const auto& edge : OutgoingEdges(graph.compiled_plan.edges, next)) {
+            assert(indegree[edge.dst.pass_id] > 0);
+            if (--indegree[edge.dst.pass_id] == 0) {
+                ready.push(edge.dst.pass_id);
+            }
+        }
+    }
+    if (graph.compiled_plan.execution_order.size() != graph.passes.size()) {
+        return Fail("pass dependency cycle detected");
     }
     return true;
 }
 
 void RenderGraphCompiler::BuildQueuePlan() {
-    std::vector<uint32_t> pass_to_batch(
-        graph.passes.size(), RenderGraph::PassHandle::InvalidIndex
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildQueuePlan");
+    MOER_RDG_PHASE("RenderGraph.Compiler.BuildQueuePlan");
+    std::pmr::vector<uint32> pass_to_batch(
+        graph.passes.size(), RenderGraph::InvalidIndex, &scratch_memory
     );
-    bool force_new_managed_batch = false;
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
-        const auto& pass    = graph.passes[pass_handle.index];
-        if (pass.execution_class == RenderGraph::PassExecutionClass::CpuPrepare) {
-            continue;
-        }
+        const auto& pass    = graph.passes[pass_handle.pass_id];
         const auto  binding = graph.queue_topology.Resolve(pass.domain.queue);
-        if (pass.execution_class == RenderGraph::PassExecutionClass::ExternalControl) {
-            const uint32_t batch_id =
-                static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
-            graph.compiled_plan.queue_batches.push_back(RenderGraph::CompiledQueueBatch{
-                .id               = batch_id,
-                .queue            = binding,
-                .passes           = {pass_handle},
-                .external_control = true,
-            });
-            pass_to_batch[pass_handle.index] = batch_id;
-            force_new_managed_batch          = true;
-            continue;
-        }
-        if (graph.compiled_plan.queue_batches.empty() || force_new_managed_batch ||
-            graph.compiled_plan.queue_batches.back().external_control ||
+        if (graph.compiled_plan.queue_batches.empty() ||
             graph.compiled_plan.queue_batches.back().queue.role != binding.role) {
-            const uint32_t batch_id =
-                static_cast<uint32_t>(graph.compiled_plan.queue_batches.size());
+            const uint32 batch_id =
+                static_cast<uint32>(graph.compiled_plan.queue_batches.size());
             graph.compiled_plan.queue_batches.push_back(RenderGraph::CompiledQueueBatch{
                 .id = batch_id,
                 .queue = binding,
             });
         }
-        force_new_managed_batch = false;
         auto& batch = graph.compiled_plan.queue_batches.back();
         batch.passes.push_back(pass_handle);
-        pass_to_batch[pass_handle.index] = batch.id;
+        pass_to_batch[pass_handle.pass_id] = batch.id;
     }
 
     graph.compiled_plan.pass_barriers.reserve(graph.passes.size());
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
         graph.compiled_plan.pass_barriers.push_back(RenderGraph::CompiledPassBarriers{
             .pass = RenderGraph::PassHandle{pass_index, graph.graph_id},
         });
     }
 
     auto add_batch_dependency = [&](
-                                    uint32_t signal_batch,
-                                    uint32_t wait_batch,
-                                    bool     gpu_wait_required,
-                                    uint32_t edge_index
+                                    uint32 signal_batch,
+                                    uint32 wait_batch,
+                                    bool   gpu_wait_required,
+                                    uint32 edge_index
                                 ) -> RenderGraph::CompiledQueueSync& {
         auto existing = std::find_if(
             graph.compiled_plan.queue_syncs.begin(),
@@ -1537,7 +1514,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
         );
         if (existing != graph.compiled_plan.queue_syncs.end()) {
             existing->gpu_wait_required |= gpu_wait_required;
-            if (edge_index != RenderGraph::PassHandle::InvalidIndex &&
+            if (edge_index != RenderGraph::InvalidIndex &&
                 std::find(
                     existing->dependency_edges.begin(),
                     existing->dependency_edges.end(),
@@ -1550,7 +1527,7 @@ void RenderGraphCompiler::BuildQueuePlan() {
 
         auto& producer = graph.compiled_plan.queue_batches[signal_batch];
         auto& consumer = graph.compiled_plan.queue_batches[wait_batch];
-        const uint32_t sync_id = static_cast<uint32_t>(graph.compiled_plan.queue_syncs.size());
+        const uint32 sync_id  = static_cast<uint32>(graph.compiled_plan.queue_syncs.size());
         graph.compiled_plan.queue_syncs.push_back(RenderGraph::CompiledQueueSync{
             .id                = sync_id,
             .signal_pass       = producer.passes.back(),
@@ -1560,21 +1537,19 @@ void RenderGraphCompiler::BuildQueuePlan() {
             .signal_batch      = signal_batch,
             .wait_batch        = wait_batch,
             .gpu_wait_required = gpu_wait_required,
-            .dependency_edges  = edge_index == RenderGraph::PassHandle::InvalidIndex ?
-                                     std::vector<uint32_t>{} :
-                                     std::vector<uint32_t>{edge_index},
+            .dependency_edges  = edge_index == RenderGraph::InvalidIndex ? std::vector<uint32>{} : std::vector<uint32>{edge_index},
         });
         producer.signal_syncs.push_back(sync_id);
         consumer.wait_syncs.push_back(sync_id);
         return graph.compiled_plan.queue_syncs.back();
     };
 
-    for (uint32_t edge_index = 0; edge_index < graph.compiled_plan.edges.size(); ++edge_index) {
+    for (uint32 edge_index = 0; edge_index < graph.compiled_plan.edges.size(); ++edge_index) {
         const auto& edge = graph.compiled_plan.edges[edge_index];
-        const uint32_t signal_batch = pass_to_batch[edge.src.index];
-        const uint32_t wait_batch   = pass_to_batch[edge.dst.index];
-        if (signal_batch == RenderGraph::PassHandle::InvalidIndex ||
-            wait_batch == RenderGraph::PassHandle::InvalidIndex) {
+        const uint32 signal_batch = pass_to_batch[edge.src.pass_id];
+        const uint32 wait_batch   = pass_to_batch[edge.dst.pass_id];
+        if (signal_batch == RenderGraph::InvalidIndex ||
+            wait_batch == RenderGraph::InvalidIndex) {
             continue;
         }
         if (signal_batch == wait_batch) {
@@ -1590,25 +1565,25 @@ void RenderGraphCompiler::BuildQueuePlan() {
         );
     }
 
-    for (uint32_t wait_batch = 0; wait_batch < graph.compiled_plan.queue_batches.size(); ++wait_batch) {
+    for (uint32 wait_batch = 0; wait_batch < graph.compiled_plan.queue_batches.size(); ++wait_batch) {
         const auto native_queue_id =
             graph.compiled_plan.queue_batches[wait_batch].queue.native_queue_id;
-        for (uint32_t candidate = wait_batch; candidate > 0; --candidate) {
-            const uint32_t signal_batch = candidate - 1;
+        for (uint32 candidate = wait_batch; candidate > 0; --candidate) {
+            const uint32 signal_batch = candidate - 1;
             if (graph.compiled_plan.queue_batches[signal_batch].queue.native_queue_id ==
                 native_queue_id) {
                 add_batch_dependency(
                     signal_batch,
                     wait_batch,
                     false,
-                    RenderGraph::PassHandle::InvalidIndex
+                    RenderGraph::InvalidIndex
                 );
                 break;
             }
         }
     }
 
-    for (uint32_t barrier_index = 0; barrier_index < graph.compiled_plan.barriers.size();
+    for (uint32 barrier_index = 0; barrier_index < graph.compiled_plan.barriers.size();
          ++barrier_index) {
         const auto& barrier = graph.compiled_plan.barriers[barrier_index];
         if (barrier.import_boundary && !barrier.src_pass.IsValid()) {
@@ -1618,8 +1593,8 @@ void RenderGraphCompiler::BuildQueuePlan() {
             graph.compiled_plan.epilogue_barriers.push_back(barrier_index);
         }
         if (barrier.dst_pass.IsValid()) {
-            const uint32_t dst_batch = pass_to_batch[barrier.dst_pass.index];
-            graph.compiled_plan.pass_barriers[barrier.dst_pass.index].before.push_back(barrier_index);
+            const uint32 dst_batch = pass_to_batch[barrier.dst_pass.pass_id];
+            graph.compiled_plan.pass_barriers[barrier.dst_pass.pass_id].before.push_back(barrier_index);
             if (!barrier.src_pass.IsValid() || barrier.queue_dependency) {
                 graph.compiled_plan.queue_batches[dst_batch].pre_barriers.push_back(barrier_index);
             }
@@ -1628,8 +1603,8 @@ void RenderGraphCompiler::BuildQueuePlan() {
             if (!source_pass.IsValid() || !barrier.dst_pass.IsValid()) {
                 return;
             }
-            const uint32_t src_batch = pass_to_batch[source_pass.index];
-            const uint32_t dst_batch = pass_to_batch[barrier.dst_pass.index];
+            const uint32 src_batch = pass_to_batch[source_pass.pass_id];
+            const uint32 dst_batch = pass_to_batch[barrier.dst_pass.pass_id];
             if (graph.compiled_plan.queue_batches[src_batch].queue.native_queue_id ==
                 graph.compiled_plan.queue_batches[dst_batch].queue.native_queue_id) {
                 return;
@@ -1645,12 +1620,12 @@ void RenderGraphCompiler::BuildQueuePlan() {
         if (!barrier.dst_pass.IsValid() || !barrier.queue_dependency) {
             continue;
         }
-        const uint32_t dst_batch = pass_to_batch[barrier.dst_pass.index];
+        const uint32 dst_batch      = pass_to_batch[barrier.dst_pass.pass_id];
         auto attach_to_sync = [&](RenderGraph::PassHandle source_pass) {
             if (!source_pass.IsValid()) {
                 return;
             }
-            const uint32_t src_batch = pass_to_batch[source_pass.index];
+            const uint32 src_batch = pass_to_batch[source_pass.pass_id];
             if (graph.compiled_plan.queue_batches[src_batch].queue.native_queue_id ==
                 graph.compiled_plan.queue_batches[dst_batch].queue.native_queue_id) {
                 return;
@@ -1674,59 +1649,16 @@ void RenderGraphCompiler::BuildQueuePlan() {
     }
 }
 
-void RenderGraphCompiler::BuildDependencyLevels() {
-    std::vector<uint32_t> indegree(graph.passes.size(), 0);
-    for (const auto& edge : graph.compiled_plan.edges) {
-        ++indegree[edge.dst.index];
-    }
-
-    std::vector<bool> scheduled(graph.passes.size(), false);
-    uint32_t          scheduled_count = 0;
-    while (scheduled_count < graph.passes.size()) {
-        RenderGraph::CompiledDependencyLevel level{};
-        for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
-            if (!scheduled[pass_index] && indegree[pass_index] == 0) {
-                level.passes.push_back(RenderGraph::PassHandle{pass_index, graph.graph_id});
-            }
-        }
-        assert(!level.passes.empty());
-        for (const auto pass : level.passes) {
-            scheduled[pass.index] = true;
-            ++scheduled_count;
-        }
-        for (const auto pass : level.passes) {
-            for (const auto& edge : graph.compiled_plan.edges) {
-                if (edge.src == pass && !scheduled[edge.dst.index]) {
-                    assert(indegree[edge.dst.index] > 0);
-                    --indegree[edge.dst.index];
-                }
-            }
-        }
-        graph.compiled_plan.dependency_levels.push_back(std::move(level));
-    }
-}
-
 void RenderGraphCompiler::BuildFrontendRecordUnits() {
-    std::vector<uint32_t> pass_to_dependency_level(
-        graph.passes.size(),
-        RenderGraph::PassHandle::InvalidIndex
-    );
-    for (uint32_t level_index = 0;
-         level_index < graph.compiled_plan.dependency_levels.size();
-         ++level_index) {
-        for (const auto pass :
-             graph.compiled_plan.dependency_levels[level_index].passes) {
-            pass_to_dependency_level[pass.index] = level_index;
-        }
-    }
-
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildFrontendRecordUnits");
+    MOER_RDG_PHASE("RenderGraph.Compiler.BuildFrontendRecordUnits");
     // Preserve one stable frontend source identity per pass in execution order.
     graph.compiled_plan.frontend_record_units.reserve(
         graph.compiled_plan.execution_order.size()
     );
     for (const auto pass_handle : graph.compiled_plan.execution_order) {
-        const auto& pass = graph.passes[pass_handle.index];
-        const auto source_index = static_cast<uint32_t>(
+        const auto& pass = graph.passes[pass_handle.pass_id];
+        const auto  source_index = static_cast<uint32>(
             graph.compiled_plan.frontend_record_units.size()
         );
         graph.compiled_plan.frontend_record_units.push_back(
@@ -1734,34 +1666,35 @@ void RenderGraphCompiler::BuildFrontendRecordUnits() {
                 .source_index = source_index,
                 .target_queue = graph.queue_topology.Resolve(pass.domain.queue),
                 .pass         = pass_handle,
-                .record_execution_class = pass.execution_class,
+                .record_policy = pass.record_policy,
+                .recording_workload = pass.recording_workload,
                 .native_translate_class = pass.translate_execution_class,
-                .estimated_record_work  = pass.workload,
-                .dependency_level_index =
-                    pass_to_dependency_level[pass_handle.index],
+
             }
         );
     }
 }
 
 void RenderGraphCompiler::BuildFrontendDispatchGroups() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildFrontendDispatchGroups");
+    MOER_RDG_PHASE("RenderGraph.Compiler.BuildFrontendDispatchGroups");
     // Graph edges describe GPU execution, state, and ownership. They do not
     // order frontend Record callbacks: every callback consumes immutable
     // prepared data and writes a private command stream. Only the declared CPU
-    // execution class creates a frontend dispatch boundary.
-    uint32_t unit_index = 0;
+    // recording policy creates a frontend dispatch boundary.
+    uint32 unit_index = 0;
     while (unit_index < graph.compiled_plan.frontend_record_units.size()) {
         const auto& first =
             graph.compiled_plan.frontend_record_units[unit_index];
-        uint32_t group_end = unit_index + 1;
-        if (first.record_execution_class ==
-            RenderGraph::PassExecutionClass::ParallelRecordEligible) {
+        uint32 group_end = unit_index + 1;
+        if (first.record_policy ==
+            RenderGraph::PassRecordPolicy::ParallelAllowed) {
             while (group_end <
                    graph.compiled_plan.frontend_record_units.size()) {
                 const auto& candidate =
                     graph.compiled_plan.frontend_record_units[group_end];
-                if (candidate.record_execution_class !=
-                    RenderGraph::PassExecutionClass::ParallelRecordEligible) {
+                if (candidate.record_policy !=
+                    RenderGraph::PassRecordPolicy::ParallelAllowed) {
                     break;
                 }
                 ++group_end;
@@ -1772,7 +1705,7 @@ void RenderGraphCompiler::BuildFrontendDispatchGroups() {
             RenderGraph::CompiledFrontendDispatchGroup{
                 .first_unit = unit_index,
                 .unit_count = group_end - unit_index,
-                .record_execution_class = first.record_execution_class,
+                .record_policy = first.record_policy,
             }
         );
         unit_index = group_end;
@@ -1780,40 +1713,37 @@ void RenderGraphCompiler::BuildFrontendDispatchGroups() {
 }
 
 void RenderGraphCompiler::BuildLifetimes() {
-    std::vector<uint32_t> execution_position(graph.passes.size(), RenderGraph::PassHandle::InvalidIndex);
-    for (uint32_t position = 0; position < graph.compiled_plan.execution_order.size(); ++position) {
-        execution_position[graph.compiled_plan.execution_order[position].index] = position;
-    }
-
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildLifetimes");
+    MOER_RDG_PHASE("RenderGraph.Compiler.BuildLifetimes");
     for (const auto& access : graph.compiled_plan.accesses) {
-        auto&          resource = graph.resources[access.resource.index];
-        const uint32_t position = execution_position[access.pass.index];
+        auto&          resource = graph.resources[access.resource.resource_id];
+        const uint32   position = execution_position[access.pass.pass_id];
         resource.first_use      = std::min(resource.first_use, position);
-        resource.last_use       = resource.last_use == RenderGraph::PassHandle::InvalidIndex ?
+        resource.last_use       = resource.last_use == RenderGraph::InvalidIndex ?
                                       position :
                                       std::max(resource.last_use, position);
     }
 
-    for (uint32_t pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
-        const uint32_t position = execution_position[pass_index];
+    for (uint32 pass_index = 0; pass_index < graph.passes.size(); ++pass_index) {
+        const uint32 position = execution_position[pass_index];
         for (const auto reference : graph.passes[pass_index].references) {
-            auto& resource = graph.resources[reference.index];
+            auto& resource = graph.resources[reference.resource_id];
             resource.first_use = std::min(resource.first_use, position);
-            resource.last_use  = resource.last_use == RenderGraph::PassHandle::InvalidIndex ?
+            resource.last_use  = resource.last_use == RenderGraph::InvalidIndex ?
                                      position :
                                      std::max(resource.last_use, position);
         }
     }
 
     graph.compiled_plan.resources.reserve(graph.resources.size());
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
+    for (uint32 resource_index = 0; resource_index < graph.resources.size(); ++resource_index) {
         const auto& resource = graph.resources[resource_index];
         graph.compiled_plan.resources.push_back(RenderGraph::CompiledResource{
             .resource      = RenderGraph::ResourceHandle{resource_index, graph.graph_id},
             .first_use     = resource.first_use,
             .last_use      = resource.last_use,
             .version_count = resource_version_counts[resource_index],
-            .transient_slot = RenderGraph::PassHandle::InvalidIndex,
+            .transient_slot = RenderGraph::InvalidIndex,
             .imported      = resource.imported,
             .exported      = resource.exported
         });
@@ -1821,43 +1751,44 @@ void RenderGraphCompiler::BuildLifetimes() {
 }
 
 void RenderGraphCompiler::BuildTransientAliasPlan() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.BuildTransientAliasPlan");
+    MOER_RDG_PHASE("RenderGraph.Compiler.BuildTransientAliasPlan");
     using CompiledAccess = RenderGraph::CompiledAccess;
 
     struct Candidate {
-        uint32_t              resource_index = RenderGraph::PassHandle::InvalidIndex;
+        uint32                resource_index = RenderGraph::InvalidIndex;
         const CompiledAccess* first_access   = nullptr;
         const CompiledAccess* last_access    = nullptr;
         bool                  reusable       = false;
     };
 
     struct AliasSlot {
-        uint32_t                  id              = RenderGraph::PassHandle::InvalidIndex;
-        uint32_t                  tail_resource   = RenderGraph::PassHandle::InvalidIndex;
-        uint32_t                  available_after = RenderGraph::PassHandle::InvalidIndex;
+        uint32 id              = RenderGraph::InvalidIndex;
+        uint32 tail_resource   = RenderGraph::InvalidIndex;
+        uint32 available_after = RenderGraph::InvalidIndex;
     };
 
     const auto is_whole_range =
         [](const RenderGraph::ResourceDeclaration& resource,
            const RenderGraph::ResourceRange&       range) {
-            if (range.kind != resource.kind) {
+            if (RenderGraph::GetRangeKind(range) != resource.kind) {
                 return false;
             }
             if (resource.kind == ResourceKind::Texture) {
-                return range.texture.aspects == resource.texture_desc.aspects &&
-                       range.texture.mip_first == 0 &&
-                       range.texture.mip_count == resource.texture_desc.mip_count &&
-                       range.texture.layer_first == 0 &&
-                       range.texture.layer_count == resource.texture_desc.layer_count;
+                const auto& texture = std::get<RenderGraph::TextureRange>(range);
+                return texture.aspects == resource.texture_desc.aspects && texture.mip_first == 0 &&
+                       texture.mip_count == resource.texture_desc.mip_count && texture.layer_first == 0 &&
+                       texture.layer_count == resource.texture_desc.layer_count;
             }
             if (resource.kind == ResourceKind::Buffer) {
-                return range.buffer.offset == 0 &&
-                       range.buffer.size == resource.buffer_desc.byte_size;
+                const auto& buffer = std::get<RenderGraph::BufferRange>(range);
+                return buffer.offset == 0 && buffer.size == resource.buffer_desc.byte_size;
             }
             return false;
         };
 
     const auto descriptors_match =
-        [&](uint32_t lhs_index, uint32_t rhs_index) {
+        [&](uint32 lhs_index, uint32 rhs_index) {
             const auto& lhs = graph.resources[lhs_index];
             const auto& rhs = graph.resources[rhs_index];
             if (lhs.kind != rhs.kind) {
@@ -1876,18 +1807,10 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
             return false;
         };
 
-    std::vector<uint32_t> execution_position(
-        graph.passes.size(),
-        RenderGraph::PassHandle::InvalidIndex
-    );
-    for (uint32_t position = 0; position < graph.compiled_plan.execution_order.size();
-         ++position) {
-        execution_position[graph.compiled_plan.execution_order[position].index] = position;
-    }
-
-    std::vector<Candidate> candidates{};
+    std::pmr::vector<Candidate> candidates{&scratch_memory};
     candidates.reserve(graph.resources.size());
-    for (uint32_t resource_index = 0; resource_index < graph.resources.size();
+    std::pmr::vector<const CompiledAccess*> accesses{&scratch_memory};
+    for (uint32 resource_index = 0; resource_index < graph.resources.size();
          ++resource_index) {
         auto&       compiled_resource = graph.compiled_plan.resources[resource_index];
         const auto& resource          = graph.resources[resource_index];
@@ -1896,14 +1819,14 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
             (resource.transient_texture_desc.has_value() ||
              resource.transient_buffer_desc.has_value());
         if (!allocation_backed ||
-            compiled_resource.first_use == RenderGraph::PassHandle::InvalidIndex) {
+            compiled_resource.first_use == RenderGraph::InvalidIndex) {
             continue;
         }
 
         Candidate candidate{.resource_index = resource_index};
-        std::vector<const CompiledAccess*> accesses{};
+        accesses.clear();
         for (const auto& access : graph.compiled_plan.accesses) {
-            if (access.resource.index == resource_index) {
+            if (access.resource.resource_id == resource_index) {
                 accesses.push_back(&access);
             }
         }
@@ -1917,17 +1840,17 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
                         pass.references.begin(),
                         pass.references.end(),
                         [&](RenderGraph::ResourceHandle reference) {
-                            return reference.index == resource_index;
+                            return reference.resource_id == resource_index;
                         }
                     );
                 }
             );
 
-        uint32_t first_access_count = 0;
-        uint32_t last_access_count  = 0;
+        uint32   first_access_count = 0;
+        uint32   last_access_count  = 0;
         bool     accesses_are_safe  = !accesses.empty();
         for (const auto* access : accesses) {
-            const uint32_t position = execution_position[access->pass.index];
+            const uint32 position = execution_position[access->pass.pass_id];
             if (position == compiled_resource.first_use) {
                 candidate.first_access = access;
                 ++first_access_count;
@@ -1937,9 +1860,9 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
                 ++last_access_count;
             }
             accesses_are_safe &=
-                position != RenderGraph::PassHandle::InvalidIndex &&
+                position != RenderGraph::InvalidIndex &&
                 access->domain.queue == RenderGraph::QueueRole::Graphics &&
-                !access->state.IsAutomatic() && !access->state.IsUndefined() &&
+                !RenderGraph::IsUnspecified(access->state) && !RenderGraph::IsUndefined(access->state) &&
                 is_whole_range(resource, access->range);
         }
 
@@ -1966,8 +1889,8 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
         }
     );
 
-    uint32_t               next_slot = 0;
-    std::vector<AliasSlot> reusable_slots{};
+    uint32                      next_slot = 0;
+    std::pmr::vector<AliasSlot> reusable_slots{&scratch_memory};
     for (const auto& candidate : candidates) {
         auto& compiled_resource =
             graph.compiled_plan.resources[candidate.resource_index];
@@ -1995,7 +1918,7 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
             resource_cells[selected_slot->tail_resource].size() == 1) {
             predecessor_cell =
                 &resource_cells[selected_slot->tail_resource].front();
-            alias_sources = predecessor_cell->readers;
+            alias_sources.assign(predecessor_cell->readers.begin(), predecessor_cell->readers.end());
             if (predecessor_cell->last_writer_source.pass.IsValid() &&
                 std::find(
                     alias_sources.begin(),
@@ -2011,8 +1934,8 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
                 alias_sources.end(),
                 [&](const RenderGraph::CompiledBarrierSource& lhs,
                     const RenderGraph::CompiledBarrierSource& rhs) {
-                    return execution_position[lhs.pass.index] <
-                           execution_position[rhs.pass.index];
+                    return execution_position[lhs.pass.pass_id] <
+                           execution_position[rhs.pass.pass_id];
                 }
             );
             alias_sources.erase(
@@ -2025,21 +1948,21 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
         }
 
         RenderGraph::CompiledBarrier* alias_barrier       = nullptr;
-        uint32_t alias_barrier_index =
-            RenderGraph::PassHandle::InvalidIndex;
+        uint32                        alias_barrier_index =
+            RenderGraph::InvalidIndex;
         if (selected_slot != nullptr && predecessor_cell != nullptr &&
             primary_source != nullptr &&
-            execution_position[primary_source->pass.index] <
+            execution_position[primary_source->pass.pass_id] <
                 compiled_resource.first_use) {
-            for (uint32_t barrier_index = 0;
+            for (uint32 barrier_index = 0;
                  barrier_index < graph.compiled_plan.barriers.size();
                  ++barrier_index) {
                 auto& barrier = graph.compiled_plan.barriers[barrier_index];
-                if (barrier.resource.index == candidate.resource_index &&
+                if (barrier.resource.resource_id == candidate.resource_index &&
                     barrier.dst_pass == candidate.first_access->pass &&
                     barrier.range == candidate.first_access->range &&
                     !barrier.src_pass.IsValid() && barrier.sources.empty() &&
-                    barrier.before_state.IsUndefined() &&
+                    RenderGraph::IsUndefined(barrier.before_state) &&
                     barrier.after_state == candidate.first_access->state &&
                     barrier.after_access == candidate.first_access->mode &&
                     !barrier.import_boundary && !barrier.export_boundary) {
@@ -2105,20 +2028,22 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
         );
         for (const auto& source : alias_sources) {
             assert(
-                execution_position[source.pass.index] <
+                execution_position[source.pass.pass_id] <
                 compiled_resource.first_use
             );
             AddEdge(
-                source.pass.index,
-                candidate.first_access->pass.index,
-                RenderGraph::CompiledEdgeReason{
-                    .kind = RenderGraph::EdgeReasonKind::TransientAlias,
-                    .resource = RenderGraph::ResourceHandle{
-                        candidate.resource_index, graph.graph_id
-                    },
-                    .range          = candidate.first_access->range,
-                    .input_version  = candidate.first_access->input_version,
-                    .output_version = candidate.first_access->output_version,
+                source.pass.pass_id,
+                candidate.first_access->pass.pass_id,
+                [&] {
+                    return RenderGraph::CompiledEdgeReason{
+                        .kind = RenderGraph::EdgeReasonKind::TransientAlias,
+                        .resource = RenderGraph::ResourceHandle{
+                            candidate.resource_index, graph.graph_id
+                        },
+                        .range          = candidate.first_access->range,
+                        .input_version  = candidate.first_access->input_version,
+                        .output_version = candidate.first_access->output_version,
+                    };
                 }
             );
         }
@@ -2130,41 +2055,20 @@ void RenderGraphCompiler::BuildTransientAliasPlan() {
     // Alias edges are added after the semantic topological audit. They always
     // point forward in the immutable execution order, so the existing order
     // remains valid; restore canonical edge/reason order for all consumers.
-    std::sort(
-        graph.compiled_plan.edges.begin(),
-        graph.compiled_plan.edges.end(),
-        [](const RenderGraph::CompiledEdge& lhs, const RenderGraph::CompiledEdge& rhs) {
-            return lhs.src.index < rhs.src.index ||
-                   (lhs.src.index == rhs.src.index && lhs.dst.index < rhs.dst.index);
-        }
-    );
-    for (auto& edge : graph.compiled_plan.edges) {
-        std::sort(edge.reasons.begin(), edge.reasons.end(), ReasonLess);
+    if (!graph.compiled_plan.alias_boundaries.empty()) {
+        SortEdges();
     }
 }
 
 bool RenderGraphCompiler::ValidateTransientAliasPlan() {
+    MOER_PROFILE_SCOPE("RenderGraph.Compiler.ValidateTransientAliasPlan");
+    MOER_RDG_PHASE("RenderGraph.Compiler.ValidateTransientAliasPlan");
     const auto& plan = graph.compiled_plan;
     if (plan.resources.size() != graph.resources.size()) {
         return Fail("transient alias plan has an incomplete resource table");
     }
 
-    std::vector<uint32_t> execution_position(
-        graph.passes.size(),
-        RenderGraph::PassHandle::InvalidIndex
-    );
-    std::vector<uint32_t> topological_position(
-        graph.passes.size(),
-        RenderGraph::PassHandle::InvalidIndex
-    );
-    for (uint32_t position = 0; position < plan.execution_order.size(); ++position) {
-        execution_position[plan.execution_order[position].index] = position;
-    }
-    for (uint32_t position = 0; position < plan.topological_order.size(); ++position) {
-        topological_position[plan.topological_order[position].index] = position;
-    }
-
-    const auto descriptors_match = [&](uint32_t lhs_index, uint32_t rhs_index) {
+    const auto descriptors_match = [&](uint32 lhs_index, uint32 rhs_index) {
         const auto& lhs = graph.resources[lhs_index];
         const auto& rhs = graph.resources[rhs_index];
         if (lhs.kind != rhs.kind) {
@@ -2183,45 +2087,26 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         return false;
     };
 
-    const auto has_alias_edge =
+    const auto has_dependency_edge =
         [&](RenderGraph::PassHandle source,
-            RenderGraph::PassHandle destination,
-            RenderGraph::ResourceHandle resource,
-            const RenderGraph::ResourceRange& range) {
+            RenderGraph::PassHandle destination) {
+            const auto outgoing = OutgoingEdges(plan.edges, source.pass_id);
             return std::any_of(
-                plan.edges.begin(),
-                plan.edges.end(),
+                outgoing.begin(),
+                outgoing.end(),
                 [&](const RenderGraph::CompiledEdge& edge) {
-                    return edge.src == source && edge.dst == destination &&
-                           std::any_of(
-                               edge.reasons.begin(),
-                               edge.reasons.end(),
-                               [&](const RenderGraph::CompiledEdgeReason& reason) {
-                                   return reason.kind ==
-                                              RenderGraph::EdgeReasonKind::TransientAlias &&
-                                          reason.resource == resource &&
-                                          reason.range == range;
-                               }
-                           );
+                    return edge.src == source && edge.dst == destination;
                 }
             );
         };
 
-    for (const auto& edge : plan.edges) {
-        if (!graph.IsValidPass(edge.src) || !graph.IsValidPass(edge.dst) ||
-            topological_position[edge.src.index] ==
-                RenderGraph::PassHandle::InvalidIndex ||
-            topological_position[edge.dst.index] ==
-                RenderGraph::PassHandle::InvalidIndex ||
-            topological_position[edge.src.index] >=
-                topological_position[edge.dst.index]) {
-            return Fail(
-                "transient alias planning invalidated the compiled topological order"
-            );
-        }
-    }
-
-    std::vector<uint32_t> alias_barrier_owners(plan.barriers.size(), 0);
+    // Semantic edges were validated when selecting execution_order. Every new
+    // alias edge is checked against that same rank through its frontier below.
+    // With no alias boundaries every owner count is zero; do not allocate a
+    // barrier-sized table to represent that constant. Still reject orphan barriers.
+    std::pmr::vector<uint32> alias_barrier_owners(
+        plan.alias_boundaries.empty() ? 0 : plan.barriers.size(), 0, &scratch_memory
+    );
     for (const auto& alias : plan.alias_boundaries) {
         if (!graph.IsValidResource(alias.predecessor_resource) ||
             !graph.IsValidResource(alias.successor_resource) ||
@@ -2232,19 +2117,19 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
             return Fail("transient alias boundary contains an invalid handle or index");
         }
 
-        const uint32_t predecessor_index = alias.predecessor_resource.index;
-        const uint32_t successor_index   = alias.successor_resource.index;
+        const uint32 predecessor_index       = alias.predecessor_resource.resource_id;
+        const uint32 successor_index         = alias.successor_resource.resource_id;
         const auto& predecessor = plan.resources[predecessor_index];
         const auto& successor   = plan.resources[successor_index];
         const auto& predecessor_declaration = graph.resources[predecessor_index];
         const auto& successor_declaration   = graph.resources[successor_index];
-        if (predecessor.transient_slot == RenderGraph::PassHandle::InvalidIndex ||
+        if (predecessor.transient_slot == RenderGraph::InvalidIndex ||
             predecessor.transient_slot != alias.transient_slot ||
             successor.transient_slot != alias.transient_slot ||
-            predecessor.first_use == RenderGraph::PassHandle::InvalidIndex ||
-            predecessor.last_use == RenderGraph::PassHandle::InvalidIndex ||
-            successor.first_use == RenderGraph::PassHandle::InvalidIndex ||
-            successor.last_use == RenderGraph::PassHandle::InvalidIndex ||
+            predecessor.first_use == RenderGraph::InvalidIndex ||
+            predecessor.last_use == RenderGraph::InvalidIndex ||
+            successor.first_use == RenderGraph::InvalidIndex ||
+            successor.last_use == RenderGraph::InvalidIndex ||
             predecessor.last_use >= successor.first_use ||
             predecessor_declaration.imported ||
             successor_declaration.imported ||
@@ -2268,24 +2153,19 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
             return Fail("transient alias boundary and barrier metadata disagree");
         }
 
-        for (uint32_t source_index = 0;
+        for (uint32 source_index = 0;
              source_index < alias.source_frontier.size();
              ++source_index) {
             const auto source = alias.source_frontier[source_index];
             if (!graph.IsValidPass(source) ||
                 barrier.sources[source_index].pass != source ||
-                execution_position[source.index] ==
-                    RenderGraph::PassHandle::InvalidIndex ||
-                execution_position[alias.dst_pass.index] ==
-                    RenderGraph::PassHandle::InvalidIndex ||
-                execution_position[source.index] >=
-                    execution_position[alias.dst_pass.index] ||
-                !has_alias_edge(
-                    source,
-                    alias.dst_pass,
-                    alias.successor_resource,
-                    barrier.range
-                )) {
+                execution_position[source.pass_id] ==
+                    RenderGraph::InvalidIndex ||
+                execution_position[alias.dst_pass.pass_id] ==
+                    RenderGraph::InvalidIndex ||
+                execution_position[source.pass_id] >=
+                    execution_position[alias.dst_pass.pass_id] ||
+                !has_dependency_edge(source, alias.dst_pass)) {
                 return Fail(
                     "transient alias source frontier is not fully ordered before its successor"
                 );
@@ -2296,9 +2176,9 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         }
     }
 
-    for (uint32_t barrier_index = 0; barrier_index < plan.barriers.size();
+    for (uint32 barrier_index = 0; barrier_index < plan.barriers.size();
          ++barrier_index) {
-        const uint32_t owner_count = alias_barrier_owners[barrier_index];
+        const uint32 owner_count = alias_barrier_owners.empty() ? 0 : alias_barrier_owners[barrier_index];
         if ((plan.barriers[barrier_index].transient_alias && owner_count != 1) ||
             (!plan.barriers[barrier_index].transient_alias && owner_count != 0)) {
             return Fail(
@@ -2307,17 +2187,18 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         }
     }
 
-    uint32_t max_slot = 0;
+    uint32   max_slot = 0;
     bool     has_slot = false;
     for (const auto& resource : plan.resources) {
-        if (resource.transient_slot != RenderGraph::PassHandle::InvalidIndex) {
+        if (resource.transient_slot != RenderGraph::InvalidIndex) {
             max_slot = std::max(max_slot, resource.transient_slot);
             has_slot = true;
         }
     }
-    for (uint32_t slot = 0; has_slot && slot <= max_slot; ++slot) {
-        std::vector<uint32_t> occupants{};
-        for (uint32_t resource_index = 0; resource_index < plan.resources.size();
+    std::pmr::vector<uint32> occupants{&scratch_memory};
+    for (uint32 slot = 0; has_slot && slot <= max_slot; ++slot) {
+        occupants.clear();
+        for (uint32 resource_index = 0; resource_index < plan.resources.size();
              ++resource_index) {
             if (plan.resources[resource_index].transient_slot == slot) {
                 occupants.push_back(resource_index);
@@ -2329,7 +2210,7 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
         std::sort(
             occupants.begin(),
             occupants.end(),
-            [&](uint32_t lhs, uint32_t rhs) {
+            [&](uint32 lhs, uint32 rhs) {
                 const auto& lhs_resource = plan.resources[lhs];
                 const auto& rhs_resource = plan.resources[rhs];
                 return lhs_resource.first_use < rhs_resource.first_use ||
@@ -2337,18 +2218,18 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
                         lhs < rhs);
             }
         );
-        for (uint32_t index = 0; index < occupants.size(); ++index) {
+        for (uint32 index = 0; index < occupants.size(); ++index) {
             const auto resource_index = occupants[index];
             const auto& resource      = plan.resources[resource_index];
-            if (resource.first_use == RenderGraph::PassHandle::InvalidIndex ||
-                resource.last_use == RenderGraph::PassHandle::InvalidIndex ||
+            if (resource.first_use == RenderGraph::InvalidIndex ||
+                resource.last_use == RenderGraph::InvalidIndex ||
                 graph.resources[resource_index].imported) {
                 return Fail("transient slot contains an inactive or imported resource");
             }
             if (index == 0) {
                 continue;
             }
-            const uint32_t predecessor_index = occupants[index - 1];
+            const uint32 predecessor_index = occupants[index - 1];
             const auto& predecessor = plan.resources[predecessor_index];
             if (predecessor.last_use >= resource.first_use ||
                 !descriptors_match(predecessor_index, resource_index)) {
@@ -2361,9 +2242,9 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
                 plan.alias_boundaries.end(),
                 [&](const RenderGraph::CompiledAliasBoundary& alias) {
                     return alias.transient_slot == slot &&
-                           alias.predecessor_resource.index ==
+                           alias.predecessor_resource.resource_id ==
                                predecessor_index &&
-                           alias.successor_resource.index == resource_index;
+                           alias.successor_resource.resource_id == resource_index;
                 }
             );
             if (!has_boundary) {
@@ -2378,32 +2259,30 @@ bool RenderGraphCompiler::ValidateTransientAliasPlan() {
 }
 
 bool RenderGraphCompiler::RangesOverlap(const ResourceRange& lhs, const ResourceRange& rhs) {
-    if (lhs.kind != rhs.kind) {
+    if (lhs.index() != rhs.index()) {
         return false;
     }
-    switch (lhs.kind) {
-        case ResourceKind::Texture: {
-            if ((AspectMask(lhs.texture.aspects) & AspectMask(rhs.texture.aspects)) == 0) {
-                return false;
-            }
-            const uint32_t lhs_mip_end   = lhs.texture.mip_first + lhs.texture.mip_count;
-            const uint32_t rhs_mip_end   = rhs.texture.mip_first + rhs.texture.mip_count;
-            const uint32_t lhs_layer_end = lhs.texture.layer_first + lhs.texture.layer_count;
-            const uint32_t rhs_layer_end = rhs.texture.layer_first + rhs.texture.layer_count;
-            return lhs.texture.mip_first < rhs_mip_end && rhs.texture.mip_first < lhs_mip_end &&
-                   lhs.texture.layer_first < rhs_layer_end && rhs.texture.layer_first < lhs_layer_end;
+    if (const auto* left = std::get_if<RenderGraph::TextureRange>(&lhs)) {
+        const auto& right = std::get<RenderGraph::TextureRange>(rhs);
+        if ((AspectMask(left->aspects) & AspectMask(right.aspects)) == 0) {
+            return false;
         }
-        case ResourceKind::Buffer:
-            if (lhs.buffer.size == RenderGraph::RemainingBufferRange ||
-                rhs.buffer.size == RenderGraph::RemainingBufferRange) {
-                return true;
-            }
-            return lhs.buffer.offset < rhs.buffer.offset + rhs.buffer.size &&
-                   rhs.buffer.offset < lhs.buffer.offset + lhs.buffer.size;
-        case ResourceKind::Token:
-            return true;
+        const uint32 lhs_mip_end   = left->mip_first + left->mip_count;
+        const uint32 rhs_mip_end   = right.mip_first + right.mip_count;
+        const uint32 lhs_layer_end = left->layer_first + left->layer_count;
+        const uint32 rhs_layer_end = right.layer_first + right.layer_count;
+        return left->mip_first < rhs_mip_end && right.mip_first < lhs_mip_end &&
+               left->layer_first < rhs_layer_end && right.layer_first < lhs_layer_end;
     }
-    return false;
+    if (const auto* left = std::get_if<RenderGraph::BufferRange>(&lhs)) {
+        const auto& right = std::get<RenderGraph::BufferRange>(rhs);
+        if (left->size == RenderGraph::RemainingBufferRange ||
+            right.size == RenderGraph::RemainingBufferRange) {
+            return true;
+        }
+        return left->offset < right.offset + right.size && right.offset < left->offset + left->size;
+    }
+    return true;
 }
 
 bool RenderGraphCompiler::Fail(std::string message) {

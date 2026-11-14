@@ -11,12 +11,12 @@
 #include "rhi/RHIResource.h"
 #include "shader/ShaderCommon.h"
 
-#include <cstdint>
-template<uint32_t Alignment>
+#include "misc/Types.h"
+template<Moer::uint32 Alignment>
 concept concept_valid_alignment =
     (Alignment == 2 || Alignment == 4 || Alignment == 8 || Alignment == 16) == true;
 
-template<typename TargetType, uint32_t Alignment>
+template<typename TargetType, Moer::uint32 Alignment>
     requires concept_valid_alignment<Alignment>
 struct AlignType {
     ALIGNED_TYPE_DEF(TargetType, Type, Alignment);

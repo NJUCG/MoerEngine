@@ -2,9 +2,9 @@
 
 #include "misc/Traits.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
 #include <limits>
 
 namespace Moer::Render {
@@ -12,8 +12,8 @@ namespace Moer::Render {
 // Raster bloom currently owns six explicit mip levels. Keeping the native
 // scene extent at least 32 pixels makes that fixed chain valid while a docked
 // SceneColor viewport is being collapsed or resized.
-inline constexpr uint k_min_scene_render_extent = 32u;
-inline constexpr uint8_t k_scene_render_extent_stable_observations = 2u;
+inline constexpr uint32 k_min_scene_render_extent                 = 32u;
+inline constexpr uint8  k_scene_render_extent_stable_observations = 2u;
 
 struct SceneRenderExtentRequest {
     uint2 extent{};
@@ -60,9 +60,9 @@ struct SceneRenderExtentRequest {
     const auto quantize = [](float value) noexcept {
         const double bounded = std::min(
             static_cast<double>(value),
-            static_cast<double>(std::numeric_limits<uint>::max())
+            static_cast<double>(std::numeric_limits<uint32>::max())
         );
-        return std::max(k_min_scene_render_extent, static_cast<uint>(bounded));
+        return std::max(k_min_scene_render_extent, static_cast<uint32>(bounded));
     };
 
     return SceneRenderExtentRequest{
@@ -140,7 +140,7 @@ private:
 
     uint2   active_extent{};
     uint2   pending_extent{};
-    uint8_t pending_observations = 0u;
+    uint8   pending_observations = 0u;
     bool    pending_valid        = false;
 };
 

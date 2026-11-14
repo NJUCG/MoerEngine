@@ -1,8 +1,8 @@
 #include "rhi/RHIGpuScope.h"
-
+#include "misc/Types.h"
 #include <algorithm>
-#include <cassert>
 #include <atomic>
+#include <cassert>
 #include <cmath>
 #include <limits>
 #include <mutex>
@@ -23,11 +23,11 @@ constexpr std::size_t kInvalidStreamSlot =
     std::numeric_limits<std::size_t>::max();
 
 #if defined(MOER_RHI_GPU_SCOPE_TEST_HOOKS)
-std::atomic<std::atomic_uint32_t*> g_admission_pause_entered{nullptr};
+std::atomic<std::atomic<uint32>*>  g_admission_pause_entered{nullptr};
 std::atomic<std::atomic_bool*>     g_admission_pause_release{nullptr};
 
 void PauseScopeAdmissionForTesting() noexcept {
-    std::atomic_uint32_t* entered =
+    std::atomic<uint32>* entered =
         g_admission_pause_entered.load(std::memory_order_acquire);
     if (entered == nullptr) {
         return;
@@ -72,16 +72,16 @@ bool SameTimestampDomain(
            _lhs.family_id == _rhs.family_id;
 }
 
-std::uint64_t TimestampMask(std::uint32_t _valid_bits) noexcept {
+uint64 TimestampMask(uint32 _valid_bits) noexcept {
     return _valid_bits == 64 ?
-        std::numeric_limits<std::uint64_t>::max() :
-        (std::uint64_t{1} << _valid_bits) - 1;
+               std::numeric_limits<uint64>::max() :
+               (uint64{1} << _valid_bits) - 1;
 }
 
-std::uint64_t TimestampDelta(
-    std::uint64_t _begin_tick,
-    std::uint64_t _end_tick,
-    std::uint32_t _valid_bits
+uint64 TimestampDelta(
+    uint64 _begin_tick,
+    uint64 _end_tick,
+    uint32 _valid_bits
 ) noexcept {
     return (_end_tick - _begin_tick) & TimestampMask(_valid_bits);
 }
@@ -98,10 +98,10 @@ bool NearlyEqualDuration(double _lhs, double _rhs) noexcept {
 }
 
 void UpdateHighWater(
-    std::atomic<std::uint64_t>& _high_water,
-    std::uint64_t               _value
+    std::atomic<uint64>& _high_water,
+    uint64               _value
 ) noexcept {
-    std::uint64_t observed = _high_water.load(std::memory_order_relaxed);
+    uint64 observed = _high_water.load(std::memory_order_relaxed);
     while (observed < _value &&
            !_high_water.compare_exchange_weak(
                observed,
@@ -130,20 +130,20 @@ void AssignBoundedNoexcept(
 } // namespace
 
 struct ScopeSlot {
-    std::uint64_t scope_id{0};
-    std::uint64_t parent_scope_id{0};
-    std::uint64_t source_order{0};
-    std::uint64_t local_order{0};
-    std::uint32_t depth{0};
+    uint64          scope_id{0};
+    uint64          parent_scope_id{0};
+    uint64          source_order{0};
+    uint64          local_order{0};
+    uint32          depth{0};
     RHIQueueBinding queue_binding{};
     std::string     name{};
 
     bool                   terminal{false};
     GpuScopeTerminalStatus status{GpuScopeTerminalStatus::Error};
-    std::uint64_t          query_id{0};
-    std::uint64_t          begin_tick{0};
-    std::uint64_t          end_tick{0};
-    std::uint32_t          valid_bits{0};
+    uint64                 query_id{0};
+    uint64                 begin_tick{0};
+    uint64                 end_tick{0};
+    uint32                 valid_bits{0};
     double                 tick_period_ns{0.0};
     double                 duration_ns{0.0};
     std::string            error_reason{};
@@ -151,41 +151,41 @@ struct ScopeSlot {
 
 struct SourceKey {
     RHIQueueBinding queue_binding{};
-    std::uint64_t   source_order{0};
+    uint64          source_order{0};
 };
 
 struct StreamCounters {
-    std::atomic<std::uint64_t> frames_opened{0};
-    std::atomic<std::uint64_t> frames_sealed{0};
-    std::atomic<std::uint64_t> frames_ready{0};
-    std::atomic<std::uint64_t> frames_popped{0};
-    std::atomic<std::uint64_t> frames_dropped_resident_full{0};
-    std::atomic<std::uint64_t> frames_dropped_pending_full{0};
-    std::atomic<std::uint64_t> frames_dropped_duplicate_id{0};
-    std::atomic<std::uint64_t> frames_dropped_resource_exhaustion{0};
-    std::atomic<std::uint64_t> frames_abandoned_on_close{0};
+    std::atomic<uint64> frames_opened{0};
+    std::atomic<uint64> frames_sealed{0};
+    std::atomic<uint64> frames_ready{0};
+    std::atomic<uint64> frames_popped{0};
+    std::atomic<uint64> frames_dropped_resident_full{0};
+    std::atomic<uint64> frames_dropped_pending_full{0};
+    std::atomic<uint64> frames_dropped_duplicate_id{0};
+    std::atomic<uint64> frames_dropped_resource_exhaustion{0};
+    std::atomic<uint64> frames_abandoned_on_close{0};
 
-    std::atomic<std::uint64_t> sources_opened{0};
-    std::atomic<std::uint64_t> sources_dropped_capacity{0};
-    std::atomic<std::uint64_t> sources_dropped_duplicate_order{0};
-    std::atomic<std::uint64_t> sources_dropped_after_seal{0};
+    std::atomic<uint64> sources_opened{0};
+    std::atomic<uint64> sources_dropped_capacity{0};
+    std::atomic<uint64> sources_dropped_duplicate_order{0};
+    std::atomic<uint64> sources_dropped_after_seal{0};
 
-    std::atomic<std::uint64_t> scopes_attempted{0};
-    std::atomic<std::uint64_t> scopes_admitted{0};
-    std::atomic<std::uint64_t> scopes_ready{0};
-    std::atomic<std::uint64_t> scopes_error{0};
-    std::atomic<std::uint64_t> scopes_dropped_resident_full{0};
-    std::atomic<std::uint64_t> scopes_dropped_frame_full{0};
-    std::atomic<std::uint64_t> scopes_dropped_name_too_large{0};
-    std::atomic<std::uint64_t> scopes_dropped_invalid_hierarchy{0};
-    std::atomic<std::uint64_t> scopes_dropped_suppressed_subtree{0};
-    std::atomic<std::uint64_t> scopes_dropped_after_seal{0};
-    std::atomic<std::uint64_t> scopes_dropped_resource_exhaustion{0};
+    std::atomic<uint64> scopes_attempted{0};
+    std::atomic<uint64> scopes_admitted{0};
+    std::atomic<uint64> scopes_ready{0};
+    std::atomic<uint64> scopes_error{0};
+    std::atomic<uint64> scopes_dropped_resident_full{0};
+    std::atomic<uint64> scopes_dropped_frame_full{0};
+    std::atomic<uint64> scopes_dropped_name_too_large{0};
+    std::atomic<uint64> scopes_dropped_invalid_hierarchy{0};
+    std::atomic<uint64> scopes_dropped_suppressed_subtree{0};
+    std::atomic<uint64> scopes_dropped_after_seal{0};
+    std::atomic<uint64> scopes_dropped_resource_exhaustion{0};
 
-    std::atomic<std::uint64_t> high_water_frames{0};
-    std::atomic<std::uint64_t> high_water_pending_frames{0};
-    std::atomic<std::uint64_t> high_water_ready_frames{0};
-    std::atomic<std::uint64_t> high_water_scopes{0};
+    std::atomic<uint64> high_water_frames{0};
+    std::atomic<uint64> high_water_pending_frames{0};
+    std::atomic<uint64> high_water_ready_frames{0};
+    std::atomic<uint64> high_water_scopes{0};
 };
 
 struct FrameState;
@@ -210,8 +210,8 @@ struct StreamState : std::enable_shared_from_this<StreamState> {
         const std::shared_ptr<FrameState>& _frame
     ) noexcept;
     void CancelFrameReservation(
-        std::size_t   _slot,
-        std::uint64_t _frame_id
+        std::size_t _slot,
+        uint64      _frame_id
     ) noexcept;
 
     GpuScopeStreamConfig config{};
@@ -222,7 +222,7 @@ struct StreamState : std::enable_shared_from_this<StreamState> {
 
     Array<std::shared_ptr<FrameState>> frame_slots{};
     Array<bool>                        frame_reservations{};
-    Array<std::uint64_t>               reserved_frame_ids{};
+    Array<uint64>                      reserved_frame_ids{};
     Array<bool>                        ready_flags{};
     Array<std::size_t>                 frame_order{};
     std::size_t                        order_head{0};
@@ -236,8 +236,8 @@ struct StreamState : std::enable_shared_from_this<StreamState> {
 
 struct FrameState : std::enable_shared_from_this<FrameState> {
     FrameState(
-        std::weak_ptr<StreamState> _stream,
-        std::uint64_t              _frame_id,
+        std::weak_ptr<StreamState>  _stream,
+        uint64                      _frame_id,
         const GpuScopeStreamConfig& _config
     ) :
         stream(std::move(_stream)),
@@ -254,14 +254,14 @@ struct FrameState : std::enable_shared_from_this<FrameState> {
     GpuScopeCompletionTicket TryBeginScope(
         const std::shared_ptr<RecorderState>& _recorder,
         std::string_view                      _name,
-        std::uint64_t                         _parent_scope_id,
-        std::uint32_t                         _depth
+        uint64                                _parent_scope_id,
+        uint32                                _depth
     ) noexcept;
     void ResolveScope(
-        std::uint32_t       _slot,
-        std::uint64_t       _scope_id,
-        const QueryResult*  _result,
-        std::string_view    _forced_error
+        uint32             _slot,
+        uint64             _scope_id,
+        const QueryResult* _result,
+        std::string_view   _forced_error
     ) noexcept;
     bool Seal() noexcept;
     ResolvedGpuScopeFrame Materialize() const;
@@ -286,21 +286,21 @@ struct FrameState : std::enable_shared_from_this<FrameState> {
 
     std::weak_ptr<StreamState> stream{};
     std::size_t                stream_slot{kInvalidStreamSlot};
-    const std::uint64_t        frame_id{0};
+    const uint64               frame_id{0};
     const std::size_t          max_scopes{0};
     const std::size_t          max_sources{0};
-    const std::uint32_t        max_scope_depth{0};
+    const uint32               max_scope_depth{0};
     const std::size_t          max_scope_name_bytes{0};
     const std::size_t          max_error_reason_bytes{0};
 
     mutable std::mutex mutex{};
     Array<ScopeSlot>   scopes{};
     Array<SourceKey>   sources{};
-    std::uint64_t      next_scope_id{1};
-    std::uint64_t      terminal_scope_count{0};
-    std::uint64_t      error_scope_count{0};
-    std::uint64_t      dropped_scope_count{0};
-    std::uint64_t      in_flight_admission_count{0};
+    uint64             next_scope_id{1};
+    uint64             terminal_scope_count{0};
+    uint64             error_scope_count{0};
+    uint64             dropped_scope_count{0};
+    uint64             in_flight_admission_count{0};
     bool               sealed{false};
     bool               ready_notified{false};
 };
@@ -309,7 +309,7 @@ struct RecorderState {
     RecorderState(
         std::shared_ptr<FrameState> _frame,
         RHIQueueBinding             _queue_binding,
-        std::uint64_t               _source_order
+        uint64                      _source_order
     ) :
         frame(std::move(_frame)),
         queue_binding(_queue_binding),
@@ -317,8 +317,8 @@ struct RecorderState {
 
     std::shared_ptr<FrameState> frame{};
     RHIQueueBinding             queue_binding{};
-    std::uint64_t               source_order{0};
-    std::atomic<std::uint64_t>  next_local_order{0};
+    uint64                      source_order{0};
+    std::atomic<uint64>         next_local_order{0};
 };
 
 bool StreamState::TryReserveScope(
@@ -337,7 +337,7 @@ bool StreamState::TryReserveScope(
     ++resident_scope_count;
     UpdateHighWater(
         counters.high_water_scopes,
-        static_cast<std::uint64_t>(resident_scope_count)
+        static_cast<uint64>(resident_scope_count)
     );
     return true;
 }
@@ -377,13 +377,13 @@ void StreamState::MarkFrameReady(
     counters.frames_ready.fetch_add(1, std::memory_order_relaxed);
     UpdateHighWater(
         counters.high_water_ready_frames,
-        static_cast<std::uint64_t>(ready_count)
+        static_cast<uint64>(ready_count)
     );
 }
 
 void StreamState::CancelFrameReservation(
-    std::size_t   _slot,
-    std::uint64_t _frame_id
+    std::size_t _slot,
+    uint64      _frame_id
 ) noexcept {
     std::scoped_lock lock(mutex);
     if (_slot >= frame_reservations.size() ||
@@ -428,8 +428,8 @@ void StreamState::CancelFrameReservation(
 GpuScopeCompletionTicket FrameState::TryBeginScope(
     const std::shared_ptr<RecorderState>& _recorder,
     std::string_view                      _name,
-    std::uint64_t                         _parent_scope_id,
-    std::uint32_t                         _depth
+    uint64                                _parent_scope_id,
+    uint32                                _depth
 ) noexcept {
     const std::shared_ptr<StreamState> owner = stream.lock();
     if (!owner || !_recorder || _recorder->frame.get() != this) {
@@ -488,8 +488,8 @@ GpuScopeCompletionTicket FrameState::TryBeginScope(
     }
 
     bool             release_reservation = false;
-    std::uint32_t    slot_index = 0;
-    std::uint64_t    scope_id = 0;
+    uint32           slot_index          = 0;
+    uint64           scope_id            = 0;
     {
         std::scoped_lock lock(mutex);
         // TryStartAdmission linearizes before Seal. Once admitted here, Seal
@@ -543,7 +543,7 @@ GpuScopeCompletionTicket FrameState::TryBeginScope(
                     );
                 candidate.depth = _depth;
                 candidate.queue_binding = _recorder->queue_binding;
-                slot_index = static_cast<std::uint32_t>(scopes.size());
+                slot_index              = static_cast<uint32>(scopes.size());
                 try {
                     scopes.emplace_back(std::move(candidate));
                 } catch (...) {
@@ -595,8 +595,8 @@ void FrameState::FinishAdmission() noexcept {
 }
 
 void FrameState::ResolveScope(
-    std::uint32_t      _slot,
-    std::uint64_t      _scope_id,
+    uint32             _slot,
+    uint64             _scope_id,
     const QueryResult* _result,
     std::string_view   _forced_error
 ) noexcept {
@@ -650,7 +650,7 @@ void FrameState::ResolveScope(
                 std::isfinite(timestamp->duration_ns) &&
                 timestamp->duration_ns >= 0.0;
             if (payload_valid) {
-                const std::uint64_t delta_tick = TimestampDelta(
+                const uint64 delta_tick = TimestampDelta(
                     timestamp->begin_tick,
                     timestamp->end_tick,
                     timestamp->valid_bits
@@ -734,8 +734,8 @@ std::size_t FrameState::AdmittedScopeCount() const noexcept {
 
 ResolvedGpuScopeFrame FrameState::Materialize() const {
     Array<ScopeSlot> slots{};
-    std::uint64_t dropped = 0;
-    std::uint64_t errors = 0;
+    uint64           dropped = 0;
+    uint64           errors  = 0;
     {
         std::scoped_lock lock(mutex);
         slots = scopes;
@@ -746,7 +746,7 @@ ResolvedGpuScopeFrame FrameState::Materialize() const {
     ResolvedGpuScopeFrame result{};
     result.frame_id = frame_id;
     result.admitted_scope_count =
-        static_cast<std::uint64_t>(slots.size());
+        static_cast<uint64>(slots.size());
     result.dropped_scope_count = dropped;
     result.error_scope_count = errors;
 
@@ -784,7 +784,7 @@ ResolvedGpuScopeFrame FrameState::Materialize() const {
 
     Array<BuildNode> arena{};
     arena.reserve(slots.size());
-    UnorderedMap<std::uint64_t, std::size_t> scope_to_arena{};
+    UnorderedMap<uint64, std::size_t> scope_to_arena{};
     scope_to_arena.reserve(slots.size());
     std::array<Array<std::size_t>, 3> root_indices{};
     bool structure_valid = true;
@@ -863,12 +863,12 @@ ResolvedGpuScopeFrame FrameState::Materialize() const {
             continue;
         }
 
-        const std::uint64_t parent_delta = TimestampDelta(
+        const uint64 parent_delta = TimestampDelta(
             parent.node.begin_tick,
             parent.node.end_tick,
             parent.node.valid_bits
         );
-        std::uint64_t previous_child_end = 0;
+        uint64        previous_child_end = 0;
         bool          has_previous_child = false;
         for (std::size_t child_index : parent.children) {
             const GpuScopeNode& child = arena[child_index].node;
@@ -886,10 +886,10 @@ ResolvedGpuScopeFrame FrameState::Materialize() const {
                 continue;
             }
 
-            const std::uint64_t child_begin_offset =
+            const uint64 child_begin_offset =
                 (child.begin_tick - parent.node.begin_tick) &
                 TimestampMask(parent.node.valid_bits);
-            const std::uint64_t child_delta = TimestampDelta(
+            const uint64 child_delta = TimestampDelta(
                 child.begin_tick,
                 child.end_tick,
                 child.valid_bits
@@ -941,19 +941,18 @@ ResolvedGpuScopeFrame FrameState::Materialize() const {
                 continue;
             }
 
-            const std::uint64_t begin_distance =
+            const uint64 begin_distance =
                 (root.begin_tick - previous_root->begin_tick) &
                 TimestampMask(root.valid_bits);
-            const std::uint64_t previous_duration = TimestampDelta(
+            const uint64 previous_duration = TimestampDelta(
                 previous_root->begin_tick,
                 previous_root->end_tick,
                 previous_root->valid_bits
             );
-            const std::uint64_t half_range =
+            const uint64 half_range =
                 root.valid_bits == 64 ?
-                    (std::uint64_t{1} << 63) :
-                    (std::uint64_t{1} <<
-                     (root.valid_bits - 1));
+                    (uint64{1} << 63) :
+                    (uint64{1} << (root.valid_bits - 1));
             if (begin_distance < previous_duration ||
                 begin_distance >= half_range) {
                 structure_valid = false;
@@ -1008,8 +1007,8 @@ ResolvedGpuScopeFrame FrameState::Materialize() const {
 
 GpuScopeCompletionTicket::GpuScopeCompletionTicket(
     std::shared_ptr<GpuScopeDetail::FrameState> _frame,
-    std::uint32_t                               _slot,
-    std::uint64_t                               _scope_id
+    uint32                                      _slot,
+    uint64                                      _scope_id
 ) noexcept :
     frame_(std::move(_frame)),
     slot_(_slot),
@@ -1019,7 +1018,7 @@ bool GpuScopeCompletionTicket::Valid() const noexcept {
     return frame_ != nullptr && scope_id_ != 0;
 }
 
-std::uint64_t GpuScopeCompletionTicket::ScopeId() const noexcept {
+uint64 GpuScopeCompletionTicket::ScopeId() const noexcept {
     return scope_id_;
 }
 
@@ -1060,11 +1059,11 @@ bool GpuScopeRecorder::Valid() const noexcept {
     return owner && owner->ContainsFrame(state_->frame);
 }
 
-std::uint64_t GpuScopeRecorder::FrameId() const noexcept {
+uint64 GpuScopeRecorder::FrameId() const noexcept {
     return Valid() ? state_->frame->frame_id : 0;
 }
 
-std::uint64_t GpuScopeRecorder::SourceOrder() const noexcept {
+uint64 GpuScopeRecorder::SourceOrder() const noexcept {
     return Valid() ? state_->source_order : 0;
 }
 
@@ -1096,8 +1095,8 @@ RHIQueueBinding GpuScopeRecorder::BoundQueueBinding() const noexcept {
 
 GpuScopeCompletionTicket GpuScopeRecorder::TryBeginScope(
     std::string_view _name,
-    std::uint64_t    _parent_scope_id,
-    std::uint32_t    _depth
+    uint64           _parent_scope_id,
+    uint32           _depth
 ) const noexcept {
     if (!Valid()) {
         return {};
@@ -1149,13 +1148,13 @@ bool GpuScopeFrameHandle::Valid() const noexcept {
     return owner && owner->ContainsFrame(state_);
 }
 
-std::uint64_t GpuScopeFrameHandle::FrameId() const noexcept {
+uint64 GpuScopeFrameHandle::FrameId() const noexcept {
     return state_ ? state_->frame_id : 0;
 }
 
 GpuScopeRecorder GpuScopeFrameHandle::CreateRecorder(
     RHIQueueBinding _queue_binding,
-    std::uint64_t   _source_order
+    uint64          _source_order
 ) const noexcept {
     if (!state_ ||
         !GpuScopeDetail::IsManagedQueue(_queue_binding.queue) ||
@@ -1278,7 +1277,7 @@ bool GpuScopeStream::Valid() const noexcept {
 }
 
 GpuScopeFrameHandle GpuScopeStream::BeginFrame(
-    std::uint64_t _frame_id
+    uint64 _frame_id
 ) noexcept {
     const std::shared_ptr<GpuScopeDetail::StreamState> owner = state_;
     if (!owner) {
@@ -1353,11 +1352,11 @@ GpuScopeFrameHandle GpuScopeStream::BeginFrame(
         ++owner->pending_count;
         GpuScopeDetail::UpdateHighWater(
             owner->counters.high_water_frames,
-            static_cast<std::uint64_t>(owner->order_count)
+            static_cast<uint64>(owner->order_count)
         );
         GpuScopeDetail::UpdateHighWater(
             owner->counters.high_water_pending_frames,
-            static_cast<std::uint64_t>(owner->pending_count)
+            static_cast<uint64>(owner->pending_count)
         );
     }
 
@@ -1531,13 +1530,13 @@ GpuScopeStreamStats GpuScopeStream::GetStats() const noexcept {
         std::scoped_lock lock(owner->mutex);
         stats.accepting = owner->accepting;
         stats.resident_frames =
-            static_cast<std::uint64_t>(owner->order_count);
+            static_cast<uint64>(owner->order_count);
         stats.resident_pending_frames =
-            static_cast<std::uint64_t>(owner->pending_count);
+            static_cast<uint64>(owner->pending_count);
         stats.resident_ready_frames =
-            static_cast<std::uint64_t>(owner->ready_count);
+            static_cast<uint64>(owner->ready_count);
         stats.resident_scopes =
-            static_cast<std::uint64_t>(
+            static_cast<uint64>(
                 owner->resident_scope_count
             );
     }
@@ -1557,8 +1556,8 @@ void GpuScopeStream::Close() noexcept {
             return;
         }
         owner->accepting = false;
-        const std::uint64_t opened_frames_abandoned =
-            static_cast<std::uint64_t>(std::count_if(
+        const uint64 opened_frames_abandoned =
+            static_cast<uint64>(std::count_if(
                 owner->frame_slots.begin(),
                 owner->frame_slots.end(),
                 [](const auto& _frame) {
@@ -1605,8 +1604,8 @@ void GpuScopeStream::Close() noexcept {
 namespace GpuScopeTesting {
 
 void InstallAdmissionPause(
-    std::atomic_uint32_t& _entered_count,
-    std::atomic_bool&     _release
+    std::atomic<uint32>& _entered_count,
+    std::atomic_bool&    _release
 ) noexcept {
     GpuScopeDetail::g_admission_pause_release.store(
         &_release, std::memory_order_release

@@ -3,9 +3,9 @@
 #include "profile/ProfileDumpTemplates.h"
 #include "profile_consumer/ProfileDocument.h"
 
+#include "misc/Types.h"
 #include <array>
 #include <chrono>
-#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <limits>
@@ -42,7 +42,7 @@ void ExpectValidViewport(const ProfileViewerViewport& _viewport, std::string_vie
 }
 
 void TestOverflowSafeFractionMapping() {
-    constexpr std::uint64_t maximum = std::numeric_limits<std::uint64_t>::max();
+    constexpr uint64 maximum = std::numeric_limits<uint64>::max();
 
     Expect(ProfileViewerMapFraction(0, maximum, 0, 10) == 0, "fraction zero did not map to begin");
     Expect(
@@ -64,7 +64,7 @@ void TestOverflowSafeFractionMapping() {
 
 void ExpectGpuFrameChoice(
     std::optional<ProfileViewerGpuFrameChoice> _choice,
-    std::uint64_t                              _frame_id,
+    uint64                                     _frame_id,
     bool                                       _has_frame_record,
     std::string_view                           _message
 ) {
@@ -222,7 +222,7 @@ void TestGpuFrameChoiceUnionNavigation() {
         "empty GPU frame sources produced a navigation result"
     );
 
-    constexpr std::uint64_t                  maximum = std::numeric_limits<std::uint64_t>::max();
+    constexpr uint64                         maximum = std::numeric_limits<uint64>::max();
     const std::array<GpuTimelineFrameRef, 1> maximum_frame{{
         {
             .frame_id           = maximum,
@@ -244,10 +244,10 @@ void TestGpuFrameChoiceUnionNavigation() {
 class ScopedFixtures final {
 public:
     ScopedFixtures() {
-        static std::uint64_t next_id = 0;
-        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
+        static uint64 next_id = 0;
+        for (uint32 attempt = 0; attempt < 64; ++attempt) {
             const auto now =
-                static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+                static_cast<uint64>(std::chrono::steady_clock::now().time_since_epoch().count());
             directory_ =
                 std::filesystem::temp_directory_path() /
                 ("moer-profile-viewer-model-" + std::to_string(now) + "-" + std::to_string(next_id++));
@@ -287,14 +287,14 @@ void WriteCapture(const std::filesystem::path& _path, std::string_view _scope_na
     const SchemaRegistration cpu = RegisterSchema(Templates::CpuScope());
     Expect(cpu.status == SchemaStatus::Registered, "fixture CPU schema did not register");
 
-    for (std::uint32_t index = 0; index < 4; ++index) {
-        const std::uint64_t                 begin = static_cast<std::uint64_t>(index) * 4;
+    for (uint32 index = 0; index < 4; ++index) {
+        const uint64                        begin = static_cast<uint64>(index) * 4;
         const std::array<FieldValueView, 5> values{
-            std::uint64_t{17},
+            uint64{17},
             _scope_name,
             begin,
             begin + 2,
-            std::uint32_t{0},
+            uint32{0},
         };
         Expect(Emit(cpu.handle, values) == EmitStatus::Accepted, "fixture CPU scope emission failed");
     }
@@ -308,7 +308,7 @@ void WriteCapture(const std::filesystem::path& _path, std::string_view _scope_na
 }
 
 ProfileDocumentLoaderSnapshot
-WaitForGeneration(const ProfileDocumentLoader& _loader, std::uint64_t _generation) {
+WaitForGeneration(const ProfileDocumentLoader& _loader, uint64 _generation) {
     const auto deadline = std::chrono::steady_clock::now() + 10s;
     for (;;) {
         auto snapshot = _loader.Snapshot();
@@ -326,7 +326,7 @@ WaitForGeneration(const ProfileDocumentLoader& _loader, std::uint64_t _generatio
     }
 }
 
-void ExpectReady(const ProfileDocumentLoaderSnapshot& _snapshot, std::uint64_t _generation) {
+void ExpectReady(const ProfileDocumentLoaderSnapshot& _snapshot, uint64 _generation) {
     Expect(_snapshot.phase == ProfileDocumentLoadPhase::Ready, "fixture document was not ready");
     Expect(_snapshot.published_generation == _generation, "fixture publication generation mismatch");
     Expect(_snapshot.document != nullptr, "ready fixture had no document");
@@ -358,7 +358,7 @@ void TestPublicationAndIndependentNavigation(
     ProfileViewerModel model;
     Expect(!model.FitCpu(10), "unpublished model accepted CPU navigation");
 
-    const std::uint64_t generation_a = _loader.RequestLoad(_path_a);
+    const uint64 generation_a = _loader.RequestLoad(_path_a);
     Expect(generation_a != 0, "first fixture load was rejected");
     const auto ready_a = WaitForGeneration(_loader, generation_a);
     ExpectReady(ready_a, generation_a);
@@ -476,7 +476,7 @@ void TestPublicationAndIndependentNavigation(
         "missing-document snapshot cleared last-good publication state"
     );
 
-    const std::uint64_t generation_b = _loader.RequestLoad(_path_b);
+    const uint64 generation_b = _loader.RequestLoad(_path_b);
     Expect(generation_b == generation_a + 1, "second fixture generation was not monotonic");
     const auto ready_b = WaitForGeneration(_loader, generation_b);
     ExpectReady(ready_b, generation_b);
@@ -497,26 +497,26 @@ void TestPublicationAndIndependentNavigation(
         "same publication reset the model twice"
     );
 
-    Expect(model.FitCpu(std::numeric_limits<std::uint64_t>::max()), "maximum CPU domain fit failed");
-    Expect(model.ZoomCpu(1, 2, std::numeric_limits<std::uint32_t>::max(), 1), "saturating zoom failed");
+    Expect(model.FitCpu(std::numeric_limits<uint64>::max()), "maximum CPU domain fit failed");
+    Expect(model.ZoomCpu(1, 2, std::numeric_limits<uint32>::max(), 1), "saturating zoom failed");
     ExpectValidViewport(model.CpuViewport(), "saturating zoom broke CPU viewport invariants");
-    Expect(model.ZoomCpu(1, 2, 1, std::numeric_limits<std::uint32_t>::max()), "maximum-ratio zoom-in failed");
+    Expect(model.ZoomCpu(1, 2, 1, std::numeric_limits<uint32>::max()), "maximum-ratio zoom-in failed");
     ExpectValidViewport(model.CpuViewport(), "maximum-ratio zoom-in broke CPU viewport invariants");
     Expect(
         model.FocusCpu(
-            std::numeric_limits<std::uint64_t>::max(), 0, std::numeric_limits<std::uint64_t>::max()
+            std::numeric_limits<uint64>::max(), 0, std::numeric_limits<uint64>::max()
         ),
         "overflow-edge focus failed"
     );
     Expect(
         model.CpuViewport().view_begin == 0 &&
-            model.CpuViewport().view_end == std::numeric_limits<std::uint64_t>::max(),
+            model.CpuViewport().view_end == std::numeric_limits<uint64>::max(),
         "maximum focus margin did not clamp to the domain"
     );
     Expect(model.FocusCpu(10, 20, 0), "small focus failed");
-    Expect(model.PanCpu(std::numeric_limits<std::int64_t>::min()), "minimum pan failed");
+    Expect(model.PanCpu(std::numeric_limits<int64>::min()), "minimum pan failed");
     Expect(model.CpuViewport().view_begin == 0, "minimum pan did not clamp left");
-    Expect(model.PanCpu(std::numeric_limits<std::int64_t>::max()), "maximum pan failed");
+    Expect(model.PanCpu(std::numeric_limits<int64>::max()), "maximum pan failed");
     ExpectValidViewport(model.CpuViewport(), "maximum pan broke CPU viewport invariants");
 
     const auto before_invalid_zoom = model.CpuViewport();
@@ -559,10 +559,10 @@ void TestPublicationAndIndependentNavigation(
     Expect(!model.Selection().Valid(), "selection clear failed");
 
     const auto cpu_before_capacity = model.CpuViewport();
-    for (std::uint64_t frame = 1'000; frame < 1'000 + kProfileViewerGpuViewportCapacity; ++frame) {
+    for (uint64 frame = 1'000; frame < 1'000 + kProfileViewerGpuViewportCapacity; ++frame) {
         Expect(model.FitGpu({3, frame}, frame + 1), "fixed GPU viewport table fill failed");
     }
-    for (std::uint64_t frame = 10'000; frame < 14'096; ++frame) {
+    for (uint64 frame = 10'000; frame < 14'096; ++frame) {
         Expect(model.FitGpu({4, frame}, frame + 1), "fixed GPU viewport table eviction failed");
     }
     Expect(

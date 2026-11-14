@@ -1,6 +1,8 @@
 #ifndef MOER_TONE_MAPPING_PASS_H
 #define MOER_TONE_MAPPING_PASS_H
 
+#include "misc/Types.h"
+
 // 计算亮度曝光，并将 HDR 光照映射到显示目标。
 
 #include "RaytracingGraphResources.h"
@@ -55,7 +57,7 @@ public:
 class ToneMappingPass {
 public:
     struct CreateInfo {
-        uint       histogram_bins = HISTOGRAM_BINS;
+        uint32     histogram_bins = HISTOGRAM_BINS;
         TextureRef color_lut      = nullptr;
     };
 
@@ -150,8 +152,8 @@ private:
     );
 
     float frame_time     = 0;
-    uint  frame_idx      = 0;
-    uint  color_lut_size = 0;
+    uint32 frame_idx      = 0;
+    uint32 color_lut_size = 0;
 
     TextureRef                 color_lut;
     bool                       initialized          = false;

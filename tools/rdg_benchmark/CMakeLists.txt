@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.24)
+project(RdgProfilingTools LANGUAGES CXX)
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "The child-process stack sampler requires 64-bit Windows")
+endif()
+add_executable(RdgSampleProcess sample_process.cpp)
+target_compile_features(RdgSampleProcess PRIVATE cxx_std_20)
+target_link_libraries(RdgSampleProcess PRIVATE dbghelp)

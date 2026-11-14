@@ -1,6 +1,8 @@
 #ifndef MOER_RENDER_VISUALIZE_PASS_H
 #define MOER_RENDER_VISUALIZE_PASS_H
 
+#include "misc/Types.h"
+
 // 选择并显示 Raytracing 中间缓冲区，用于编辑器诊断。
 
 #include "RaytracingGraphResources.h"
@@ -44,7 +46,7 @@ public:
 
 struct VisualizeConfig {
     float split_ratio;
-    uint  visualize_mode;
+    uint32 visualize_mode;
     bool  b_split;
 };
 

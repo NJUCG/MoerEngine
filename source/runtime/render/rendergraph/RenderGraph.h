@@ -1,20 +1,23 @@
 #pragma once
 
 #include "RenderAPI.h"
+#include "misc/NumericLimits.h"
 #include "misc/STL.h"
 #include "rendergraph/RenderGraphResourcePool.h"
-#include "rhi/RHIExecutor.h"
+#include "rhi/executor/RHIExecutor.h"
 
+#include "misc/Types.h"
+#include <compare>
 #include <concepts>
-#include <cstdint>
 #include <functional>
-#include <limits>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace Moer::Render {
@@ -40,6 +43,54 @@ concept RGParameterAccessProvider =
         value.DeclareRGAccess(collector);
     };
 
+// Complete these types before RenderGraph uses them in default arguments.
+enum class RGTextureAspect : uint8 {
+    None    = 0,
+    Color   = 1 << 0,
+    Depth   = 1 << 1,
+    Stencil = 1 << 2,
+    All     = (1 << 0) | (1 << 1) | (1 << 2),
+};
+
+constexpr RGTextureAspect operator|(RGTextureAspect lhs, RGTextureAspect rhs) {
+    return static_cast<RGTextureAspect>(static_cast<uint8>(lhs) | static_cast<uint8>(rhs));
+}
+
+constexpr RGTextureAspect operator&(RGTextureAspect lhs, RGTextureAspect rhs) {
+    return static_cast<RGTextureAspect>(static_cast<uint8>(lhs) & static_cast<uint8>(rhs));
+}
+
+struct RGTextureRange {
+    RGTextureAspect aspects     = RGTextureAspect::All;
+    uint32          mip_first   = 0;
+    uint32          mip_count   = MaxValue<uint32>;
+    uint32          layer_first = 0;
+    uint32          layer_count = MaxValue<uint32>;
+
+    [[nodiscard]] static constexpr RGTextureRange Mips(uint32 first, uint32 count) {
+        RGTextureRange range{};
+        range.mip_first = first;
+        range.mip_count = count;
+        return range;
+    }
+
+    [[nodiscard]] static constexpr RGTextureRange Layers(uint32 first, uint32 count) {
+        RGTextureRange range{};
+        range.layer_first = first;
+        range.layer_count = count;
+        return range;
+    }
+
+    friend auto operator<=>(const RGTextureRange&, const RGTextureRange&) = default;
+};
+
+struct RGBufferRange {
+    uint64 offset = 0;
+    uint64 size   = MaxValue<uint64>;
+
+    friend auto operator<=>(const RGBufferRange&, const RGBufferRange&) = default;
+};
+
 /**
  * Typed RDG frontend with an opt-in command-recording schedule.
  *
@@ -52,230 +103,128 @@ concept RGParameterAccessProvider =
  */
 class RENDER_API RenderGraph {
 public:
-    static constexpr uint32_t RemainingTextureRange = std::numeric_limits<uint32_t>::max();
-    static constexpr uint64_t RemainingBufferRange  = std::numeric_limits<uint64_t>::max();
-    static constexpr uint32_t InvalidVersion        = std::numeric_limits<uint32_t>::max();
+    static constexpr uint32 InvalidIndex          = MaxValue<uint32>;
+    static constexpr uint64 InvalidGraphId        = MaxValue<uint64>;
+    static constexpr uint32 RemainingTextureRange = MaxValue<uint32>;
+    static constexpr uint64 RemainingBufferRange  = MaxValue<uint64>;
+    static constexpr uint32 InvalidVersion        = InvalidIndex;
 
-    enum class ResourceKind : uint8_t {
+    enum class ResourceKind : uint8 {
         Texture,
         Buffer,
         Token,
     };
 
-    enum class TextureAspect : uint8_t {
-        None    = 0,
-        Color   = 1 << 0,
-        Depth   = 1 << 1,
-        Stencil = 1 << 2,
-        All     = (1 << 0) | (1 << 1) | (1 << 2),
+    using TextureAspect = RGTextureAspect;
+
+    enum class SharingMode : uint8 {
+        Exclusive,
+        Concurrent,
     };
 
-    friend constexpr TextureAspect operator|(TextureAspect lhs, TextureAspect rhs) {
-        return static_cast<TextureAspect>(static_cast<uint8_t>(lhs) | static_cast<uint8_t>(rhs));
-    }
-
-    friend constexpr TextureAspect operator&(TextureAspect lhs, TextureAspect rhs) {
-        return static_cast<TextureAspect>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
-    }
-
     struct TextureDesc {
-        uint32_t      mip_count   = 1;
-        uint32_t      layer_count = 1;
+        uint32        mip_count   = 1;
+        uint32        layer_count = 1;
         TextureAspect aspects     = TextureAspect::Color;
-        enum class SharingMode : uint8_t {
-            Exclusive,
-            Concurrent,
-        } sharing_mode = SharingMode::Exclusive;
+        SharingMode sharing_mode=SharingMode::Exclusive;
 
         friend bool operator==(const TextureDesc&, const TextureDesc&) = default;
     };
 
     struct BufferDesc {
-        uint64_t byte_size = 0;
-        TextureDesc::SharingMode sharing_mode = TextureDesc::SharingMode::Exclusive;
+        uint64      byte_size    = 0;
+        SharingMode sharing_mode = SharingMode::Exclusive;
 
         friend bool operator==(const BufferDesc&, const BufferDesc&) = default;
     };
 
-    struct TextureRange {
-        TextureAspect aspects     = TextureAspect::All;
-        uint32_t      mip_first   = 0;
-        uint32_t      mip_count   = RemainingTextureRange;
-        uint32_t      layer_first = 0;
-        uint32_t      layer_count = RemainingTextureRange;
+    using TextureRange = RGTextureRange;
+    using BufferRange  = RGBufferRange;
 
-        [[nodiscard]] static constexpr TextureRange Whole() {
-            return {};
+    // A token has no subranges; its monostate is also the default range.
+    using ResourceRange = std::variant<std::monostate, TextureRange, BufferRange>;
+
+    [[nodiscard]] static constexpr ResourceKind GetRangeKind(const ResourceRange& range) {
+        if (std::holds_alternative<TextureRange>(range)) {
+            return ResourceKind::Texture;
         }
-
-        [[nodiscard]] static constexpr TextureRange Mips(uint32_t first, uint32_t count) {
-            TextureRange range{};
-            range.mip_first = first;
-            range.mip_count = count;
-            return range;
+        if (std::holds_alternative<BufferRange>(range)) {
+            return ResourceKind::Buffer;
         }
+        return ResourceKind::Token;
+    }
 
-        [[nodiscard]] static constexpr TextureRange Layers(uint32_t first, uint32_t count) {
-            TextureRange range{};
-            range.layer_first = first;
-            range.layer_count = count;
-            return range;
+    [[nodiscard]] static constexpr ResourceRange WholeResourceRange(ResourceKind kind) {
+        switch (kind) {
+            case ResourceKind::Texture:
+                return TextureRange{};
+            case ResourceKind::Buffer:
+                return BufferRange{};
+            case ResourceKind::Token:
+                return std::monostate{};
         }
-
-        friend bool operator==(const TextureRange&, const TextureRange&) = default;
-    };
-
-    struct BufferRange {
-        uint64_t offset = 0;
-        uint64_t size   = RemainingBufferRange;
-
-        [[nodiscard]] static constexpr BufferRange Whole() {
-            return {};
-        }
-
-        friend bool operator==(const BufferRange&, const BufferRange&) = default;
-    };
-
-    struct ResourceRange {
-        ResourceKind kind = ResourceKind::Token;
-        TextureRange texture{};
-        BufferRange  buffer{};
-
-        [[nodiscard]] static constexpr ResourceRange Whole(ResourceKind kind) {
-            ResourceRange result{};
-            result.kind = kind;
-            return result;
-        }
-
-        [[nodiscard]] static constexpr ResourceRange Texture(TextureRange range = TextureRange::Whole()) {
-            ResourceRange result{};
-            result.kind    = ResourceKind::Texture;
-            result.texture = range;
-            return result;
-        }
-
-        [[nodiscard]] static constexpr ResourceRange Buffer(BufferRange range = BufferRange::Whole()) {
-            ResourceRange result{};
-            result.kind   = ResourceKind::Buffer;
-            result.buffer = range;
-            return result;
-        }
-
-        [[nodiscard]] static constexpr ResourceRange Token() {
-            ResourceRange result{};
-            result.kind = ResourceKind::Token;
-            return result;
-        }
-
-        friend bool operator==(const ResourceRange&, const ResourceRange&) = default;
-    };
+        return std::monostate{};
+    }
 
     struct ResourceHandle {
-        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
-
-        uint32_t index    = InvalidIndex;
-        uint64_t owner_id = 0;
+        uint32 resource_id = InvalidIndex;
+        uint64 graph_id    = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
-            return index != InvalidIndex && owner_id != 0;
+            return resource_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
-        friend bool operator==(ResourceHandle lhs, ResourceHandle rhs) {
-            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
-        }
+        friend bool operator==(const ResourceHandle&, const ResourceHandle&) = default;
     };
 
-    struct TextureHandle {
-        ResourceHandle resource{};
+    template<ResourceKind Kind>
+    struct TypedResourceHandle {
+        ResourceHandle handle;
 
         [[nodiscard]] bool IsValid() const {
-            return resource.IsValid();
+            return handle.IsValid();
         }
+
         [[nodiscard]] ResourceHandle Untyped() const {
-            return resource;
+            return handle;
         }
 
-        friend bool operator==(TextureHandle lhs, TextureHandle rhs) {
-            return lhs.resource == rhs.resource;
-        }
+        friend bool operator==(const TypedResourceHandle&, const TypedResourceHandle&) = default;
     };
 
-    struct BufferHandle {
-        ResourceHandle resource{};
-
-        [[nodiscard]] bool IsValid() const {
-            return resource.IsValid();
-        }
-        [[nodiscard]] ResourceHandle Untyped() const {
-            return resource;
-        }
-
-        friend bool operator==(BufferHandle lhs, BufferHandle rhs) {
-            return lhs.resource == rhs.resource;
-        }
-    };
-
-    struct TokenHandle {
-        ResourceHandle resource{};
-
-        [[nodiscard]] bool IsValid() const {
-            return resource.IsValid();
-        }
-        [[nodiscard]] ResourceHandle Untyped() const {
-            return resource;
-        }
-
-        friend bool operator==(TokenHandle lhs, TokenHandle rhs) {
-            return lhs.resource == rhs.resource;
-        }
-    };
+    using TextureHandle = TypedResourceHandle<ResourceKind::Texture>;
+    using BufferHandle  = TypedResourceHandle<ResourceKind::Buffer>;
+    using TokenHandle   = TypedResourceHandle<ResourceKind::Token>;
 
     struct PassHandle {
-        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
-
-        uint32_t index    = InvalidIndex;
-        uint64_t owner_id = 0;
+        uint32 pass_id  = InvalidIndex;
+        uint64 graph_id = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
-            return index != InvalidIndex && owner_id != 0;
+            return pass_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
-        friend bool operator==(PassHandle lhs, PassHandle rhs) {
-            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
-        }
+        friend bool operator==(const PassHandle&, const PassHandle&) = default;
     };
 
     /** Stable identity for one graph-owned CPU setup task. */
     struct SetupPassHandle {
-        static constexpr uint32_t InvalidIndex = std::numeric_limits<uint32_t>::max();
-
-        uint32_t index    = InvalidIndex;
-        uint64_t owner_id = 0;
+        uint32 setup_pass_id = InvalidIndex;
+        uint64 graph_id      = InvalidGraphId;
 
         [[nodiscard]] bool IsValid() const {
-            return index != InvalidIndex && owner_id != 0;
+            return setup_pass_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
-        friend bool operator==(SetupPassHandle lhs, SetupPassHandle rhs) {
-            return lhs.index == rhs.index && lhs.owner_id == rhs.owner_id;
-        }
+        friend bool operator==(const SetupPassHandle&, const SetupPassHandle&) = default;
     };
 
-    struct PreparedPassHandle {
-        SetupPassHandle setup{};
-        PassHandle      record{};
-
-        [[nodiscard]] bool IsValid() const {
-            return setup.IsValid() && record.IsValid();
-        }
-    };
-
-    enum class PrepareSafety : uint8_t {
+    enum class SetupPassSafety : uint8 {
         Restricted,
         Unsafe,
     };
 
-    enum class AccessMode : uint8_t {
+    enum class AccessMode : uint8 {
         Unknown,
         None,
         Read,
@@ -284,26 +233,29 @@ public:
     };
 
     /** Logical queue role. It is deliberately separate from a native queue and queue family. */
-    enum class QueueRole : uint8_t {
+    enum class QueueRole : uint8 {
         None,
         Graphics,
         Compute,
         Copy,
     };
 
-    /** Pipeline domain used to derive source/destination stage scopes during future RHI lowering. */
-    enum class PipelineType : uint8_t {
+    /**
+     * GPU work category used to validate pass resource declarations and derive
+     * shader access stage scopes. Transfer stages come from resource states.
+     */
+    enum class GpuWorkType : uint8 {
         None,
         Graphics,
         Compute,
         RayTracing,
-        Copy,
+        Transfer,
     };
 
     struct QueueBinding {
         QueueRole role            = QueueRole::None;
-        uint32_t  native_queue_id = 0;
-        uint32_t  family_id       = 0;
+        uint32    native_queue_id = 0;
+        uint32    family_id       = 0;
         bool      available       = true;
 
         friend bool operator==(const QueueBinding&, const QueueBinding&) = default;
@@ -351,106 +303,110 @@ public:
     };
 
     struct ExecutionDomain {
-        QueueRole    queue    = QueueRole::Graphics;
-        PipelineType pipeline = PipelineType::Graphics;
+        QueueRole   queue = QueueRole::Graphics;
+        GpuWorkType work  = GpuWorkType::Graphics;
 
         friend bool operator==(const ExecutionDomain&, const ExecutionDomain&) = default;
     };
 
-    /** CPU callback/CommandList ownership; distinct from backend translate policy. */
-    enum class PassExecutionClass : uint8_t {
-        /** Caller-thread callback whose commands are sealed by the graph observer. */
-        MainThread,
-        /**
-         * Caller-thread, CPU-only preparation/history callback. It may order
-         * Token resources or Reference GPU identities, never seals commands,
-         * and is excluded from the prospective GPU queue plan.
-         */
-        CpuPrepare,
-        /**
-         * Caller-thread hard boundary that owns its command/submission scope.
-         * Used for external Vulkan/CUDA synchronization and unmanaged submission.
-         */
-        ExternalControl,
-        SerialRecord,
-        ParallelRecordEligible,
+    /** CPU recording policy; independent of GPU dependencies and native translation. */
+    enum class PassRecordPolicy : uint8 {
+        /** Join earlier recording in compiled order, run on the caller, then allow the next group. */
+        Serial,
+        /** May record concurrently into an exclusively owned CommandList. */
+        ParallelAllowed,
     };
 
-    /** RDG-neutral states; these do not depend on the legacy RHI enum ordinals. */
-    enum class TextureState : uint8_t {
-        Automatic,
-        Undefined,
+    /** Per-access purpose, independent of creation capabilities and read/write mode. */
+    enum class TextureAccessType : uint8 {
+        /** Logical-only declarations may omit a type; physical lowering rejects it. */
+        Unspecified,
         TransferSource,
-        /**
-         * External presentation-copy source. This boundary-only state keeps
-         * the image in COMMON/GENERAL while establishing transfer-read
-         * visibility for the presentation queue.
-         */
-        PresentationSource,
         TransferDestination,
-        ShaderResource,
         Sampled,
-        RenderTarget,
-        DepthStencilRead,
-        DepthStencilWrite,
-        UnorderedAccess,
-        Present,
+        Storage,
+        ColorAttachment,
+        DepthStencilAttachment,
     };
 
-    enum class BufferState : uint8_t {
-        Automatic,
-        Undefined,
+    enum class BufferAccessType : uint8 {
+        Unspecified,
         TransferSource,
         TransferDestination,
         VertexBuffer,
         IndexBuffer,
         IndirectArgument,
-        ShaderResource,
-        UnorderedAccess,
+        ShaderRead,
+        Storage,
         AccelerationStructureBuildInput,
         AccelerationStructureRead,
         AccelerationStructureWrite,
     };
 
-    struct ResourceState {
-        ResourceKind kind = ResourceKind::Token;
-        TextureState texture = TextureState::Automatic;
-        BufferState  buffer  = BufferState::Automatic;
-
-        [[nodiscard]] static constexpr ResourceState Texture(TextureState state) {
-            ResourceState result{};
-            result.kind    = ResourceKind::Texture;
-            result.texture = state;
-            return result;
-        }
-
-        [[nodiscard]] static constexpr ResourceState Buffer(BufferState state) {
-            ResourceState result{};
-            result.kind   = ResourceKind::Buffer;
-            result.buffer = state;
-            return result;
-        }
-
-        [[nodiscard]] static constexpr ResourceState Token() {
-            return {};
-        }
-
-        [[nodiscard]] constexpr bool IsAutomatic() const {
-            return kind == ResourceKind::Texture ? texture == TextureState::Automatic :
-                   kind == ResourceKind::Buffer  ? buffer == BufferState::Automatic :
-                                                   true;
-        }
-
-        [[nodiscard]] constexpr bool IsUndefined() const {
-            return kind == ResourceKind::Texture ? texture == TextureState::Undefined :
-                   kind == ResourceKind::Buffer  ? buffer == BufferState::Undefined :
-                                                   false;
-        }
-
-        friend bool operator==(const ResourceState&, const ResourceState&) = default;
+    /** Special graph boundaries, never ordinary pass accesses. */
+    enum class TextureBoundary : uint8 {
+        Undefined,
     };
 
-    enum class EdgeReasonKind : uint8_t {
+    enum class BufferBoundary : uint8 {
+        Undefined,
+    };
+
+    using TextureBoundaryState = std::variant<TextureAccessType, TextureBoundary>;
+    using BufferBoundaryState  = std::variant<BufferAccessType, BufferBoundary>;
+
+    // A token has no GPU state; monostate is also the default state.
+    using ResourceState = std::variant<
+        std::monostate,
+        TextureAccessType,
+        BufferAccessType,
+        TextureBoundary,
+        BufferBoundary>;
+
+    [[nodiscard]] static constexpr ResourceKind GetStateKind(const ResourceState& state) {
+        if (std::holds_alternative<TextureAccessType>(state) || std::holds_alternative<TextureBoundary>(state)) {
+            return ResourceKind::Texture;
+        }
+        if (std::holds_alternative<BufferAccessType>(state) || std::holds_alternative<BufferBoundary>(state)) {
+            return ResourceKind::Buffer;
+        }
+        return ResourceKind::Token;
+    }
+
+    [[nodiscard]] static constexpr ResourceState UnspecifiedResourceState(ResourceKind kind) {
+        switch (kind) {
+            case ResourceKind::Texture:
+                return TextureAccessType::Unspecified;
+            case ResourceKind::Buffer:
+                return BufferAccessType::Unspecified;
+            case ResourceKind::Token:
+                return std::monostate{};
+        }
+        return std::monostate{};
+    }
+
+    [[nodiscard]] static constexpr bool IsUnspecified(const ResourceState& state) {
+        if (const auto* texture = std::get_if<TextureAccessType>(&state)) {
+            return *texture == TextureAccessType::Unspecified;
+        }
+        if (const auto* buffer = std::get_if<BufferAccessType>(&state)) {
+            return *buffer == BufferAccessType::Unspecified;
+        }
+        // Tokens have no explicit GPU state; special boundaries do.
+        return std::holds_alternative<std::monostate>(state);
+    }
+
+    [[nodiscard]] static constexpr bool IsUndefined(const ResourceState& state) {
+        if (const auto* texture = std::get_if<TextureBoundary>(&state)) {
+            return *texture == TextureBoundary::Undefined;
+        }
+        if (const auto* buffer = std::get_if<BufferBoundary>(&state)) {
+            return *buffer == BufferBoundary::Undefined;
+        }
+        return false;
+    }
+
+    enum class EdgeReasonKind : uint8 {
         Explicit,
         ReadAfterWrite,
         WriteAfterRead,
@@ -474,33 +430,44 @@ public:
         ResourceRange  range{};
         ResourceState  state{};
         ExecutionDomain domain{};
-        uint32_t       input_version  = InvalidVersion;
-        uint32_t       output_version = InvalidVersion;
+        uint32          input_version  = InvalidVersion;
+        uint32          output_version = InvalidVersion;
     };
 
     struct CompiledEdgeReason {
         EdgeReasonKind kind = EdgeReasonKind::Explicit;
         ResourceHandle resource{};
         ResourceRange  range{};
-        uint32_t       input_version  = InvalidVersion;
-        uint32_t       output_version = InvalidVersion;
+        uint32         input_version  = InvalidVersion;
+        uint32         output_version = InvalidVersion;
 
         friend bool operator==(const CompiledEdgeReason&, const CompiledEdgeReason&) = default;
     };
 
     struct CompiledEdge {
-        PassHandle                      src{};
-        PassHandle                      dst{};
-        std::vector<CompiledEdgeReason> reasons{};
+        PassHandle src{};
+        PassHandle dst{};
+
+        friend bool operator==(const CompiledEdge&, const CompiledEdge&) = default;
+    };
+
+    enum class DependencyDiagnostics { Disabled, Enabled };
+
+    /** Optional explanations, sorted by edge endpoints and then reason. */
+    struct CompiledDependencyReason {
+        CompiledEdge       edge{};
+        CompiledEdgeReason reason{};
+
+        friend bool operator==(const CompiledDependencyReason&, const CompiledDependencyReason&) = default;
     };
 
     struct CompiledResource {
         ResourceHandle resource{};
-        uint32_t       first_use     = PassHandle::InvalidIndex;
-        uint32_t       last_use      = PassHandle::InvalidIndex;
-        uint32_t       version_count = 0;
+        uint32         first_use     = InvalidIndex;
+        uint32         last_use      = InvalidIndex;
+        uint32         version_count = 0;
         /** Compiler-assigned whole-object transient allocation slot. */
-        uint32_t       transient_slot = PassHandle::InvalidIndex;
+        uint32         transient_slot = InvalidIndex;
         bool           imported      = false;
         bool           exported      = false;
     };
@@ -510,33 +477,32 @@ public:
     };
 
     /**
-     * One stable frontend recording source. Native translation batching is a
-     * separate backend concern and must not change this pass identity.
+     * One stable pass identity in compiled order. Execution may place multiple
+     * units in one frontend stream; native translation batching remains separate.
      */
     struct CompiledFrontendRecordUnit {
-        uint32_t                source_index = 0;
+        uint32                      source_index = 0;
         QueueBinding            target_queue{};
         PassHandle              pass{};
-        PassExecutionClass      record_execution_class = PassExecutionClass::SerialRecord;
+        PassRecordPolicy        record_policy = PassRecordPolicy::Serial;
+        uint32                      recording_workload = 1;
         ERHITranslateExecutionClass native_translate_class{
             ERHITranslateExecutionClass::Parallel
         };
-        uint32_t                estimated_record_work = 1;
-        uint32_t                dependency_level_index = PassHandle::InvalidIndex;
+
     };
 
     /**
      * Contiguous frontend recording units that may be dispatched together.
      * GPU resource hazards do not split a group because immutable frontend
      * command streams can be recorded concurrently and assembled later in
-     * compiled order. Explicit and token edges still split groups only as a
-     * legacy compatibility rule; new strict Prepare/Record passes must not use
-     * graph edges to communicate CPU recording dependencies.
+     * compiled order. CPU preparation must use Prepare/Record contracts, not
+     * GPU graph edges to communicate between recording callbacks.
      */
     struct CompiledFrontendDispatchGroup {
-        uint32_t           first_unit = 0;
-        uint32_t           unit_count = 0;
-        PassExecutionClass record_execution_class = PassExecutionClass::SerialRecord;
+        uint32           first_unit    = 0;
+        uint32           unit_count    = 0;
+        PassRecordPolicy record_policy = PassRecordPolicy::Serial;
     };
 
     /**
@@ -548,7 +514,7 @@ public:
         PassHandle      pass{};
         ResourceState   state{};
         AccessMode      access = AccessMode::None;
-        ExecutionDomain domain{QueueRole::None, PipelineType::None};
+        ExecutionDomain domain{QueueRole::None, GpuWorkType::None};
 
         friend bool operator==(const CompiledBarrierSource&, const CompiledBarrierSource&) = default;
     };
@@ -556,7 +522,7 @@ public:
     struct CompiledBarrier {
         ResourceHandle  resource{};
         ResourceRange   range{};
-        /** Latest actual predecessor in sources; invalid for an external/undefined boundary. */
+        /** Representative predecessor; sources is authoritative. Invalid for an external/undefined boundary. */
         PassHandle      src_pass{};
         PassHandle      dst_pass{};
         /** Current tracked state at the destination boundary, independent of source fan-in. */
@@ -565,8 +531,8 @@ public:
         /** Representative source scope; sources is authoritative when it is non-empty. */
         AccessMode      before_access = AccessMode::None;
         AccessMode      after_access  = AccessMode::None;
-        ExecutionDomain src_domain{QueueRole::None, PipelineType::None};
-        ExecutionDomain dst_domain{QueueRole::None, PipelineType::None};
+        ExecutionDomain src_domain{QueueRole::None, GpuWorkType::None};
+        ExecutionDomain dst_domain{QueueRole::None, GpuWorkType::None};
         bool             state_transition = false;
         bool             memory_dependency = false;
         bool             execution_dependency = false;
@@ -589,36 +555,36 @@ public:
      * placed-resource / shared-heap aliasing.
      */
     struct CompiledAliasBoundary {
-        uint32_t       transient_slot = PassHandle::InvalidIndex;
+        uint32         transient_slot = InvalidIndex;
         ResourceHandle predecessor_resource{};
         ResourceHandle successor_resource{};
         /** Latest source for compact diagnostics; source_frontier is authoritative. */
         PassHandle     primary_src_pass{};
         std::vector<PassHandle> source_frontier{};
         PassHandle     dst_pass{};
-        uint32_t       barrier_index = PassHandle::InvalidIndex;
+        uint32                  barrier_index = InvalidIndex;
     };
 
     struct CompiledQueueSync {
-        uint32_t     id = 0;
+        uint32              id = 0;
         PassHandle   signal_pass{};
         PassHandle   wait_pass{};
         QueueBinding signal_queue{};
         QueueBinding wait_queue{};
-        uint32_t     signal_batch = PassHandle::InvalidIndex;
-        uint32_t     wait_batch   = PassHandle::InvalidIndex;
+        uint32              signal_batch      = InvalidIndex;
+        uint32              wait_batch        = InvalidIndex;
         bool         gpu_wait_required = false;
-        std::vector<uint32_t> dependency_edges{};
-        std::vector<uint32_t> barriers{};
+        std::vector<uint32> dependency_edges{};
+        std::vector<uint32> barriers{};
     };
 
     struct CompiledPassBarriers {
         PassHandle            pass{};
-        std::vector<uint32_t> before{};
+        std::vector<uint32>   before{};
     };
 
     struct CompiledQueueBatch {
-        uint32_t                id = 0;
+        uint32                  id = 0;
         QueueBinding            queue{};
         std::vector<PassHandle> passes{};
         /**
@@ -626,16 +592,16 @@ public:
          * standalone batch so managed lowering cannot place commands or
          * barriers across the external-control boundary.
          */
-        bool                    external_control = false;
+
         /**
          * Correlated split acquire/release placement hints. An index in pre/post never means that the
          * full CompiledBarrier should be emitted again; pass_barriers and prologue/epilogue remain the
          * canonical boundaries. Export transitions are deliberately epilogue-only.
          */
-        std::vector<uint32_t>   pre_barriers{};
-        std::vector<uint32_t>   post_barriers{};
-        std::vector<uint32_t>   wait_syncs{};
-        std::vector<uint32_t>   signal_syncs{};
+        std::vector<uint32> pre_barriers{};
+        std::vector<uint32> post_barriers{};
+        std::vector<uint32> wait_syncs{};
+        std::vector<uint32> signal_syncs{};
     };
 
     /**
@@ -646,17 +612,19 @@ public:
      * synchronization endpoints remain intentionally absent.
      */
     struct CompiledPlan {
-        /** Stable topological order of semantic dependencies. */
-        std::vector<PassHandle> topological_order{};
-        /** Stable production order. CPU recording policy is described separately below. */
+        /** Stable topological execution order. CPU recording policy is described separately below. */
         std::vector<PassHandle> execution_order{};
         /** Minimal hazard, explicit, state, and ownership frontier without fake serial edges. */
         std::vector<CompiledEdge> edges{};
+        /** Absent unless requested before Compile; never used to execute or validate the plan. */
+        std::optional<std::vector<CompiledDependencyReason>> dependency_reasons{};
+        [[nodiscard]] RENDER_API std::span<const CompiledDependencyReason>
+        GetDependencyReasons(PassHandle src, PassHandle dst) const;
         /** Atomic subresource/range accesses with logical input/output versions. */
         std::vector<CompiledAccess>   accesses{};
         std::vector<CompiledResource> resources{};
-        /** Semantic dependency levels for GPU graph analysis, independent of frontend recording. */
-        std::vector<CompiledDependencyLevel> dependency_levels{};
+        /** Diagnostic waves derived on demand from a successfully compiled graph. */
+        [[nodiscard]] RENDER_API std::vector<CompiledDependencyLevel> BuildDependencyLevels() const;
         /** Stable one-pass frontend sources with explicit thread-safety classification. */
         std::vector<CompiledFrontendRecordUnit> frontend_record_units{};
         /** CPU-class dispatch groups; GPU dependency edges never split them. */
@@ -670,8 +638,8 @@ public:
         std::vector<CompiledQueueSync>  queue_syncs{};
         std::vector<CompiledPassBarriers> pass_barriers{};
         /** Boundary requirements only; active lowering must bind external synchronization first. */
-        std::vector<uint32_t> prologue_barriers{};
-        std::vector<uint32_t> epilogue_barriers{};
+        std::vector<uint32> prologue_barriers{};
+        std::vector<uint32> epilogue_barriers{};
         /**
          * False when a participating physical cell has no logical state. True only means the
          * shadow state model is complete; it does not mean this plan can be lowered or submitted.
@@ -679,12 +647,11 @@ public:
         bool state_plan_complete = true;
 
         void Clear() {
-            topological_order.clear();
             execution_order.clear();
             edges.clear();
+            dependency_reasons.reset();
             accesses.clear();
             resources.clear();
-            dependency_levels.clear();
             frontend_record_units.clear();
             frontend_dispatch_groups.clear();
             barriers.clear();
@@ -705,42 +672,42 @@ public:
         PassBuilder& Write(ResourceHandle resource, std::string_view range = "all");
         PassBuilder& ReadWrite(ResourceHandle resource, std::string_view range = "all");
 
-        PassBuilder& Read(TextureHandle resource, TextureRange range = TextureRange::Whole());
-        PassBuilder& Write(TextureHandle resource, TextureRange range = TextureRange::Whole());
-        PassBuilder& ReadWrite(TextureHandle resource, TextureRange range = TextureRange::Whole());
+        PassBuilder& Read(TextureHandle resource, TextureRange range = {});
+        PassBuilder& Write(TextureHandle resource, TextureRange range = {});
+        PassBuilder& ReadWrite(TextureHandle resource, TextureRange range = {});
         PassBuilder& Read(
-            TextureHandle resource,
-            TextureState  state,
-            TextureRange  range = TextureRange::Whole()
+            TextureHandle     resource,
+            TextureAccessType type,
+            TextureRange      range = {}
         );
         PassBuilder& Write(
-            TextureHandle resource,
-            TextureState  state,
-            TextureRange  range = TextureRange::Whole()
+            TextureHandle     resource,
+            TextureAccessType type,
+            TextureRange      range = {}
         );
         PassBuilder& ReadWrite(
-            TextureHandle resource,
-            TextureState  state,
-            TextureRange  range = TextureRange::Whole()
+            TextureHandle     resource,
+            TextureAccessType type,
+            TextureRange      range = {}
         );
 
-        PassBuilder& Read(BufferHandle resource, BufferRange range = BufferRange::Whole());
-        PassBuilder& Write(BufferHandle resource, BufferRange range = BufferRange::Whole());
-        PassBuilder& ReadWrite(BufferHandle resource, BufferRange range = BufferRange::Whole());
+        PassBuilder& Read(BufferHandle resource, BufferRange range = {});
+        PassBuilder& Write(BufferHandle resource, BufferRange range = {});
+        PassBuilder& ReadWrite(BufferHandle resource, BufferRange range = {});
         PassBuilder& Read(
-            BufferHandle resource,
-            BufferState  state,
-            BufferRange  range = BufferRange::Whole()
+            BufferHandle     resource,
+            BufferAccessType type,
+            BufferRange      range = {}
         );
         PassBuilder& Write(
-            BufferHandle resource,
-            BufferState  state,
-            BufferRange  range = BufferRange::Whole()
+            BufferHandle     resource,
+            BufferAccessType type,
+            BufferRange      range = {}
         );
         PassBuilder& ReadWrite(
-            BufferHandle resource,
-            BufferState  state,
-            BufferRange  range = BufferRange::Whole()
+            BufferHandle     resource,
+            BufferAccessType type,
+            BufferRange      range = {}
         );
 
         PassBuilder& Read(TokenHandle resource);
@@ -765,14 +732,12 @@ public:
             return Reference(resource.Untyped());
         }
 
+        /** GPU dependency independent of declaration order; must not conflict with resource dependencies. */
         PassBuilder& DependsOn(PassHandle dependency);
         PassBuilder& SideEffect();
-        PassBuilder& ExecuteOn(QueueRole queue, PipelineType pipeline);
-        PassBuilder& MainThread();
-        PassBuilder& CpuPrepare();
-        PassBuilder& ExternalControl();
-        PassBuilder& SerialRecord(uint32_t workload = 1);
-        PassBuilder& ParallelRecord(uint32_t workload = 1);
+        PassBuilder& ExecuteOn(QueueRole queue, GpuWorkType work);
+        /** Relative CPU recording work (default 1), typically draw/dispatch count; must be positive. */
+        PassBuilder& RecordWorkload(uint32 units);
         /**
          * Makes backend translation of this recorded source a stable CPU
          * frontier. The callback still owns an ordinary graph CommandList;
@@ -782,10 +747,10 @@ public:
         PassBuilder& TranslateSerialControl();
 
     private:
-        PassBuilder(RenderGraph& graph, uint32_t pass_index) : graph(graph), pass_index(pass_index) {}
+        PassBuilder(RenderGraph& graph, uint32 pass_index) : graph(graph), pass_index(pass_index) {}
 
         RenderGraph& graph;
-        uint32_t     pass_index;
+        uint32       pass_index;
 
         friend class RenderGraph;
     };
@@ -795,22 +760,24 @@ public:
         std::string_view name{};
         ExecutionDomain domain{};
         bool             side_effect{false};
-        PassExecutionClass execution_class = PassExecutionClass::MainThread;
+        PassRecordPolicy record_policy = PassRecordPolicy::Serial;
         ERHITranslateExecutionClass translate_execution_class{
             ERHITranslateExecutionClass::Parallel
         };
     };
 
     using SetupCallback         = std::function<void(PassBuilder&)>;
-    using ExecuteCallback       = std::function<void()>;
+
     using RecordCallback        = std::function<void(CommandList&)>;
-    using PassCompletedCallback = std::function<void(const ExecutedPassInfo&)>;
+
     /**
+     * Called once for each actual stream, with all its passes in compiled order.
      * May attach submit metadata; CommandList, producer gate and transaction
-     * gate ownership are immutable. It must not wait on RHI work.
+     * gate ownership are immutable. It must not wait on RHI work. Signals cover
+     * the complete stream; a pass-specific receipt belongs to its containing stream.
      */
     using RecordingSourceSetupCallback =
-        std::function<void(const ExecutedPassInfo&, RHIRecordingSource&)>;
+        std::function<void(std::span<const ExecutedPassInfo>, RHIRecordingSource&)>;
     /**
      * Admission-only callback invoked before the corresponding producers
      * start. It may move the immutable pending sources into a nonblocking
@@ -824,47 +791,30 @@ public:
         std::function<void(Array<RHIRecordingSource>&&)>;
 
     /**
-     * Opts ExecuteFrontendRecordingPlan into the authoritative RDG state path.
-     *
-     * Active lowering materializes a fully validated Graphics-only plan into
-     * explicit RHI barriers and allocates descriptor-backed transients from a
-     * Completion-safe pool. Main-thread passes record into the caller-owned
-     * list; independently recorded passes continue to own their own lists and
-     * are mutation-sealed until one graph-wide RHI transaction commits. The
-     * current backend-tracker bridge requires full-buffer ranges, all physical
-     * texture aspects, and an initially empty main-thread list. Active lowering
-     * fails closed when caller-thread and managed-record passes are mixed in
-     * one graph. A physical MainThread graph must be isolated from nonphysical
-     * passes and keep its caller-owned list unsealed until
-     * ExecuteFrontendRecordingPlan returns (therefore no per-pass completion
-     * observer). Leaving enabled
-     * false preserves the legacy backend-tracked path and rejects active
-     * allocation-backed transient declarations.
+     * Materializes the compiled queue plan, exact resource ranges and barriers,
+     * and allocates transients from the Completion-owned pool. With enabled=false,
+     * only logical/frontend recording is performed;
+     * such BackendTracked command streams cannot be submitted to Vulkan.
      */
     struct ActiveRecordingOptions {
         bool         enabled                  = false;
-        CommandList* main_thread_command_list = nullptr;
+
         /** Defaults to the global completion-safe pool/allocator. */
         RenderGraphTransientAllocator* transient_allocator = nullptr;
+        /** Vulkan accepts only the complete Compiled dependency contract. */
+        ERHIResourceStateOwnership state_ownership = ERHIResourceStateOwnership::Compiled;
     };
 
     /**
      * Optional modern GPU profiling seam for ExecuteFrontendRecordingPlan.
      *
-     * The graph assigns source_order from the immutable compiled execution
-     * schedule before any managed producer is dispatched. A false callback
+     * Binds once per actual stream, using its first pass's info and compiled
+     * source_order. Every pass still gets its own marker in that stream.
+     * The graph assigns source_order before any producer is dispatched. A false callback
      * result is a bounded profiling drop: it suppresses legacy timing for that
      * CommandList generation and does not fail graph execution.
      * Throwing, changing CommandList recording state, or returning a value that
      * disagrees with HasGpuScopeRecorder() fails before source publication.
-     * MainThread passes reuse one binding while the caller-owned CommandList
-     * seal generation is unchanged and no managed GPU source intervenes.
-     * Before any managed GPU source is bound or published after a MainThread
-     * source, the completion observer must rotate the caller-owned generation
-     * and leave its replacement empty, unbound, and unsuppressed. The first
-     * pass of each new generation binds a new source. If a MainThread callback
-     * fails after recording begins, the caller still owns that partial
-     * generation and must reject/rotate it before recording an unrelated tail.
      */
     struct GpuProfilingOptions {
         using TryBindSource = std::function<bool(
@@ -875,8 +825,7 @@ public:
         )>;
 
         TryBindSource try_bind_source{};
-        /** Required for MainThread passes when try_bind_source is present. */
-        CommandList*  main_thread_command_list = nullptr;
+
         uint64        source_order_base         = 0;
     };
 
@@ -947,36 +896,36 @@ public:
 
     /**
      * Boundary owner_queue identifies the queue family that owns the resource before/after the
-     * graph. It is not the execution domain of the external access; external pipeline and
+     * graph. It is not the execution domain of the external access; external work and
      * synchronization endpoints remain unbound in the shadow plan.
      */
     void SetInitialState(
-        TextureHandle resource,
-        TextureState  state,
-        QueueRole     owner_queue,
-        AccessMode    last_access = AccessMode::Unknown,
-        TextureRange  range       = TextureRange::Whole()
+        TextureHandle        resource,
+        TextureBoundaryState state,
+        QueueRole            owner_queue,
+        AccessMode           last_access = AccessMode::Unknown,
+        TextureRange         range       = {}
     );
     void SetInitialState(
-        BufferHandle resource,
-        BufferState  state,
-        QueueRole    owner_queue,
-        AccessMode   last_access = AccessMode::Unknown,
-        BufferRange  range       = BufferRange::Whole()
+        BufferHandle        resource,
+        BufferBoundaryState state,
+        QueueRole           owner_queue,
+        AccessMode          last_access = AccessMode::Unknown,
+        BufferRange         range       = {}
     );
     void Export(
-        TextureHandle resource,
-        TextureState  final_state,
-        QueueRole     owner_queue,
-        AccessMode    next_access = AccessMode::Read,
-        TextureRange  range       = TextureRange::Whole()
+        TextureHandle        resource,
+        TextureBoundaryState final_state,
+        QueueRole            owner_queue,
+        AccessMode           next_access = AccessMode::Read,
+        TextureRange         range       = {}
     );
     void Export(
-        BufferHandle resource,
-        BufferState  final_state,
-        QueueRole    owner_queue,
-        AccessMode   next_access = AccessMode::Read,
-        BufferRange  range       = BufferRange::Whole()
+        BufferHandle        resource,
+        BufferBoundaryState final_state,
+        QueueRole           owner_queue,
+        AccessMode          next_access = AccessMode::Read,
+        BufferRange         range       = {}
     );
 
     /**
@@ -1002,7 +951,7 @@ public:
         Input&&          immutable_input,
         Prepare&&        prepare,
         std::span<const SetupPassHandle> dependencies = {},
-        PrepareSafety    safety = PrepareSafety::Restricted
+        SetupPassSafety  safety = SetupPassSafety::Restricted
     ) -> RGPreparedValue<RGSetupResult<Input, Prepare>>;
 
     /** Explicit escape hatch for CPU preparation that must use the RHI. */
@@ -1029,98 +978,23 @@ public:
             std::forward<Input>(immutable_input),
             std::forward<Prepare>(prepare),
             dependencies,
-            PrepareSafety::Unsafe
+            SetupPassSafety::Unsafe
         );
     }
 
-    /**
-     * Convenience wrapper around AddSetupPass followed by AddRecordPass.
-     * Pass-owned registration should prefer the two explicit calls so setup
-     * dependencies and record-pass declaration remain independently visible.
-     */
-    template<typename Input, typename Prepare, typename Record>
-        requires std::invocable<
-                     std::decay_t<Prepare>&,
-                     const std::decay_t<Input>&> &&
-                 (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
-                 (!std::is_reference_v<
-                     std::invoke_result_t<
-                         std::decay_t<Prepare>&,
-                         const std::decay_t<Input>&>>) &&
-                 std::invocable<
-                     std::decay_t<Record>&,
-                     CommandList&,
-                     const RGSetupResult<Input, Prepare>&>
-    PreparedPassHandle AddPreparedPass(
-        std::string_view                 name,
-        Input&&                          immutable_input,
-        Prepare&&                        prepare,
-        const SetupCallback&             declare_access,
-        Record&&                         record,
-        PassExecutionClass               execution = PassExecutionClass::ParallelRecordEligible,
-        uint32_t                         workload = 1,
-        std::span<const SetupPassHandle>  setup_dependencies = {},
-        PrepareSafety                    prepare_safety = PrepareSafety::Restricted
-    );
-
-    /** Convenience escape hatch for a combined prepared pass that needs RHI access. */
-    template<typename Input, typename Prepare, typename Record>
-        requires std::invocable<
-                     std::decay_t<Prepare>&,
-                     const std::decay_t<Input>&> &&
-                 (!std::is_void_v<RGSetupResult<Input, Prepare>>) &&
-                 (!std::is_reference_v<
-                     std::invoke_result_t<
-                         std::decay_t<Prepare>&,
-                         const std::decay_t<Input>&>>) &&
-                 std::invocable<
-                     std::decay_t<Record>&,
-                     CommandList&,
-                     const RGSetupResult<Input, Prepare>&>
-    PreparedPassHandle AddUnsafePreparedPass(
-        std::string_view                 name,
-        Input&&                          immutable_input,
-        Prepare&&                        prepare,
-        const SetupCallback&             declare_access,
-        Record&&                         record,
-        PassExecutionClass               execution = PassExecutionClass::ParallelRecordEligible,
-        uint32_t                         workload = 1,
-        std::span<const SetupPassHandle>  setup_dependencies = {}
-    ) {
-        return AddPreparedPass(
-            name,
-            std::forward<Input>(immutable_input),
-            std::forward<Prepare>(prepare),
-            declare_access,
-            std::forward<Record>(record),
-            execution,
-            workload,
-            setup_dependencies,
-            PrepareSafety::Unsafe
-        );
-    }
-
-    PassHandle AddPass(std::string_view name, const SetupCallback& setup, ExecuteCallback execute);
-    PassHandle AddUnsafePass(
-        std::string_view     name,
-        const SetupCallback& setup,
-        ExecuteCallback      execute
-    ) {
-        return AddPass(name, setup, std::move(execute));
-    }
+    /** The caller explicitly declares CPU recording safety; it is not inferred from GPU access. */
     PassHandle AddRecordPass(
         std::string_view     name,
         const SetupCallback& setup,
         RecordCallback       record,
-        PassExecutionClass   execution = PassExecutionClass::SerialRecord,
-        uint32_t             workload = 1
+        PassRecordPolicy policy
     );
 
     /**
      * Declares a command-recording pass from one graph-owned immutable
      * parameter object. DeclareRGAccess() expands the typed access fields into
      * this graph's existing PassBuilder contract; policy_setup remains the
-     * explicit home for queue, pipeline, side-effect and recording policy.
+     * explicit home for queue, GPU work type and side-effect policy.
      */
     template<RGParameterAccessProvider Parameters, typename Record>
         requires std::invocable<
@@ -1132,35 +1006,24 @@ public:
         Parameters&&     parameters,
         SetupCallback    policy_setup,
         Record&&         record,
-        PassExecutionClass execution = PassExecutionClass::SerialRecord,
-        uint32_t             workload = 1
+        PassRecordPolicy policy
     );
 
-    /** Compiles declarations without emitting barriers or recording RHI commands. */
-    bool Compile();
-
-    /** Executes callbacks synchronously and serially once in compiled order. */
-    bool Execute();
-
     /**
-     * Executes callbacks serially and invokes the observer after each callback
-     * has completely returned. The observer can safely seal the commands just
-     * recorded by that pass without allowing GPU scopes to cross a submission.
+     * Compiles declarations without emitting barriers or recording RHI commands.
+     * Resource versions follow declaration order; execution follows the compiled dependencies.
      */
-    bool Execute(const PassCompletedCallback& after_pass);
+    // Dump always includes execution metadata. Full edge reasons require Enabled here;
+    // Dump never recompiles a graph to recover uncaptured explanations.
+    bool Compile(DependencyDiagnostics diagnostics = DependencyDiagnostics::Disabled);
 
     /**
-     * Executes legacy callbacks on the caller and explicit record callbacks on
-     * independently owned CommandLists. Contiguous eligible passes on one queue
-     * are dispatched together even when texture/buffer GPU hazards place them
-     * in different dependency levels: those hazards constrain submission, not
-     * immutable CPU command recording. Token hazards and explicit DependsOn
-     * edges follow the same rule. Only PassExecutionClass creates a frontend
-     * dispatch boundary. Sources are registered with RHI in compiled order and
-     * joined before the next caller-thread pass.
+     * Records compatible consecutive passes into shared private streams and
+     * publishes sources in compiled order. GPU hazards do not order CPU recording; Serial policy joins the
+     * previous group before executing on the caller. Every producer is joined
+     * before returning, including failures.
      */
     bool ExecuteFrontendRecordingPlan(
-        const PassCompletedCallback&        after_main_thread_pass,
         const RecordingSourceSetupCallback& configure_recording_source = {},
         bool                                parallel_recording_enabled = true,
         const FrontendSourcePublisher&      publish_frontend_sources = {},
@@ -1169,12 +1032,15 @@ public:
     );
 
     /**
-     * Records every eligible pass into its own frontend CommandList (and may
-     * do so concurrently), joins all producers, then appends those frontend
+     * Records serial regions into shared private CommandLists, partitions
+     * parallel regions by recording workload, joins all producers, then appends those frontend
      * streams to one caller-owned Graphics CommandList in compiled order.
      * The destination's later Submit() is the only native submission boundary.
+     * A Compiled destination consumes the full lowered barrier plan, including
+     * import/export boundaries, and bypasses backend dependency inference.
+     * BackendTracked remains available only for unmigrated callers.
      *
-     * This is the direct path for record-class Graphics passes backed by
+     * This is the direct path for Graphics passes backed by
      * already-created resources. It uses the compiler's frontend dispatch
      * groups and never publishes per-pass RHIRecordingSources. Active transient
      * lowering and multi-queue execution remain on
@@ -1212,7 +1078,7 @@ private:
     friend class RenderGraphTransientAllocator;
     friend class RenderGraphAsyncSetupTestAccess;
 
-    enum class SetupFaultForTesting : uint8_t {
+    enum class SetupFaultForTesting : uint8 {
         None                 = 0,
         BatchOwnerCreate     = 1 << 0,
         BatchRuntimeCreate   = 1 << 1,
@@ -1220,7 +1086,7 @@ private:
         FailureDiagnostic    = 1 << 3,
     };
 
-    enum class GpuProfileBindOutcome : uint8_t {
+    enum class GpuProfileBindOutcome : uint8 {
         Bound,
         Dropped,
         Failed,
@@ -1241,6 +1107,8 @@ private:
         ResourceState state{};
         QueueRole     queue       = QueueRole::None;
         AccessMode    boundary_access = AccessMode::None;
+
+        friend bool operator==(const StateDeclaration&, const StateDeclaration&) = default;
     };
 
     struct ResourceDeclaration {
@@ -1260,8 +1128,8 @@ private:
         bool                     whole_resource_exported = false;
         std::vector<StateDeclaration> initial_states{};
         std::vector<StateDeclaration> final_states{};
-        uint32_t                 first_use  = PassHandle::InvalidIndex;
-        uint32_t                 last_use   = PassHandle::InvalidIndex;
+        uint32                                first_use = InvalidIndex;
+        uint32                                last_use  = InvalidIndex;
     };
 
     struct PassDeclaration {
@@ -1269,21 +1137,20 @@ private:
         std::vector<AccessDeclaration> accesses{};
         std::vector<ResourceHandle>    references{};
         std::vector<PassHandle>        explicit_dependencies{};
-        ExecuteCallback                execute{};
         RecordCallback                 record{};
         ExecutionDomain               domain{};
         bool                           side_effect = false;
-        PassExecutionClass             execution_class = PassExecutionClass::MainThread;
+        PassRecordPolicy               record_policy = PassRecordPolicy::Serial;
+        uint32                          recording_workload = 1;
         ERHITranslateExecutionClass     translate_execution_class{
             ERHITranslateExecutionClass::Parallel
         };
-        uint32_t                       workload = 1;
     };
 
     struct SetupPassDeclaration {
         std::string                              name{};
-        std::vector<uint32_t>                    dependencies{};
-        PrepareSafety                            safety = PrepareSafety::Restricted;
+        std::vector<uint32>                      dependencies{};
+        SetupPassSafety                          safety = SetupPassSafety::Restricted;
         std::function<void()>                    execute{};
         std::function<void(std::string_view)>    fail{};
         std::function<void(std::string_view)>    annotate_failure{};
@@ -1306,7 +1173,7 @@ private:
         const BufferDesc*  buffer_desc
     );
     void AddAccess(
-        uint32_t         pass_index,
+        uint32           pass_index,
         ResourceHandle   resource,
         AccessMode       mode,
         ResourceRange    range,
@@ -1325,23 +1192,18 @@ private:
     );
     bool MarkExported(ResourceHandle resource, bool whole_resource);
     void ReleaseNonExportedTransientBindings() noexcept;
-    void AddDependency(uint32_t pass_index, PassHandle dependency);
-    void AddReference(uint32_t pass_index, ResourceHandle resource);
-    void MarkSideEffect(uint32_t pass_index);
-    void SetExecutionDomain(uint32_t pass_index, QueueRole queue, PipelineType pipeline);
-    void SetPassExecutionClass(
-        uint32_t           pass_index,
-        PassExecutionClass execution_class,
-        uint32_t           workload
-    );
+    void AddDependency(uint32 pass_index, PassHandle dependency);
+    void AddReference(uint32 pass_index, ResourceHandle resource);
+    void MarkSideEffect(uint32 pass_index);
+    void SetExecutionDomain(uint32 pass_index, QueueRole queue, GpuWorkType work);
     void SetPassTranslateExecutionClass(
-        uint32_t                    pass_index,
+        uint32                      pass_index,
         ERHITranslateExecutionClass execution_class
     );
     SetupPassHandle RegisterSetupPass(
         std::string_view                         setup_name,
         std::span<const SetupPassHandle>         dependencies,
-        PrepareSafety                           safety,
+        SetupPassSafety                         safety,
         std::function<void()>                    execute,
         std::function<void(std::string_view)>    fail,
         std::function<void(std::string_view)>    annotate_failure
@@ -1366,21 +1228,33 @@ private:
     [[nodiscard]] bool IsValidResource(ResourceHandle resource) const;
     [[nodiscard]] bool IsValidPass(PassHandle pass) const;
 
+    struct ResourceNameHash {
+        using is_transparent = void;
+
+        size_t operator()(std::string_view value) const noexcept {
+            return std::hash<std::string_view>{}(value);
+        }
+    };
+
     std::string                      name{};
     std::vector<ResourceDeclaration> resources{};
+    // Graph-local declaration indexes. Names include aliases; only imports
+    // have a physical identity while declarations remain mutable.
+    std::unordered_map<std::string, uint32, ResourceNameHash, std::equal_to<>> resource_names{};
+    std::unordered_map<const void*, uint32>                                    imported_resource_ids{};
     std::vector<PassDeclaration>     passes{};
     std::vector<SetupPassDeclaration> setup_passes{};
     SharedPtr<SetupBatchState>        setup_batch{};
     CompiledPlan                     compiled_plan{};
     std::vector<std::string>         declaration_errors{};
     std::string                      compile_error{};
-    uint64_t                         graph_id = 0;
+    uint64                                                                     graph_id = InvalidGraphId;
     QueueTopology                    queue_topology{};
     bool                             compiled = false;
     bool                             executed = false;
     bool                             setup_dispatched = false;
     bool                             setup_failed_before_batch = false;
-    uint8_t                          setup_faults_for_testing = 0;
+    uint8                                                                      setup_faults_for_testing  = 0;
 };
 
 } // namespace Moer::Render

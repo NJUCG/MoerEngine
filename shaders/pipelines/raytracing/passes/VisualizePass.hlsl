@@ -15,7 +15,7 @@
 [[vk::binding(8, 0)]] Texture2D<uint> specular_roughness : register(t7);
 [[vk::binding(9, 0)]] Texture2D<float4> motion : register(t8);
 [[vk::binding(10, 0)]] Texture2D<float4> normal_roughness : register(t9);
-[[vk::binding(11, 0)]] RWTexture2D<float4> output : register(u0);
+[[vk::binding(11, 0), vk::image_format("rgba8")]] RWTexture2D<float4> output : register(u0);
 
 static const float s_fp16_max = 65504.0f;
 

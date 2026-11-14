@@ -2,6 +2,7 @@
 
 #include "misc/STL.h"
 #include "misc/Traits.h"
+#include "misc/Types.h"
 #include "shaderheaders/shared/lighting/ShaderParameters.h"
 
 namespace Moer {
@@ -10,7 +11,7 @@ class Scene;
 
 namespace Moer::Render::Raytracing {
 
-enum class EAnalyticLightClass : uint {
+enum class EAnalyticLightClass : uint32 {
     Finite,
     Infinite,
     Environment
@@ -18,10 +19,10 @@ enum class EAnalyticLightClass : uint {
 
 struct EmissivePrimitiveFrameInput {
     uint64 stable_key         = 0;
-    uint   primitive_id       = 0;
-    uint   num_triangles      = 0;
-    uint   index_start_idx    = 0;
-    uint   first_instance_idx = 0;
+    uint32 primitive_id       = 0;
+    uint32 num_triangles      = 0;
+    uint32 index_start_idx    = 0;
+    uint32 first_instance_idx = 0;
 };
 
 struct AnalyticLightFrameInput {
@@ -31,10 +32,10 @@ struct AnalyticLightFrameInput {
 };
 
 struct RaytracingSceneFrameSnapshot {
-    uint primitive_count         = 0;
-    uint light_count             = 0;
-    uint emissive_instance_count = 0;
-    uint emissive_triangle_count = 0;
+    uint32 primitive_count         = 0;
+    uint32 light_count             = 0;
+    uint32 emissive_instance_count = 0;
+    uint32 emissive_triangle_count = 0;
 
     Array<EmissivePrimitiveFrameInput> emissive_primitives;
     Array<AnalyticLightFrameInput>     analytic_lights;

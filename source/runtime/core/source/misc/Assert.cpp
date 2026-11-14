@@ -1,6 +1,6 @@
 #include "misc/Assert.h"
-
 #include "log/LogSystem.h"
+#include "misc/Types.h"
 #include "profile/ProfileDump.h"
 
 #include <atomic>
@@ -11,19 +11,19 @@ namespace Moer::Diagnostics {
 
 namespace {
 
-enum class EFatalProgress : std::uint8_t {
+enum class EFatalProgress : uint8 {
     Idle,
     OwnerElected,
     PrefixFlushed,
     ArtifactAttemptFinished,
 };
 
-std::atomic<std::uint32_t>  g_fatal_owner_thread_id{0};
+std::atomic<uint32>         g_fatal_owner_thread_id{0};
 std::atomic<EFatalProgress> g_fatal_progress{EFatalProgress::Idle};
 std::atomic_bool            g_has_ensure_failures{false};
 
-constexpr std::uint32_t kCrashFlushTimeoutMs   = 200;
-constexpr std::uint32_t kConcurrentFatalWaitMs = 1500;
+constexpr uint32 kCrashFlushTimeoutMs   = 200;
+constexpr uint32 kConcurrentFatalWaitMs = 1500;
 
 std::string_view FailureKindName(EFailureKind _kind) noexcept {
     switch (_kind) {
@@ -55,8 +55,8 @@ std::string_view CrashFlushResultName(ProfileDump::CrashFlushResult _result) noe
 
 namespace Detail {
 
-void ClaimAssertFailureOwnership(std::uint32_t _thread_id) noexcept {
-    std::uint32_t expected = 0;
+void ClaimAssertFailureOwnership(uint32 _thread_id) noexcept {
+    uint32 expected = 0;
     if (g_fatal_owner_thread_id.compare_exchange_strong(
             expected, _thread_id, std::memory_order_acq_rel, std::memory_order_acquire
         )) {
@@ -90,7 +90,7 @@ void ResetEnsureFailures() noexcept {
 }
 
 [[noreturn]] void HandleAssertFailure(const FailureInfo& _info) noexcept {
-    const std::uint32_t current_thread_id = Platform::GetCurrentThreadID();
+    const uint32 current_thread_id = Platform::GetCurrentThreadID();
     if (g_fatal_owner_thread_id.load(std::memory_order_acquire) != current_thread_id) {
         Detail::ClaimAssertFailureOwnership(current_thread_id);
     }

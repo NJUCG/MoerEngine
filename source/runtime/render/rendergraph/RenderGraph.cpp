@@ -1,12 +1,13 @@
 #include "rendergraph/RenderGraph.h"
-
 #include "log/LogSystem.h"
+#include "misc/Types.h"
 #include "profile/ProfileScope.h"
 #include "rendergraph/RenderGraphCompiler.h"
 #include "rendergraph/RenderGraphLowering.h"
+#include "rendergraph/RenderGraphRecordingPlan.h"
 #include "rhi/RHI.h"
-#include "rhi/RHIExecutor.h"
 #include "rhi/RHIThreadOwnership.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "taskgraph/TaskGraph.h"
 
 #include <algorithm>
@@ -40,13 +41,13 @@ struct InjectedSetupDispatchFault {};
 } // namespace
 
 struct RenderGraph::SetupBatchState {
-    enum class Status : uint8_t {
+    enum class Status : uint8 {
         Pending,
         Succeeded,
         Failed,
     };
 
-    enum class JobStatus : uint8_t {
+    enum class JobStatus : uint8 {
         Pending,
         Running,
         Succeeded,
@@ -59,17 +60,17 @@ struct RenderGraph::SetupBatchState {
     };
 
     [[nodiscard]] static std::vector<JobRuntime> CreateRuntimes(
-        size_t  job_count,
-        uint8_t faults_for_testing
+        size_t job_count,
+        uint8  faults_for_testing
     ) {
         if ((faults_for_testing &
-             static_cast<uint8_t>(SetupFaultForTesting::BatchRuntimeCreate)) != 0) {
+             static_cast<uint8>(SetupFaultForTesting::BatchRuntimeCreate)) != 0) {
             throw std::bad_alloc{};
         }
         return std::vector<JobRuntime>(job_count);
     }
 
-    SetupBatchState(size_t job_count, uint8_t faults_for_testing) :
+    SetupBatchState(size_t job_count, uint8 faults_for_testing) :
         runtimes(CreateRuntimes(job_count, faults_for_testing)),
         fault_mask(faults_for_testing) {
     }
@@ -102,7 +103,7 @@ struct RenderGraph::SetupBatchState {
         for (size_t index = 0; index < jobs.size(); ++index) {
             GraphEventArray prerequisites{};
             prerequisites.reserve(jobs[index].dependencies.size());
-            for (const uint32_t dependency : jobs[index].dependencies) {
+            for (const uint32 dependency : jobs[index].dependencies) {
                 prerequisites.emplace_back(events[dependency]);
             }
             auto task = LambdaTask::Create([owner, index] {
@@ -181,7 +182,7 @@ private:
         "asynchronous RenderGraph setup failed (diagnostic unavailable)";
 
     [[nodiscard]] bool HasFault(SetupFaultForTesting fault) const noexcept {
-        return (fault_mask & static_cast<uint8_t>(fault)) != 0;
+        return (fault_mask & static_cast<uint8>(fault)) != 0;
     }
 
     void RecordExecutionFailure(size_t failed_index, const char* reason) noexcept {
@@ -216,8 +217,9 @@ private:
             return;
         }
         try {
+            ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.SetupJob", jobs[index].name);
             RHICommandAccessRestrictionScope access_scope(
-                jobs[index].safety == PrepareSafety::Restricted
+                jobs[index].safety == SetupPassSafety::Restricted
             );
             jobs[index].execute();
             if (!cancelled.load(std::memory_order_acquire)) {
@@ -234,7 +236,7 @@ private:
     }
 
     [[nodiscard]] bool DependenciesSucceeded(size_t index) const noexcept {
-        for (const uint32_t dependency : jobs[index].dependencies) {
+        for (const uint32 dependency : jobs[index].dependencies) {
             if (runtimes[dependency].status.load(std::memory_order_acquire) !=
                 JobStatus::Succeeded) {
                 return false;
@@ -265,6 +267,7 @@ private:
     }
 
     void CompleteFromJobs() noexcept {
+        MOER_PROFILE_SCOPE("RenderGraph.SetupBatchComplete");
         for (size_t index = 0; index < runtimes.size(); ++index) {
             if (runtimes[index].status.load(std::memory_order_acquire) ==
                 JobStatus::Failed) {
@@ -432,18 +435,18 @@ private:
     std::string                       error{};
     const char*                       fallback_error = kCallbackFailed;
     Status                            status = Status::Pending;
-    uint8_t                           fault_mask = 0;
+    uint8                             fault_mask                = 0;
     bool                              diagnostic_storage_failed = false;
     std::atomic<bool>                 cancelled{false};
 };
 
 namespace {
 
-std::atomic<uint64_t> s_next_graph_id{1};
+std::atomic<uint64> s_next_graph_id{1};
 
 [[nodiscard]] bool IsValidTextureDesc(const RenderGraph::TextureDesc& desc) {
-    const auto aspect_mask = static_cast<uint8_t>(desc.aspects);
-    const auto known_mask  = static_cast<uint8_t>(RenderGraph::TextureAspect::All);
+    const auto aspect_mask = static_cast<uint8>(desc.aspects);
+    const auto known_mask  = static_cast<uint8>(RenderGraph::TextureAspect::All);
     return desc.mip_count != 0 && desc.layer_count != 0 && aspect_mask != 0 &&
            (aspect_mask & known_mask) == aspect_mask;
 }
@@ -510,34 +513,28 @@ const char* ToString(RenderGraph::QueueRole queue) {
     return "unknown";
 }
 
-const char* ToString(RenderGraph::PipelineType pipeline) {
-    switch (pipeline) {
-        case RenderGraph::PipelineType::None:
+const char* ToString(RenderGraph::GpuWorkType work) {
+    switch (work) {
+        case RenderGraph::GpuWorkType::None:
             return "none";
-        case RenderGraph::PipelineType::Graphics:
+        case RenderGraph::GpuWorkType::Graphics:
             return "graphics";
-        case RenderGraph::PipelineType::Compute:
+        case RenderGraph::GpuWorkType::Compute:
             return "compute";
-        case RenderGraph::PipelineType::RayTracing:
+        case RenderGraph::GpuWorkType::RayTracing:
             return "raytracing";
-        case RenderGraph::PipelineType::Copy:
-            return "copy";
+        case RenderGraph::GpuWorkType::Transfer:
+            return "transfer";
     }
     return "unknown";
 }
 
-const char* ToString(RenderGraph::PassExecutionClass execution) {
+const char* ToString(RenderGraph::PassRecordPolicy execution) {
     switch (execution) {
-        case RenderGraph::PassExecutionClass::MainThread:
-            return "main-thread";
-        case RenderGraph::PassExecutionClass::CpuPrepare:
-            return "cpu-prepare";
-        case RenderGraph::PassExecutionClass::ExternalControl:
-            return "external-control";
-        case RenderGraph::PassExecutionClass::SerialRecord:
-            return "serial-record";
-        case RenderGraph::PassExecutionClass::ParallelRecordEligible:
-            return "parallel-record";
+        case RenderGraph::PassRecordPolicy::Serial:
+            return "serial";
+        case RenderGraph::PassRecordPolicy::ParallelAllowed:
+            return "parallel-allowed";
     }
     return "unknown";
 }
@@ -552,85 +549,86 @@ const char* ToString(ERHITranslateExecutionClass execution) {
     return "unknown";
 }
 
-const char* ToString(RenderGraph::TextureState state) {
+const char* ToString(RenderGraph::TextureAccessType state) {
     switch (state) {
-        case RenderGraph::TextureState::Automatic:
-            return "automatic";
-        case RenderGraph::TextureState::Undefined:
-            return "undefined";
-        case RenderGraph::TextureState::TransferSource:
+        case RenderGraph::TextureAccessType::Unspecified:
+            return "unspecified";
+        case RenderGraph::TextureAccessType::TransferSource:
             return "transfer-src";
-        case RenderGraph::TextureState::PresentationSource:
-            return "presentation-src";
-        case RenderGraph::TextureState::TransferDestination:
+        case RenderGraph::TextureAccessType::TransferDestination:
             return "transfer-dst";
-        case RenderGraph::TextureState::ShaderResource:
-            return "shader-resource";
-        case RenderGraph::TextureState::Sampled:
+        case RenderGraph::TextureAccessType::Sampled:
             return "sampled";
-        case RenderGraph::TextureState::RenderTarget:
-            return "render-target";
-        case RenderGraph::TextureState::DepthStencilRead:
-            return "depth-read";
-        case RenderGraph::TextureState::DepthStencilWrite:
-            return "depth-write";
-        case RenderGraph::TextureState::UnorderedAccess:
-            return "unordered-access";
-        case RenderGraph::TextureState::Present:
-            return "present";
+        case RenderGraph::TextureAccessType::Storage:
+            return "storage";
+        case RenderGraph::TextureAccessType::ColorAttachment:
+            return "color-attachment";
+        case RenderGraph::TextureAccessType::DepthStencilAttachment:
+            return "depth-stencil-attachment";
     }
     return "unknown";
 }
 
-const char* ToString(RenderGraph::BufferState state) {
+const char* ToString(RenderGraph::BufferAccessType state) {
     switch (state) {
-        case RenderGraph::BufferState::Automatic:
-            return "automatic";
-        case RenderGraph::BufferState::Undefined:
-            return "undefined";
-        case RenderGraph::BufferState::TransferSource:
+        case RenderGraph::BufferAccessType::Unspecified:
+            return "unspecified";
+        case RenderGraph::BufferAccessType::TransferSource:
             return "transfer-src";
-        case RenderGraph::BufferState::TransferDestination:
+        case RenderGraph::BufferAccessType::TransferDestination:
             return "transfer-dst";
-        case RenderGraph::BufferState::VertexBuffer:
+        case RenderGraph::BufferAccessType::VertexBuffer:
             return "vertex-buffer";
-        case RenderGraph::BufferState::IndexBuffer:
+        case RenderGraph::BufferAccessType::IndexBuffer:
             return "index-buffer";
-        case RenderGraph::BufferState::IndirectArgument:
+        case RenderGraph::BufferAccessType::IndirectArgument:
             return "indirect-argument";
-        case RenderGraph::BufferState::ShaderResource:
-            return "shader-resource";
-        case RenderGraph::BufferState::UnorderedAccess:
-            return "unordered-access";
-        case RenderGraph::BufferState::AccelerationStructureBuildInput:
+        case RenderGraph::BufferAccessType::ShaderRead:
+            return "shader-read";
+        case RenderGraph::BufferAccessType::Storage:
+            return "storage";
+        case RenderGraph::BufferAccessType::AccelerationStructureBuildInput:
             return "as-build-input";
-        case RenderGraph::BufferState::AccelerationStructureRead:
+        case RenderGraph::BufferAccessType::AccelerationStructureRead:
             return "as-read";
-        case RenderGraph::BufferState::AccelerationStructureWrite:
+        case RenderGraph::BufferAccessType::AccelerationStructureWrite:
             return "as-write";
     }
     return "unknown";
 }
 
-void AppendState(std::ostringstream& stream, const RenderGraph::ResourceState& state) {
-    switch (state.kind) {
-        case RenderGraph::ResourceKind::Texture:
-            stream << ToString(state.texture);
-            break;
-        case RenderGraph::ResourceKind::Buffer:
-            stream << ToString(state.buffer);
-            break;
-        case RenderGraph::ResourceKind::Token:
-            stream << "logical";
-            break;
+const char* ToString(RenderGraph::TextureBoundary state) {
+    switch (state) {
+        case RenderGraph::TextureBoundary::Undefined:
+            return "undefined";
     }
+    return "unknown";
+}
+
+const char* ToString(RenderGraph::BufferBoundary state) {
+    switch (state) {
+        case RenderGraph::BufferBoundary::Undefined:
+            return "undefined";
+    }
+    return "unknown";
+}
+
+void AppendState(std::ostringstream& stream, const RenderGraph::ResourceState& state) {
+    std::visit([&](auto value) {
+        if constexpr (std::is_same_v<decltype(value), std::monostate>) {
+            stream << "logical";
+        } else {
+            stream << ToString(value);
+        }
+    },
+               state);
 }
 
 void AppendTextureAspects(std::ostringstream& stream, RenderGraph::TextureAspect aspects) {
-    const auto mask   = static_cast<uint8_t>(aspects);
+    const auto mask   = static_cast<uint8>(aspects);
     bool       wrote  = false;
     auto       append = [&](RenderGraph::TextureAspect aspect, const char* name) {
-        if ((mask & static_cast<uint8_t>(aspect)) == 0) {
+        if ((mask & static_cast<uint8>(aspect)) == 0) {
             return;
         }
         if (wrote) {
@@ -647,7 +645,7 @@ void AppendTextureAspects(std::ostringstream& stream, RenderGraph::TextureAspect
     }
 }
 
-void AppendCount(std::ostringstream& stream, uint64_t count, uint64_t remaining) {
+void AppendCount(std::ostringstream& stream, uint64 count, uint64 remaining) {
     if (count == remaining) {
         stream << "remaining";
     } else {
@@ -656,28 +654,24 @@ void AppendCount(std::ostringstream& stream, uint64_t count, uint64_t remaining)
 }
 
 void AppendRange(std::ostringstream& stream, const RenderGraph::ResourceRange& range) {
-    switch (range.kind) {
-        case RenderGraph::ResourceKind::Texture:
-            stream << "texture[aspect=";
-            AppendTextureAspects(stream, range.texture.aspects);
-            stream << " mip=" << range.texture.mip_first << '+';
-            AppendCount(stream, range.texture.mip_count, RenderGraph::RemainingTextureRange);
-            stream << " layer=" << range.texture.layer_first << '+';
-            AppendCount(stream, range.texture.layer_count, RenderGraph::RemainingTextureRange);
-            stream << ']';
-            break;
-        case RenderGraph::ResourceKind::Buffer:
-            stream << "buffer[offset=" << range.buffer.offset << " size=";
-            AppendCount(stream, range.buffer.size, RenderGraph::RemainingBufferRange);
-            stream << ']';
-            break;
-        case RenderGraph::ResourceKind::Token:
-            stream << "token[all]";
-            break;
+    if (const auto* texture = std::get_if<RenderGraph::TextureRange>(&range)) {
+        stream << "texture[aspect=";
+        AppendTextureAspects(stream, texture->aspects);
+        stream << " mip=" << texture->mip_first << '+';
+        AppendCount(stream, texture->mip_count, RenderGraph::RemainingTextureRange);
+        stream << " layer=" << texture->layer_first << '+';
+        AppendCount(stream, texture->layer_count, RenderGraph::RemainingTextureRange);
+        stream << ']';
+    } else if (const auto* buffer = std::get_if<RenderGraph::BufferRange>(&range)) {
+        stream << "buffer[offset=" << buffer->offset << " size=";
+        AppendCount(stream, buffer->size, RenderGraph::RemainingBufferRange);
+        stream << ']';
+    } else {
+        stream << "token[all]";
     }
 }
 
-void AppendVersion(std::ostringstream& stream, uint32_t version) {
+void AppendVersion(std::ostringstream& stream, uint32 version) {
     if (version == RenderGraph::InvalidVersion) {
         stream << "none";
     } else {
@@ -711,7 +705,7 @@ RenderGraph::RenderGraph(std::string_view graph_name, QueueTopology topology) :
     name(graph_name),
     queue_topology(topology),
     graph_id(s_next_graph_id.fetch_add(1, std::memory_order_relaxed)) {
-    assert(graph_id != 0 && "RenderGraph id counter wrapped.");
+    assert(graph_id != InvalidGraphId && "RenderGraph id counter wrapped.");
 }
 
 RenderGraph::~RenderGraph() {
@@ -736,16 +730,16 @@ RenderGraph::~RenderGraph() {
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(ResourceHandle resource, std::string_view range) {
-    ResourceRange typed_range = ResourceRange::Token();
+    ResourceRange typed_range = std::monostate{};
     if (graph.IsValidResource(resource)) {
-        typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
+        typed_range = RenderGraph::WholeResourceRange(graph.resources[resource.resource_id].kind);
     }
     graph.AddAccess(
         pass_index,
         resource,
         AccessMode::Read,
         typed_range,
-        ResourceState{.kind = typed_range.kind},
+        RenderGraph::UnspecifiedResourceState(RenderGraph::GetRangeKind(typed_range)),
         false,
         false,
         range
@@ -754,16 +748,16 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(ResourceHandle resource
 }
 
 RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(ResourceHandle resource, std::string_view range) {
-    ResourceRange typed_range = ResourceRange::Token();
+    ResourceRange typed_range = std::monostate{};
     if (graph.IsValidResource(resource)) {
-        typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
+        typed_range = RenderGraph::WholeResourceRange(graph.resources[resource.resource_id].kind);
     }
     graph.AddAccess(
         pass_index,
         resource,
         AccessMode::Write,
         typed_range,
-        ResourceState{.kind = typed_range.kind},
+        RenderGraph::UnspecifiedResourceState(RenderGraph::GetRangeKind(typed_range)),
         false,
         false,
         range
@@ -773,16 +767,16 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(ResourceHandle resourc
 
 RenderGraph::PassBuilder&
 RenderGraph::PassBuilder::ReadWrite(ResourceHandle resource, std::string_view range) {
-    ResourceRange typed_range = ResourceRange::Token();
+    ResourceRange typed_range = std::monostate{};
     if (graph.IsValidResource(resource)) {
-        typed_range = ResourceRange::Whole(graph.resources[resource.index].kind);
+        typed_range = RenderGraph::WholeResourceRange(graph.resources[resource.resource_id].kind);
     }
     graph.AddAccess(
         pass_index,
         resource,
         AccessMode::ReadWrite,
         typed_range,
-        ResourceState{.kind = typed_range.kind},
+        RenderGraph::UnspecifiedResourceState(RenderGraph::GetRangeKind(typed_range)),
         false,
         false,
         range
@@ -795,8 +789,8 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(TextureHandle resource,
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Texture(range),
-        ResourceState::Texture(TextureState::Automatic),
+        range,
+        ResourceState{TextureAccessType::Unspecified},
         true,
         false
     );
@@ -808,8 +802,8 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(TextureHandle resource
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Texture(range),
-        ResourceState::Texture(TextureState::Automatic),
+        range,
+        ResourceState{TextureAccessType::Unspecified},
         true,
         false
     );
@@ -821,8 +815,8 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(TextureHandle reso
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Texture(range),
-        ResourceState::Texture(TextureState::Automatic),
+        range,
+        ResourceState{TextureAccessType::Unspecified},
         true,
         false
     );
@@ -830,13 +824,13 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(TextureHandle reso
 }
 
 RenderGraph::PassBuilder&
-RenderGraph::PassBuilder::Read(TextureHandle resource, TextureState state, TextureRange range) {
+RenderGraph::PassBuilder::Read(TextureHandle resource, TextureAccessType type, TextureRange range) {
     graph.AddAccess(
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Texture(range),
-        ResourceState::Texture(state),
+        range,
+        ResourceState{type},
         true,
         true
     );
@@ -844,13 +838,13 @@ RenderGraph::PassBuilder::Read(TextureHandle resource, TextureState state, Textu
 }
 
 RenderGraph::PassBuilder&
-RenderGraph::PassBuilder::Write(TextureHandle resource, TextureState state, TextureRange range) {
+RenderGraph::PassBuilder::Write(TextureHandle resource, TextureAccessType type, TextureRange range) {
     graph.AddAccess(
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Texture(range),
-        ResourceState::Texture(state),
+        range,
+        ResourceState{type},
         true,
         true
     );
@@ -858,13 +852,13 @@ RenderGraph::PassBuilder::Write(TextureHandle resource, TextureState state, Text
 }
 
 RenderGraph::PassBuilder&
-RenderGraph::PassBuilder::ReadWrite(TextureHandle resource, TextureState state, TextureRange range) {
+RenderGraph::PassBuilder::ReadWrite(TextureHandle resource, TextureAccessType type, TextureRange range) {
     graph.AddAccess(
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Texture(range),
-        ResourceState::Texture(state),
+        range,
+        ResourceState{type},
         true,
         true
     );
@@ -876,8 +870,8 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(BufferHandle resource, 
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Buffer(range),
-        ResourceState::Buffer(BufferState::Automatic),
+        range,
+        ResourceState{BufferAccessType::Unspecified},
         true,
         false
     );
@@ -889,8 +883,8 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(BufferHandle resource,
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Buffer(range),
-        ResourceState::Buffer(BufferState::Automatic),
+        range,
+        ResourceState{BufferAccessType::Unspecified},
         true,
         false
     );
@@ -902,8 +896,8 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(BufferHandle resou
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Buffer(range),
-        ResourceState::Buffer(BufferState::Automatic),
+        range,
+        ResourceState{BufferAccessType::Unspecified},
         true,
         false
     );
@@ -911,13 +905,13 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(BufferHandle resou
 }
 
 RenderGraph::PassBuilder&
-RenderGraph::PassBuilder::Read(BufferHandle resource, BufferState state, BufferRange range) {
+RenderGraph::PassBuilder::Read(BufferHandle resource, BufferAccessType type, BufferRange range) {
     graph.AddAccess(
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Buffer(range),
-        ResourceState::Buffer(state),
+        range,
+        ResourceState{type},
         true,
         true
     );
@@ -925,13 +919,13 @@ RenderGraph::PassBuilder::Read(BufferHandle resource, BufferState state, BufferR
 }
 
 RenderGraph::PassBuilder&
-RenderGraph::PassBuilder::Write(BufferHandle resource, BufferState state, BufferRange range) {
+RenderGraph::PassBuilder::Write(BufferHandle resource, BufferAccessType type, BufferRange range) {
     graph.AddAccess(
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Buffer(range),
-        ResourceState::Buffer(state),
+        range,
+        ResourceState{type},
         true,
         true
     );
@@ -939,13 +933,13 @@ RenderGraph::PassBuilder::Write(BufferHandle resource, BufferState state, Buffer
 }
 
 RenderGraph::PassBuilder&
-RenderGraph::PassBuilder::ReadWrite(BufferHandle resource, BufferState state, BufferRange range) {
+RenderGraph::PassBuilder::ReadWrite(BufferHandle resource, BufferAccessType type, BufferRange range) {
     graph.AddAccess(
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Buffer(range),
-        ResourceState::Buffer(state),
+        range,
+        ResourceState{type},
         true,
         true
     );
@@ -957,8 +951,8 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Read(TokenHandle resource) {
         pass_index,
         resource.Untyped(),
         AccessMode::Read,
-        ResourceRange::Token(),
-        ResourceState::Token(),
+        std::monostate{},
+        ResourceState{},
         true,
         false
     );
@@ -970,8 +964,8 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::Write(TokenHandle resource) 
         pass_index,
         resource.Untyped(),
         AccessMode::Write,
-        ResourceRange::Token(),
-        ResourceState::Token(),
+        std::monostate{},
+        ResourceState{},
         true,
         false
     );
@@ -983,8 +977,8 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::ReadWrite(TokenHandle resour
         pass_index,
         resource.Untyped(),
         AccessMode::ReadWrite,
-        ResourceRange::Token(),
-        ResourceState::Token(),
+        std::monostate{},
+        ResourceState{},
         true,
         false
     );
@@ -1007,8 +1001,8 @@ RenderGraph::PassBuilder& RenderGraph::PassBuilder::SideEffect() {
 }
 
 RenderGraph::PassBuilder&
-RenderGraph::PassBuilder::ExecuteOn(QueueRole queue, PipelineType pipeline) {
-    graph.SetExecutionDomain(pass_index, queue, pipeline);
+RenderGraph::PassBuilder::ExecuteOn(QueueRole queue, GpuWorkType work) {
+    graph.SetExecutionDomain(pass_index, queue, work);
     return *this;
 }
 
@@ -1040,20 +1034,21 @@ RenderGraph::PassBuilder::ExecuteOn(QueueRole queue, PipelineType pipeline) {
 [[nodiscard]] RenderGraph::TextureAspect
 RaiseTextureAspects(ETextureAspectFlags aspects) {
     RenderGraph::TextureAspect result = RenderGraph::TextureAspect::None;
-    const uint32_t mask = static_cast<uint32_t>(aspects);
-    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::COLOR)) != 0) {
+    const uint32               mask   = static_cast<uint32>(aspects);
+    if ((mask & static_cast<uint32>(ETextureAspectFlags::COLOR)) != 0) {
         result = result | RenderGraph::TextureAspect::Color;
     }
-    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::DEPTH_SLICE)) != 0) {
+    if ((mask & static_cast<uint32>(ETextureAspectFlags::DEPTH_SLICE)) != 0) {
         result = result | RenderGraph::TextureAspect::Depth;
     }
-    if ((mask & static_cast<uint32_t>(ETextureAspectFlags::STENCIL_SLICE)) != 0) {
+    if ((mask & static_cast<uint32>(ETextureAspectFlags::STENCIL_SLICE)) != 0) {
         result = result | RenderGraph::TextureAspect::Stencil;
     }
     return result;
 }
 
 struct MaterializedPassState {
+    std::vector<RHIResourceAccess>                    accesses{};
     std::vector<BarrierCreateInfo>                    before{};
     std::vector<BarrierCreateInfo>                    after{};
     std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
@@ -1072,17 +1067,30 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
                      BarrierState::Buffer(scope.stages, scope.access);
 }
 
-[[nodiscard]] bool MaterializeInstruction(
+bool RenderGraphLowering::MaterializeInstruction(
     const RenderGraphLowering::LoweredInstruction& instruction,
-    BarrierCreateInfo&                             output,
+    std::optional<BarrierCreateInfo>&              output,
     std::string&                                   error
 ) {
+    output.reset();
+    // Keep validation and boundary evidence even when no GPU synchronization
+    // is necessary. In particular, equal states do not eliminate write hazards.
+    const bool read_only_boundary =
+        instruction.instruction_kind == InstructionKind::Barrier &&
+        (instruction.import_boundary || instruction.export_boundary) &&
+        instruction.before_access == RenderGraph::AccessMode::Read &&
+        instruction.after_access == RenderGraph::AccessMode::Read &&
+        instruction.before_state == instruction.after_state &&
+        !instruction.state_transition && !instruction.memory_dependency &&
+        !instruction.execution_dependency && !instruction.discard_previous_contents &&
+        !instruction.transient_alias && !instruction.queue_acquire;
+    BarrierCreateInfo barrier{};
     auto materialize_transfer = [&]() {
         if (instruction.instruction_kind !=
                 RenderGraphLowering::InstructionKind::QueueRelease &&
             instruction.instruction_kind !=
                 RenderGraphLowering::InstructionKind::QueueAcquire) {
-            output.queue_transfer = {};
+            barrier.queue_transfer = {};
             return true;
         }
         const auto src_queue = ToRHIQueue(instruction.transfer_source.role);
@@ -1101,7 +1109,7 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
                 "queue ownership instruction has invalid logical or family endpoints";
             return false;
         }
-        output.queue_transfer =
+        barrier.queue_transfer =
             instruction.instruction_kind ==
                     RenderGraphLowering::InstructionKind::QueueRelease ?
                 BarrierQueueTransfer::Release(src_queue, dst_queue) :
@@ -1111,18 +1119,12 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
 
     if (instruction.resource_kind == RenderGraph::ResourceKind::Texture) {
         const auto& binding = instruction.physical.texture;
-        const auto& range   = instruction.range.texture;
+        const auto& range   = std::get<RenderGraph::TextureRange>(instruction.range);
         if (!binding.IsValid() || instruction.texture_aspects == ETextureAspectFlags::NONE) {
             error = "texture instruction has no physical binding or aspect";
             return false;
         }
-        if (instruction.texture_aspects != binding->GetAspectFlags()) {
-            error =
-                "partial-aspect texture state is not supported by the active "
-                "backend-tracker bridge";
-            return false;
-        }
-        constexpr uint32_t max_view_index = std::numeric_limits<uint8_t>::max();
+        constexpr uint32 max_view_index = std::numeric_limits<uint8>::max();
         if (range.mip_count == 0 || range.layer_count == 0 ||
             range.mip_first > max_view_index || range.mip_count > max_view_index ||
             range.layer_first > max_view_index || range.layer_count > max_view_index ||
@@ -1132,69 +1134,67 @@ ToBarrierState(const RenderGraphLowering::Scope& scope, bool texture) {
             return false;
         }
 
+        if (read_only_boundary && !instruction.export_boundary) {
+            return true;
+        }
         TextureView view(binding);
         view.mip_level   = static_cast<uint8>(range.mip_first);
         view.num_mips    = static_cast<uint8>(range.mip_count);
         view.array_layer = static_cast<uint8>(range.layer_first);
         view.num_array   = static_cast<uint8>(range.layer_count);
-        output = BarrierCreateInfo::Transition(
+        barrier = BarrierCreateInfo::Transition(
             view,
             ToBarrierState(instruction.source, true),
             ToBarrierState(instruction.destination, true),
             instruction.texture_aspects
         );
-        output.publish_external_state = instruction.export_boundary;
-        return materialize_transfer();
+        barrier.publish_external_state = instruction.export_boundary;
+        // Read-only exports publish visibility established by the first read
+        // transition, including the external scope; no second GPU barrier is needed.
+        if (read_only_boundary) {
+            barrier.src_state = barrier.dst_state;
+        }
+        if (!materialize_transfer()) { return false; }
+        output = std::move(barrier);
+        return true;
     }
 
     if (instruction.resource_kind == RenderGraph::ResourceKind::Buffer) {
         const auto& binding = instruction.physical.buffer;
-        const auto& range   = instruction.range.buffer;
+        const auto& range   = std::get<RenderGraph::BufferRange>(instruction.range);
         if (!binding.IsValid() || range.size == 0 || range.offset > binding->GetByteSize() ||
             range.size > binding->GetByteSize() - range.offset) {
             error = "buffer instruction has no physical binding or has an invalid range";
             return false;
         }
-        if (range.offset != 0 || range.size != binding->GetByteSize()) {
-            error =
-                "partial buffer state is not supported by the active "
-                "backend-tracker bridge";
-            return false;
+        if (read_only_boundary && !instruction.export_boundary) {
+            return true;
         }
-        output = BarrierCreateInfo::Transition(
+        barrier = BarrierCreateInfo::Transition(
             BufferView(binding.Get(), range.offset, range.size, 1),
             ToBarrierState(instruction.source, false),
             ToBarrierState(instruction.destination, false)
         );
-        return materialize_transfer();
+        barrier.publish_external_state = instruction.export_boundary;
+        if (read_only_boundary) {
+            barrier.src_state = barrier.dst_state;
+        }
+        if (!materialize_transfer()) { return false; }
+        output = std::move(barrier);
+        return true;
     }
 
     error = "token instruction cannot be materialized as an RHI barrier";
     return false;
 }
 
-RenderGraph::PassBuilder& RenderGraph::PassBuilder::MainThread() {
-    graph.SetPassExecutionClass(pass_index, PassExecutionClass::MainThread, 1);
-    return *this;
-}
-
-RenderGraph::PassBuilder& RenderGraph::PassBuilder::CpuPrepare() {
-    graph.SetPassExecutionClass(pass_index, PassExecutionClass::CpuPrepare, 1);
-    return *this;
-}
-
-RenderGraph::PassBuilder& RenderGraph::PassBuilder::ExternalControl() {
-    graph.SetPassExecutionClass(pass_index, PassExecutionClass::ExternalControl, 1);
-    return *this;
-}
-
-RenderGraph::PassBuilder& RenderGraph::PassBuilder::SerialRecord(uint32_t workload) {
-    graph.SetPassExecutionClass(pass_index, PassExecutionClass::SerialRecord, workload);
-    return *this;
-}
-
-RenderGraph::PassBuilder& RenderGraph::PassBuilder::ParallelRecord(uint32_t workload) {
-    graph.SetPassExecutionClass(pass_index, PassExecutionClass::ParallelRecordEligible, workload);
+RenderGraph::PassBuilder& RenderGraph::PassBuilder::RecordWorkload(uint32 units) {
+    if (!graph.InvalidateCompile()) { return *this; }
+    if (pass_index >= graph.passes.size() || units == 0) {
+        graph.declaration_errors.emplace_back("recording workload requires a valid pass and positive units");
+        return *this;
+    }
+    graph.passes[pass_index].recording_workload = units;
     return *this;
 }
 
@@ -1230,7 +1230,7 @@ RenderGraph::ImportTexture(std::string_view resource_name, TextureRef texture, T
     const auto handle =
         ImportInternal(resource_name, ResourceKind::Texture, texture.Get(), &desc, nullptr);
     if (handle.IsValid()) {
-        auto& resource = resources[handle.index];
+        auto& resource = resources[handle.resource_id];
         if (resource.physical_texture.IsValid() &&
             resource.physical_texture.Get() != texture.Get()) {
             declaration_errors.emplace_back(
@@ -1262,7 +1262,7 @@ RenderGraph::ImportBuffer(std::string_view resource_name, BufferRef buffer, Buff
     const auto handle =
         ImportInternal(resource_name, ResourceKind::Buffer, buffer.Get(), nullptr, &desc);
     if (handle.IsValid()) {
-        auto& resource = resources[handle.index];
+        auto& resource = resources[handle.resource_id];
         if (resource.physical_buffer.IsValid() &&
             resource.physical_buffer.Get() != buffer.Get()) {
             declaration_errors.emplace_back(
@@ -1307,19 +1307,22 @@ RenderGraph::ResourceHandle RenderGraph::ImportInternal(
         return {};
     }
 
-    for (uint32_t index = 0; index < resources.size(); ++index) {
+    // Names and physical identities are independent: an existing physical
+    // resource must not hide a name already owned by another resource.
+    const auto named = resource_names.find(resource_name);
+    if (named != resource_names.end() &&
+        (!physical_identity || resources[named->second].physical_identity != physical_identity)) {
+        declaration_errors.emplace_back(
+            "duplicate resource or alias name: " + std::string(resource_name)
+        );
+        return {};
+    }
+    const auto physical = imported_resource_ids.find(physical_identity);
+    const uint32 index    = named != resource_names.end()           ? named->second :
+                            physical != imported_resource_ids.end() ? physical->second :
+                                                                      InvalidIndex;
+    if (index != InvalidIndex) {
         auto& resource = resources[index];
-        if (resource.name == resource_name ||
-            std::find(resource.aliases.begin(), resource.aliases.end(), resource_name) !=
-                resource.aliases.end()) {
-            declaration_errors.emplace_back(
-                "duplicate resource or alias name: " + std::string(resource_name)
-            );
-            return {};
-        }
-        if (physical_identity == nullptr || resource.physical_identity != physical_identity) {
-            continue;
-        }
         if (!resource.imported) {
             declaration_errors.emplace_back(
                 "physical identity aliases transient resource: " + std::string(resource_name)
@@ -1354,7 +1357,10 @@ RenderGraph::ResourceHandle RenderGraph::ImportInternal(
             resource.buffer_desc = *buffer_desc;
             resource.typed_desc  = true;
         }
-        resource.aliases.emplace_back(resource_name);
+        if (named == resource_names.end()) {
+            resource.aliases.emplace_back(resource_name);
+            resource_names.emplace(resource.aliases.back(), index);
+        }
         return ResourceHandle{index, graph_id};
     }
 
@@ -1372,7 +1378,12 @@ RenderGraph::ResourceHandle RenderGraph::ImportInternal(
         resource.typed_desc  = true;
     }
     resources.emplace_back(std::move(resource));
-    return ResourceHandle{static_cast<uint32_t>(resources.size() - 1), graph_id};
+    const auto resource_id = static_cast<uint32>(resources.size() - 1);
+    resource_names.emplace(resources.back().name, resource_id);
+    if (physical_identity != nullptr) {
+        imported_resource_ids.emplace(physical_identity, resource_id);
+    }
+    return ResourceHandle{resource_id, graph_id};
 }
 
 RenderGraph::ResourceHandle RenderGraph::CreateTransient(std::string_view resource_name, ResourceKind kind) {
@@ -1415,7 +1426,7 @@ RenderGraph::TextureHandle RenderGraph::CreateTransientTexture(
             nullptr
         )};
     if (handle.IsValid()) {
-        resources[handle.resource.index].transient_texture_desc =
+        resources[handle.handle.resource_id].transient_texture_desc =
             allocation_desc;
     }
     return handle;
@@ -1443,7 +1454,7 @@ RenderGraph::BufferHandle RenderGraph::CreateTransientBuffer(
             &logical_desc
         )};
     if (handle.IsValid()) {
-        resources[handle.resource.index].transient_buffer_desc =
+        resources[handle.handle.resource_id].transient_buffer_desc =
             allocation_desc;
     }
     return handle;
@@ -1457,7 +1468,7 @@ TextureRef RenderGraph::GetPhysicalTexture(TextureHandle resource) const {
     if (!IsValidResource(resource.Untyped())) {
         return {};
     }
-    const auto& declaration = resources[resource.resource.index];
+    const auto& declaration = resources[resource.handle.resource_id];
     return declaration.kind == ResourceKind::Texture ?
                declaration.physical_texture :
                TextureRef{};
@@ -1467,7 +1478,7 @@ BufferRef RenderGraph::GetPhysicalBuffer(BufferHandle resource) const {
     if (!IsValidResource(resource.Untyped())) {
         return {};
     }
-    const auto& declaration = resources[resource.resource.index];
+    const auto& declaration = resources[resource.handle.resource_id];
     return declaration.kind == ResourceKind::Buffer ?
                declaration.physical_buffer :
                BufferRef{};
@@ -1496,13 +1507,9 @@ RenderGraph::ResourceHandle RenderGraph::CreateTransientInternal(
         );
         return {};
     }
-    for (const auto& resource : resources) {
-        if (resource.name == resource_name ||
-            std::find(resource.aliases.begin(), resource.aliases.end(), resource_name) !=
-                resource.aliases.end()) {
-            declaration_errors.emplace_back("duplicate resource name: " + std::string(resource_name));
-            return {};
-        }
+    if (resource_names.contains(resource_name)) {
+        declaration_errors.emplace_back("duplicate resource name: " + std::string(resource_name));
+        return {};
     }
 
     ResourceDeclaration resource{};
@@ -1518,7 +1525,9 @@ RenderGraph::ResourceHandle RenderGraph::CreateTransientInternal(
         resource.typed_desc  = true;
     }
     resources.emplace_back(std::move(resource));
-    return ResourceHandle{static_cast<uint32_t>(resources.size() - 1), graph_id};
+    const auto resource_id = static_cast<uint32>(resources.size() - 1);
+    resource_names.emplace(resources.back().name, resource_id);
+    return ResourceHandle{resource_id, graph_id};
 }
 
 void RenderGraph::Export(ResourceHandle resource) {
@@ -1533,23 +1542,26 @@ bool RenderGraph::MarkExported(ResourceHandle resource, bool whole_resource) {
         declaration_errors.emplace_back("Export received an invalid resource handle");
         return false;
     }
-    auto& declaration                    = resources[resource.index];
+    auto& declaration                    = resources[resource.resource_id];
     declaration.exported                = true;
     declaration.whole_resource_exported |= whole_resource;
     return true;
 }
 
 void RenderGraph::SetInitialState(
-    TextureHandle resource,
-    TextureState  state,
-    QueueRole     owner_queue,
-    AccessMode    last_access,
-    TextureRange  range
+    TextureHandle        resource,
+    TextureBoundaryState state,
+    QueueRole            owner_queue,
+    AccessMode           last_access,
+    TextureRange         range
 ) {
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Texture(range),
-        ResourceState::Texture(state),
+        range,
+        std::visit([](auto value) -> ResourceState {
+            return value;
+        },
+                   state),
         owner_queue,
         last_access,
         true
@@ -1557,16 +1569,19 @@ void RenderGraph::SetInitialState(
 }
 
 void RenderGraph::SetInitialState(
-    BufferHandle resource,
-    BufferState  state,
-    QueueRole    owner_queue,
-    AccessMode   last_access,
-    BufferRange  range
+    BufferHandle        resource,
+    BufferBoundaryState state,
+    QueueRole           owner_queue,
+    AccessMode          last_access,
+    BufferRange         range
 ) {
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Buffer(range),
-        ResourceState::Buffer(state),
+        range,
+        std::visit([](auto value) -> ResourceState {
+            return value;
+        },
+                   state),
         owner_queue,
         last_access,
         true
@@ -1574,19 +1589,22 @@ void RenderGraph::SetInitialState(
 }
 
 void RenderGraph::Export(
-    TextureHandle resource,
-    TextureState  final_state,
-    QueueRole     owner_queue,
-    AccessMode    next_access,
-    TextureRange  range
+    TextureHandle        resource,
+    TextureBoundaryState final_state,
+    QueueRole            owner_queue,
+    AccessMode           next_access,
+    TextureRange         range
 ) {
     if (!MarkExported(resource.Untyped(), false)) {
         return;
     }
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Texture(range),
-        ResourceState::Texture(final_state),
+        range,
+        std::visit([](auto value) -> ResourceState {
+            return value;
+        },
+                   final_state),
         owner_queue,
         next_access,
         false
@@ -1594,63 +1612,33 @@ void RenderGraph::Export(
 }
 
 void RenderGraph::Export(
-    BufferHandle resource,
-    BufferState  final_state,
-    QueueRole    owner_queue,
-    AccessMode   next_access,
-    BufferRange  range
+    BufferHandle        resource,
+    BufferBoundaryState final_state,
+    QueueRole           owner_queue,
+    AccessMode          next_access,
+    BufferRange         range
 ) {
     if (!MarkExported(resource.Untyped(), false)) {
         return;
     }
     AddStateDeclaration(
         resource.Untyped(),
-        ResourceRange::Buffer(range),
-        ResourceState::Buffer(final_state),
+        range,
+        std::visit([](auto value) -> ResourceState {
+            return value;
+        },
+                   final_state),
         owner_queue,
         next_access,
         false
     );
 }
 
-RenderGraph::PassHandle
-RenderGraph::AddPass(std::string_view pass_name, const SetupCallback& setup, ExecuteCallback execute) {
-    if (!InvalidateCompile()) {
-        return {};
-    }
-    if (pass_name.empty()) {
-        declaration_errors.emplace_back("pass name cannot be empty");
-        return {};
-    }
-    if (!execute) {
-        declaration_errors.emplace_back("pass has no execute callback: " + std::string(pass_name));
-        return {};
-    }
-    if (std::any_of(passes.begin(), passes.end(), [&](const PassDeclaration& pass) {
-            return pass.name == pass_name;
-        })) {
-        declaration_errors.emplace_back("duplicate pass name: " + std::string(pass_name));
-        return {};
-    }
-
-    PassDeclaration pass{};
-    pass.name    = pass_name;
-    pass.execute = std::move(execute);
-    passes.emplace_back(std::move(pass));
-    const uint32_t pass_index = static_cast<uint32_t>(passes.size() - 1);
-    PassBuilder    builder(*this, pass_index);
-    if (setup) {
-        setup(builder);
-    }
-    return PassHandle{pass_index, graph_id};
-}
-
 RenderGraph::PassHandle RenderGraph::AddRecordPass(
     std::string_view     pass_name,
     const SetupCallback& setup,
     RecordCallback       record,
-    PassExecutionClass   execution,
-    uint32_t             workload
+    PassRecordPolicy     policy
 ) {
     if (!InvalidateCompile()) {
         return {};
@@ -1673,10 +1661,9 @@ RenderGraph::PassHandle RenderGraph::AddRecordPass(
     PassDeclaration pass{};
     pass.name            = pass_name;
     pass.record          = std::move(record);
-    pass.execution_class = execution;
-    pass.workload        = workload;
+    pass.record_policy   = policy;
     passes.emplace_back(std::move(pass));
-    const uint32_t pass_index = static_cast<uint32_t>(passes.size() - 1);
+    const uint32   pass_index = static_cast<uint32>(passes.size() - 1);
     PassBuilder    builder(*this, pass_index);
     if (setup) {
         setup(builder);
@@ -1684,12 +1671,57 @@ RenderGraph::PassHandle RenderGraph::AddRecordPass(
     return PassHandle{pass_index, graph_id};
 }
 
-bool RenderGraph::Compile() {
+std::vector<RenderGraph::CompiledDependencyLevel> RenderGraph::CompiledPlan::BuildDependencyLevels() const {
+    if (execution_order.empty()) {
+        return {};
+    }
+    std::vector<uint32> levels(execution_order.size(), 0);
+    uint32 max_level = 0;
+    for (const auto pass : execution_order) {
+        auto edge = std::lower_bound(edges.begin(), edges.end(), pass.pass_id,
+            [](const CompiledEdge& candidate, uint32 source) { return candidate.src.pass_id < source; });
+        for (; edge != edges.end() && edge->src.pass_id == pass.pass_id; ++edge) {
+            auto& destination_level = levels[edge->dst.pass_id];
+            destination_level = std::max(destination_level, levels[pass.pass_id] + 1);
+            max_level = std::max(max_level, destination_level);
+        }
+    }
+    std::vector<CompiledDependencyLevel> result(max_level + 1);
+    // Diagnostic output keeps declaration order within each wave.
+    for (uint32 pass_index = 0; pass_index < levels.size(); ++pass_index) {
+        result[levels[pass_index]].passes.push_back({pass_index, execution_order.front().graph_id});
+    }
+    return result;
+}
+
+std::span<const RenderGraph::CompiledDependencyReason>
+RenderGraph::CompiledPlan::GetDependencyReasons(PassHandle src, PassHandle dst) const {
+    if (!dependency_reasons) {
+        return {};
+    }
+    const auto endpoints = std::pair{src.pass_id, dst.pass_id};
+    const auto first = std::lower_bound(
+        dependency_reasons->begin(), dependency_reasons->end(), endpoints,
+        [](const auto& entry, const auto& key) {
+            return std::pair{entry.edge.src.pass_id, entry.edge.dst.pass_id} < key;
+        }
+    );
+    auto last = first;
+    while (last != dependency_reasons->end() && last->edge.src == src && last->edge.dst == dst) {
+        ++last;
+    }
+    return {first, last};
+}
+
+bool RenderGraph::Compile(DependencyDiagnostics diagnostics) {
     if (executed) {
         compile_error = "graph has already executed and cannot be compiled again";
         return false;
     }
     MOER_PROFILE_SCOPE("RenderGraph.Compile");
+    ProfileDump::ScopedCpuProfile graph_profile("RenderGraph.CompileGraph", name);
+    // Never expose explanations from a previous compile attempt after setup fails.
+    compiled_plan.dependency_reasons.reset();
     DispatchSetupPassesAsync();
 
     std::string setup_error{};
@@ -1702,70 +1734,15 @@ bool RenderGraph::Compile() {
         return false;
     }
 
-    return RenderGraphCompiler(*this).Compile();
-}
-
-bool RenderGraph::Execute() {
-    return Execute({});
-}
-
-bool RenderGraph::Execute(const PassCompletedCallback& after_pass) {
-    if (!compiled) {
-        compile_error = "Execute called before a successful Compile";
-        return false;
-    }
-    if (executed) {
-        compile_error = "a per-frame RenderGraph can only be executed once";
-        return false;
-    }
-    const bool has_active_allocation_backed_transient = std::any_of(
-        compiled_plan.resources.begin(),
-        compiled_plan.resources.end(),
-        [](const CompiledResource& resource) {
-            return !resource.imported &&
-                   resource.first_use != PassHandle::InvalidIndex &&
-                   resource.transient_slot != PassHandle::InvalidIndex;
-        }
-    );
-    if (has_active_allocation_backed_transient) {
-        compile_error =
-            "allocation-backed transient resources require active ExecuteFrontendRecordingPlan";
-        return false;
-    }
-    if (std::any_of(compiled_plan.execution_order.begin(),
-                    compiled_plan.execution_order.end(),
-                    [&](PassHandle handle) { return static_cast<bool>(passes[handle.index].record); })) {
-        compile_error = "serial Execute cannot run command-recording passes without owned CommandLists";
-        return false;
-    }
-    executed = true;
-
-    for (const PassHandle pass_handle : compiled_plan.execution_order) {
-        auto& pass = passes[pass_handle.index];
-        assert(pass.execute);
-        pass.execute();
-        if (after_pass) {
-            after_pass(ExecutedPassInfo{
-                .handle      = pass_handle,
-                .name        = pass.name,
-                .domain      = pass.domain,
-                .side_effect = pass.side_effect,
-                .execution_class = pass.execution_class,
-                .translate_execution_class =
-                    pass.translate_execution_class,
-            });
-        }
-    }
-    return true;
+    return RenderGraphCompiler(*this, diagnostics).Compile();
 }
 
 /**
- * Executes the compiled CPU recording schedule. Caller-thread passes run
- * inline; managed passes publish ordered frontend CommandLists before their
- * producers run. Native command-buffer translation and submission stay in RHI.
+ * Publishes ordered frontend CommandLists before their producers run. Serial
+ * recording joins each neighboring group; native translation and submission
+ * remain owned by RHI.
  */
 bool RenderGraph::ExecuteFrontendRecordingPlan(
-    const PassCompletedCallback&        after_main_thread_pass,
     const RecordingSourceSetupCallback& configure_recording_source,
     bool                                parallel_recording_enabled,
     const FrontendSourcePublisher&       publish_frontend_sources,
@@ -1785,7 +1762,6 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
 
     // Reject optional-mode contract errors before publishing any RHI source.
     if (gpu_profiling.try_bind_source) {
-        bool has_main_thread_pass = false;
         for (const CompiledFrontendRecordUnit& unit :
              compiled_plan.frontend_record_units) {
             if (!IsValidPass(unit.pass)) {
@@ -1806,41 +1782,6 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 compile_error = "GPU profiling source order overflow";
                 return false;
             }
-            if (unit.record_execution_class == PassExecutionClass::MainThread) {
-                has_main_thread_pass = true;
-                if (gpu_profiling.main_thread_command_list == nullptr) {
-                    compile_error =
-                        "GPU profiling requires a caller-owned CommandList for "
-                        "MainThread passes";
-                    return false;
-                }
-                if (gpu_profiling.main_thread_command_list->GetQueueType() !=
-                    ToRHIQueue(unit.target_queue.role)) {
-                    compile_error =
-                        "GPU profiling MainThread CommandList queue does not "
-                        "match compiled pass queue";
-                    return false;
-                }
-            }
-        }
-        if (has_main_thread_pass &&
-            (!gpu_profiling.main_thread_command_list->IsEmpty() ||
-             gpu_profiling.main_thread_command_list
-                 ->HasGpuScopeRecorder() ||
-             gpu_profiling.main_thread_command_list
-                 ->IsLegacyGpuProfilingSuppressedForGeneration())) {
-            compile_error =
-                "GPU profiling requires an empty, unbound, unsuppressed MainThread "
-                "CommandList at graph entry";
-            return false;
-        }
-        if (has_main_thread_pass && active_recording.enabled &&
-            active_recording.main_thread_command_list !=
-                gpu_profiling.main_thread_command_list) {
-            compile_error =
-                "GPU profiling and active recording must use the same "
-                "MainThread CommandList";
-            return false;
         }
     }
 
@@ -1863,8 +1804,8 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         compiled_plan.resources.end(),
         [](const CompiledResource& resource) {
             return !resource.imported &&
-                   resource.first_use != PassHandle::InvalidIndex &&
-                   resource.transient_slot != PassHandle::InvalidIndex;
+                   resource.first_use != InvalidIndex &&
+                   resource.transient_slot != InvalidIndex;
         }
     );
     if (has_active_allocation_backed_transient && !active_recording.enabled) {
@@ -1875,10 +1816,13 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
 
     std::vector<MaterializedPassState> active_pass_states(passes.size());
     TransientBindingReleaseGuard transient_release_guard{};
-    bool active_has_physical_main_thread = false;
     bool active_async_multiqueue          = false;
     RenderGraphTransientAllocator* active_transient_allocator = nullptr;
     if (active_recording.enabled) {
+        if (active_recording.state_ownership != ERHIResourceStateOwnership::Compiled) {
+            compile_error = "active RDG recording requires compiled state ownership";
+            return false;
+        }
         active_transient_allocator =
             active_recording.transient_allocator != nullptr ?
                 active_recording.transient_allocator :
@@ -1923,7 +1867,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             }
         }
         if (!compiled_plan.queue_batches.empty()) {
-            const uint32_t first_native_queue =
+            const uint32 first_native_queue =
                 compiled_plan.queue_batches.front().queue.native_queue_id;
             active_async_multiqueue = std::any_of(
                 compiled_plan.queue_batches.begin() + 1,
@@ -1940,46 +1884,21 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 "RHI graph handoff";
             return false;
         }
-        if (active_uses_non_graphics_queue) {
-            const bool has_caller_thread_gpu_pass = std::any_of(
-                compiled_plan.queue_batches.begin(),
-                compiled_plan.queue_batches.end(),
-                [&](const CompiledQueueBatch& batch) {
-                    return std::any_of(
-                        batch.passes.begin(),
-                        batch.passes.end(),
-                        [&](PassHandle pass) {
-                            const auto execution =
-                                passes[pass.index].execution_class;
-                            return execution != PassExecutionClass::SerialRecord &&
-                                   execution !=
-                                       PassExecutionClass::ParallelRecordEligible;
-                        }
-                    );
-                }
-            );
-            if (has_caller_thread_gpu_pass) {
-                compile_error =
-                    "active non-Graphics queue lowering requires every GPU pass "
-                    "to use the managed recording handoff";
-                return false;
-            }
-        }
 
         auto append_instruction =
             [&](const RenderGraphLowering::LoweredInstruction& instruction,
                 std::vector<BarrierCreateInfo>&                 destination,
                 std::string_view                                placement) {
-                BarrierCreateInfo barrier{};
+                std::optional<BarrierCreateInfo> barrier;
                 std::string       materialization_error{};
-                if (!MaterializeInstruction(instruction, barrier, materialization_error)) {
+                if (!RenderGraphLowering::MaterializeInstruction(instruction, barrier, materialization_error)) {
                     compile_error =
                         "RenderGraph active lowering " + std::string(placement) +
                         " instruction " + std::to_string(instruction.correlation_id) +
                         " failed: " + materialization_error;
                     return false;
                 }
-                destination.emplace_back(std::move(barrier));
+                if (barrier) { destination.emplace_back(std::move(*barrier)); }
                 return true;
             };
 
@@ -1987,7 +1906,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             if (!IsValidPass(instruction.dst_pass) ||
                 !append_instruction(
                     instruction,
-                    active_pass_states[instruction.dst_pass.index].before,
+                    active_pass_states[instruction.dst_pass.pass_id].before,
                     "prologue"
                 )) {
                 if (compile_error.empty()) {
@@ -2002,8 +1921,9 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 compile_error = "RenderGraph active lowering references an invalid pass";
                 return false;
             }
-            auto& materialized = active_pass_states[pass_instructions.pass.index];
+            auto& materialized = active_pass_states[pass_instructions.pass.pass_id];
             materialized.keepalive = pass_instructions.keepalive;
+            materialized.accesses  = pass_instructions.accesses;
             for (const auto& instruction : pass_instructions.before) {
                 if (!append_instruction(instruction, materialized.before, "before-pass")) {
                     return false;
@@ -2028,11 +1948,11 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                         std::to_string(sync.correlation_id);
                     return false;
                 }
-                active_pass_states[sync.signal_pass.index]
+                active_pass_states[sync.signal_pass.pass_id]
                     .signal_fences.emplace_back(
                         RHIRecordingFencePoint{.fence = fence, .value = 1}
                     );
-                active_pass_states[sync.wait_pass.index]
+                active_pass_states[sync.wait_pass.pass_id]
                     .wait_fences.emplace_back(
                         RHIRecordingFencePoint{.fence = std::move(fence), .value = 1}
                     );
@@ -2048,7 +1968,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             return false;
         }
 
-        for (uint32_t pass_index = 0; pass_index < passes.size(); ++pass_index) {
+        for (uint32 pass_index = 0; pass_index < passes.size(); ++pass_index) {
             const auto& state = active_pass_states[pass_index];
             if (!state.RequiresCompletionLifetime()) {
                 continue;
@@ -2060,97 +1980,20 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     passes[pass_index].name + "'";
                 return false;
             }
-            const auto execution = passes[pass_index].execution_class;
-            if (execution == PassExecutionClass::CpuPrepare ||
-                execution == PassExecutionClass::ExternalControl) {
-                compile_error =
-                    "RenderGraph active lowering cannot materialize physical state for pass '" +
-                    passes[pass_index].name + "' on its execution class";
-                return false;
-            }
-            if (execution == PassExecutionClass::MainThread) {
-                active_has_physical_main_thread = true;
-                if (active_recording.main_thread_command_list == nullptr) {
-                    compile_error =
-                        "RenderGraph active lowering requires a caller-owned CommandList for "
-                        "main-thread pass '" +
-                        passes[pass_index].name + "'";
-                    return false;
-                }
-                if (active_recording.main_thread_command_list->GetQueueType() !=
-                    EQueueType::Graphics) {
-                    compile_error =
-                        "RenderGraph active lowering requires a Graphics caller-owned CommandList";
-                    return false;
-                }
-                if (!active_recording.main_thread_command_list->IsEmpty()) {
-                    compile_error =
-                        "RenderGraph active lowering requires an isolated empty caller-owned "
-                        "CommandList";
-                    return false;
-                }
-            }
-        }
-        if (active_has_physical_main_thread && after_main_thread_pass) {
-            compile_error =
-                "RenderGraph active lowering requires caller-owned MainThread "
-                "commands to remain unsealed until ExecuteFrontendRecordingPlan returns";
-            return false;
-        }
-
-        const bool has_any_managed_record_pass = std::any_of(
-            compiled_plan.frontend_record_units.begin(),
-            compiled_plan.frontend_record_units.end(),
-            [](const CompiledFrontendRecordUnit& unit) {
-                return unit.record_execution_class ==
-                           PassExecutionClass::SerialRecord ||
-                       unit.record_execution_class ==
-                           PassExecutionClass::ParallelRecordEligible;
-            }
-        );
-        const bool has_any_caller_thread_pass = std::any_of(
-            compiled_plan.frontend_record_units.begin(),
-            compiled_plan.frontend_record_units.end(),
-            [](const CompiledFrontendRecordUnit& unit) {
-                return unit.record_execution_class ==
-                           PassExecutionClass::MainThread ||
-                       unit.record_execution_class ==
-                           PassExecutionClass::CpuPrepare ||
-                       unit.record_execution_class ==
-                           PassExecutionClass::ExternalControl;
-            }
-        );
-        if (has_any_caller_thread_pass && has_any_managed_record_pass) {
-            compile_error =
-                "RenderGraph active lowering does not yet support mixing "
-                "caller-thread and managed record passes in one transaction";
-            return false;
-        }
-        if (active_has_physical_main_thread) {
-            const bool has_nonphysical_or_nonmain_unit = std::any_of(
-                compiled_plan.frontend_record_units.begin(),
-                compiled_plan.frontend_record_units.end(),
-                [&](const CompiledFrontendRecordUnit& unit) {
-                    return unit.record_execution_class !=
-                               PassExecutionClass::MainThread ||
-                           !IsValidPass(unit.pass) ||
-                           !active_pass_states[unit.pass.index]
-                                .RequiresCompletionLifetime();
-                }
-            );
-            if (has_nonphysical_or_nonmain_unit) {
-                compile_error =
-                    "RenderGraph active MainThread lowering currently requires "
-                    "an isolated graph of physical MainThread passes";
-                return false;
-            }
         }
     }
 
-    struct RecordingJob {
+    struct RecordingPass {
         PassHandle          pass{};
         std::string         pass_name{};
         RecordCallback      record{};
+        std::vector<RHIResourceAccess>                    accesses{};
+        std::vector<BarrierCreateInfo>                    before{};
+        std::vector<BarrierCreateInfo>                    after{};
+        std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
+    };
+    struct RecordingJob {
+        Array<RecordingPass> passes{};
         SharedPtr<CommandList> command_list{};
         RHIRecordingGateRef completion{};
         RHIQueueBinding     gpu_profile_queue_binding{};
@@ -2160,9 +2003,6 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         ERHITranslateExecutionClass translate_execution_class{
             ERHITranslateExecutionClass::Parallel
         };
-        std::vector<BarrierCreateInfo>                    before{};
-        std::vector<BarrierCreateInfo>                    after{};
-        std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
     };
     struct RecordingError {
         std::mutex  mutex{};
@@ -2170,8 +2010,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
     };
     struct RecordingLifetime {
         std::vector<RenderGraphLowering::PhysicalBinding> keepalive{};
-        RecordCallback                                    record{};
-        ExecuteCallback                                   execute{};
+        Array<RecordCallback>                            records{};
     };
     struct PendingGateGuard {
         const Array<RHIRecordingGateRef>* gates{nullptr};
@@ -2212,63 +2051,6 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         // lease before dropping the strong CommandList owner.
         SharedPtr<CommandList>                    command_list{};
         CommandList::ManagedRecordingLease        lease{};
-    };
-    struct ActiveMainCommandStreamGuard {
-        CommandList* command_list{nullptr};
-        std::optional<CommandList::ManagedRecordingLease> lease{};
-        bool armed{false};
-
-        void Abort() noexcept {
-            if (!armed) {
-                return;
-            }
-            lease.reset();
-            if (command_list != nullptr) {
-                try {
-                    auto cleanup_callbacks =
-                        command_list->DrainOrdinaryCallbacksForRejection();
-                    for (auto& callback : cleanup_callbacks) {
-                        if (!callback) {
-                            continue;
-                        }
-                        try {
-                            callback();
-                        } catch (const std::exception& exception) {
-                            LOG_ERROR(
-                                "[RenderGraph] rejected MainThread cleanup "
-                                "callback threw: {}",
-                                exception.what()
-                            );
-                        } catch (...) {
-                            LOG_ERROR(
-                                "[RenderGraph] rejected MainThread cleanup "
-                                "callback threw"
-                            );
-                        }
-                    }
-                } catch (const std::exception& exception) {
-                    LOG_ERROR(
-                        "[RenderGraph] failed to drain rejected MainThread "
-                        "commands: {}",
-                        exception.what()
-                    );
-                } catch (...) {
-                    LOG_ERROR(
-                        "[RenderGraph] failed to drain rejected MainThread commands"
-                    );
-                }
-            }
-            armed = false;
-        }
-
-        void Commit() noexcept {
-            lease.reset();
-            armed = false;
-        }
-
-        ~ActiveMainCommandStreamGuard() {
-            Abort();
-        }
     };
     struct ActiveRecordingTransactionGuard {
         RHIRecordingGateRef* commit{nullptr};
@@ -2335,35 +2117,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
         .owners = &active_recording_owners,
         .armed  = active_recording.enabled,
     };
-    ActiveMainCommandStreamGuard active_main_stream_guard{
-        .command_list =
-            active_has_physical_main_thread ?
-                active_recording.main_thread_command_list :
-                nullptr,
-    };
-    if (active_has_physical_main_thread) {
-        try {
-            active_main_stream_guard.lease.emplace(
-                active_recording.main_thread_command_list
-                    ->AcquireManagedRecordingLease()
-            );
-            active_main_stream_guard.armed = true;
-        } catch (const std::exception& exception) {
-            compile_error =
-                std::string("failed to acquire active MainThread recording lease: ") +
-                exception.what();
-            return false;
-        } catch (...) {
-            compile_error =
-                "failed to acquire active MainThread recording lease";
-            return false;
-        }
-    }
     executed = true;
-
-    std::optional<uint64> gpu_profile_main_thread_generation{};
-    bool                  gpu_profile_main_thread_bound{false};
-    bool gpu_profile_managed_source_since_main_thread{false};
 
     auto store_error = [](const std::shared_ptr<RecordingError>& error, std::string message) {
         std::lock_guard lock(error->mutex);
@@ -2371,288 +2125,65 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             error->message = std::move(message);
         }
     };
-    auto attach_recording_lifetime =
-        [](CommandList&                                      command_list,
-           std::vector<RenderGraphLowering::PhysicalBinding> keepalive,
-           RecordCallback                                    record,
-           ExecuteCallback                                   execute = {}) {
-            auto lifetime = std::make_shared<RecordingLifetime>(
-                RecordingLifetime{
-                    .keepalive = std::move(keepalive),
-                    .record    = std::move(record),
-                    .execute   = std::move(execute),
-                }
-            );
-            // Ordinary callbacks run before success callbacks. Holding the
-            // same token in both tails keeps raw command/callback captures
-            // alive through every user callback on success, failure, or
-            // cancellation.
-            command_list.AddCallback([lifetime] {});
-            command_list.AddSuccessCallback([lifetime] {});
-        };
+    auto attach_recording_lifetime = [](RecordingJob& job) {
+        auto lifetime = std::make_shared<RecordingLifetime>();
+        size_t resource_count = 0;
+        for (const auto& pass : job.passes) {
+            resource_count += pass.keepalive.size();
+        }
+        lifetime->keepalive.reserve(resource_count);
+        lifetime->records.reserve(job.passes.size());
+        for (auto& pass : job.passes) {
+            for (auto& resource : pass.keepalive) {
+                lifetime->keepalive.emplace_back(std::move(resource));
+            }
+            lifetime->records.emplace_back(std::move(pass.record));
+        }
+        job.command_list->KeepAlive(std::move(lifetime));
+    };
 
-    // Consume the compiler-built frontend dispatch groups in stable graph order.
-    size_t record_unit_index = 0;
-    size_t dispatch_group_index = 0;
-    while (record_unit_index < compiled_plan.frontend_record_units.size()) {
-        assert(
-            dispatch_group_index <
-            compiled_plan.frontend_dispatch_groups.size()
-        );
-        const auto& dispatch_group =
-            compiled_plan.frontend_dispatch_groups[dispatch_group_index];
-        assert(dispatch_group.first_unit == record_unit_index);
-        assert(dispatch_group.unit_count != 0);
-        const size_t unit_end =
-            record_unit_index + dispatch_group.unit_count;
-        assert(unit_end <= compiled_plan.frontend_record_units.size());
-
-        const auto& first_unit =
-            compiled_plan.frontend_record_units[record_unit_index];
-        if (!IsValidPass(first_unit.pass)) {
-            compile_error =
-                "frontend recording found an invalid compiled record unit";
+    const auto& units = compiled_plan.frontend_record_units;
+    std::vector<uint8> split_before(units.size(), 0);
+    for (size_t index = 0; index < units.size(); ++index) {
+        if (!IsValidPass(units[index].pass)) {
+            compile_error = "frontend recording found an invalid compiled record unit";
             return false;
         }
-
-        const PassHandle first_handle = first_unit.pass;
-        auto&            first_pass   = passes[first_handle.index];
-        // Caller-thread classes are hard recording boundaries and execute inline.
-        if (first_unit.record_execution_class ==
-                PassExecutionClass::MainThread ||
-            first_unit.record_execution_class ==
-                PassExecutionClass::CpuPrepare ||
-            first_unit.record_execution_class ==
-                PassExecutionClass::ExternalControl) {
-            if (!first_pass.execute || first_pass.record) {
-                compile_error = "compiled caller-thread pass has an invalid callback shape: " +
-                                first_pass.name;
-                return false;
-            }
-
-            const auto& pass_state = active_pass_states[first_handle.index];
-            bool        main_thread_lifetime_attached = false;
-            const bool  active_physical_main_thread =
-                active_recording.enabled &&
-                pass_state.RequiresCompletionLifetime();
-            auto attach_main_thread_lifetime = [&] {
-                if (!active_physical_main_thread ||
-                    main_thread_lifetime_attached) {
-                    return;
-                }
-                attach_recording_lifetime(
-                    *active_recording.main_thread_command_list,
-                    pass_state.keepalive,
-                    {},
-                    first_pass.execute
-                );
-                main_thread_lifetime_attached = true;
-            };
-            auto reject_main_thread =
-                [&](std::string message) {
-                    if (active_has_physical_main_thread) {
-                        try {
-                            attach_main_thread_lifetime();
-                        } catch (const std::exception& exception) {
-                            message +=
-                                "; failed to retain MainThread recording lifetime: ";
-                            message += exception.what();
-                        } catch (...) {
-                            message +=
-                                "; failed to retain MainThread recording lifetime";
-                        }
-
-                        active_main_stream_guard.Abort();
-                    }
-                    compile_error = std::move(message);
-                    return false;
-                };
-
-            try {
-                bool gpu_profile_bound = false;
-                if (first_unit.record_execution_class ==
-                        PassExecutionClass::MainThread &&
-                    gpu_profiling.try_bind_source) {
-                    CommandList& profiling_list =
-                        *gpu_profiling.main_thread_command_list;
-                    const uint64 generation =
-                        profiling_list.GetSealGeneration();
-                    if (!gpu_profile_main_thread_generation ||
-                        *gpu_profile_main_thread_generation != generation) {
-                        const uint64 source_order =
-                            gpu_profiling.source_order_base +
-                            static_cast<uint64>(first_unit.source_index);
-                        const GpuProfileBindOutcome bind_outcome =
-                            BindGpuProfileSource(
-                                gpu_profiling,
-                                MakeExecutedPassInfo(first_handle),
-                                profiling_list,
-                                ToRHIQueueBinding(first_unit.target_queue),
-                                source_order
-                            );
-                        if (bind_outcome == GpuProfileBindOutcome::Failed) {
-                            return reject_main_thread(
-                                std::move(compile_error)
-                            );
-                        }
-                        gpu_profile_main_thread_generation = generation;
-                        gpu_profile_main_thread_bound =
-                            bind_outcome == GpuProfileBindOutcome::Bound;
-                        gpu_profile_managed_source_since_main_thread = false;
-                    } else if (
-                        gpu_profile_managed_source_since_main_thread
-                    ) {
-                        return reject_main_thread(
-                            "GPU profiling MainThread CommandList must rotate "
-                            "its recording generation after an intervening "
-                            "managed GPU source"
-                        );
-                    } else if (
-                        profiling_list.HasGpuScopeRecorder() !=
-                            gpu_profile_main_thread_bound ||
-                        profiling_list
-                                .IsLegacyGpuProfilingSuppressedForGeneration() ==
-                            gpu_profile_main_thread_bound
-                    ) {
-                        return reject_main_thread(
-                            "GPU profiling MainThread CommandList changed "
-                            "recorder state within one recording generation"
-                        );
-                    }
-                    gpu_profile_bound =
-                        gpu_profile_main_thread_bound;
-                }
-
-                if (active_physical_main_thread) {
-                    auto& command_list =
-                        *active_recording.main_thread_command_list;
-                    command_list.SetResourceStateOwnership(
-                        ERHIResourceStateOwnership::Explicit
-                    );
-                    if (!pass_state.before.empty()) {
-                        command_list.Barriers(
-                            std::span<const BarrierCreateInfo>(
-                                pass_state.before.data(),
-                                pass_state.before.size()
-                            )
-                        );
-                    }
-                }
-
-                const uint64 main_thread_seal_generation =
-                    active_physical_main_thread ?
-                        active_recording.main_thread_command_list
-                            ->GetSealGeneration() :
-                        0;
-                if (first_unit.record_execution_class ==
-                        PassExecutionClass::MainThread &&
-                    gpu_profiling.try_bind_source) {
-                    ScopedGpuMarker pass_marker(
-                        *gpu_profiling.main_thread_command_list,
-                        first_pass.name,
-                        GpuMarkerPalette::Pass(),
-                        gpu_profile_bound ?
-                            EGpuMarkerMode::Timestamp :
-                            EGpuMarkerMode::Label
-                    );
-                    first_pass.execute();
-                } else {
-                    first_pass.execute();
-                }
-
-                if (active_physical_main_thread &&
-                    active_recording.main_thread_command_list
-                            ->GetSealGeneration() !=
-                        main_thread_seal_generation) {
-                    throw std::logic_error(
-                        "active MainThread callback sealed its managed CommandList"
-                    );
-                }
-                if (active_physical_main_thread &&
-                    !active_recording.main_thread_command_list
-                         ->HasExplicitResourceStateOwnership()) {
-                    throw std::logic_error(
-                        "active MainThread callback changed explicit state ownership"
-                    );
-                }
-                if (active_physical_main_thread && !pass_state.after.empty()) {
-                    active_recording.main_thread_command_list->Barriers(
-                        std::span<const BarrierCreateInfo>(
-                            pass_state.after.data(), pass_state.after.size()
-                        )
-                    );
-                }
-                if (active_physical_main_thread) {
-                    attach_main_thread_lifetime();
-                }
-            } catch (const std::exception& exception) {
-                return reject_main_thread(
-                    "main-thread pass '" + first_pass.name +
-                    "' failed: " + exception.what()
-                );
-            } catch (...) {
-                return reject_main_thread(
-                    "main-thread pass '" + first_pass.name + "' failed"
-                );
-            }
-            if (first_unit.record_execution_class ==
-                    PassExecutionClass::MainThread &&
-                after_main_thread_pass) {
-                after_main_thread_pass(MakeExecutedPassInfo(first_handle));
-            }
-            ++record_unit_index;
-            ++dispatch_group_index;
-            continue;
-        }
-
-        if (gpu_profiling.try_bind_source &&
-            gpu_profile_main_thread_generation) {
-            const CommandList& profiling_list =
-                *gpu_profiling.main_thread_command_list;
-            if (profiling_list.GetSealGeneration() ==
-                *gpu_profile_main_thread_generation) {
-                compile_error =
-                    "GPU profiling MainThread CommandList must rotate its "
-                    "recording generation before a managed GPU source is "
-                    "bound or published";
-                return false;
-            }
-            if (!profiling_list.IsEmpty() ||
-                profiling_list.HasGpuScopeRecorder() ||
-                profiling_list
-                    .IsLegacyGpuProfilingSuppressedForGeneration()) {
-                compile_error =
-                    "GPU profiling MainThread observer must leave its "
-                    "replacement recording generation empty and unbound "
-                    "before a managed GPU source is bound or published";
-                return false;
+        if (active_recording.enabled) {
+            const auto& state = active_pass_states[units[index].pass.pass_id];
+            if (!state.wait_fences.empty()) { split_before[index] = 1; }
+            if (!state.signal_fences.empty() && index + 1 < units.size()) {
+                split_before[index + 1] = 1;
             }
         }
+    }
+    const auto dispatches = Detail::BuildRecordingDispatches(compiled_plan, parallel_recording_enabled);
+    const uint32 worker_count = TaskGraph::IsInitialized() ?
+                                    TaskGraph::GetInterface().GetWorkerThreadCount() :
+                                    1;
+    // Keep CPU dispatch boundaries, but allocate one exclusively owned stream
+    // per serial region or weighted parallel range, not one per pass.
+    for (const auto& dispatch_group : dispatches) {
+        const auto ranges = Detail::PartitionRecordingRange(units, dispatch_group, worker_count, split_before);
 
-        // Managed passes receive independent frontend streams and producer gates.
         Array<RecordingJob>        jobs{};
         Array<RHIRecordingSource>  frontend_sources{};
         Array<RHIRecordingGateRef> producer_gates{};
-        jobs.reserve(unit_end - record_unit_index);
-        frontend_sources.reserve(unit_end - record_unit_index);
-        producer_gates.reserve(unit_end - record_unit_index);
+        jobs.reserve(ranges.size());
+        frontend_sources.reserve(ranges.size());
+        producer_gates.reserve(ranges.size());
 
-
-        for (size_t index = record_unit_index; index < unit_end; ++index) {
-            const auto& unit = compiled_plan.frontend_record_units[index];
+        for (const auto& range : ranges) {
+            const auto& unit = units[range.first_unit];
             const auto  handle = unit.pass;
-            auto&       pass   = passes[handle.index];
+            auto&       pass   = passes[handle.pass_id];
             const auto  queue  = ToRHIQueue(unit.target_queue.role);
-            if (!pass.record || pass.execute || queue == EQueueType::Ignore) {
-                compile_error = "compiled recording pass has an invalid callback or queue: " +
-                                pass.name;
+            if (!pass.record || queue == EQueueType::Ignore) {
+                compile_error = "compiled recording pass has an invalid callback or queue: " + pass.name;
                 return false;
             }
 
             RecordingJob job{
-                .pass         = handle,
-                .pass_name    = pass.name,
-                .record       = pass.record,
                 .command_list = MakeShared<CommandList>(queue),
                 .completion   = RHIRecordingGate::Create(),
                 .gpu_profile_queue_binding =
@@ -2670,11 +2201,32 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             job.command_list->SetTranslateExecutionClass(
                 job.translate_execution_class
             );
-            if (active_recording.enabled) {
-                const auto& pass_state = active_pass_states[handle.index];
-                job.before             = pass_state.before;
-                job.after              = pass_state.after;
-                job.keepalive          = pass_state.keepalive;
+            job.passes.reserve(range.unit_count);
+            Array<ExecutedPassInfo> source_passes;
+            if (configure_recording_source) { source_passes.reserve(range.unit_count); }
+            for (uint32 offset = 0; offset < range.unit_count; ++offset) {
+                const auto& member_unit = units[range.first_unit + offset];
+                auto& member = passes[member_unit.pass.pass_id];
+                if (!member.record || ToRHIQueue(member_unit.target_queue.role) == EQueueType::Ignore) {
+                    compile_error = "compiled recording pass has an invalid callback or queue: " + member.name;
+                    return false;
+                }
+                RecordingPass recording_pass{
+                    .pass = member_unit.pass,
+                    .pass_name = member.name,
+                    .record = member.record,
+                };
+                if (active_recording.enabled) {
+                    auto& pass_state = active_pass_states[member_unit.pass.pass_id];
+                    recording_pass.before = std::move(pass_state.before);
+                    recording_pass.after = std::move(pass_state.after);
+                    recording_pass.keepalive = std::move(pass_state.keepalive);
+                    recording_pass.accesses  = std::move(pass_state.accesses);
+                }
+                job.passes.emplace_back(std::move(recording_pass));
+                if (configure_recording_source) {
+                    source_passes.emplace_back(MakeExecutedPassInfo(member_unit.pass));
+                }
             }
             RHIRecordingSource source{
                 .command_list = job.command_list,
@@ -2687,13 +2239,15 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     unit.native_translate_class;
             }
             if (active_recording.enabled) {
-                const auto& pass_state = active_pass_states[handle.index];
+                const auto& first_state = active_pass_states[handle.pass_id];
+                const auto& last_state = active_pass_states[
+                    units[range.first_unit + range.unit_count - 1].pass.pass_id];
                 source.submit_metadata.wait_fences =
-                    pass_state.wait_fences;
+                    first_state.wait_fences;
                 source.submit_metadata.signal_fences =
-                    pass_state.signal_fences;
+                    last_state.signal_fences;
                 source.submit_metadata.async_queue_scope =
-                    pass_state.async_queue_scope;
+                    first_state.async_queue_scope;
             }
             if (active_recording.enabled) {
                 try {
@@ -2726,7 +2280,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     RHIThreadRoleScope configuration_owner(
                         ERHIThreadRole::RecordWorker
                     );
-                    configure_recording_source(MakeExecutedPassInfo(handle), source);
+                    configure_recording_source(source_passes, source);
                 } catch (const std::exception& exception) {
                     compile_error = "recording source configuration failed for pass '" + pass.name +
                                     "': " + exception.what();
@@ -2791,7 +2345,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                 const GpuProfileBindOutcome bind_outcome =
                     BindGpuProfileSource(
                         gpu_profiling,
-                        MakeExecutedPassInfo(job.pass),
+                        MakeExecutedPassInfo(job.passes.front().pass),
                         *job.command_list,
                         job.gpu_profile_queue_binding,
                         job.gpu_profile_source_order
@@ -2808,27 +2362,25 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
 
         const auto error = std::make_shared<RecordingError>();
         auto run_job =
-            [error, store_error, attach_recording_lifetime](RecordingJob job) mutable {
+            [error, store_error, attach_recording_lifetime,
+             owns_explicit_state = active_recording.enabled,
+             state_ownership = active_recording.state_ownership](RecordingJob job) mutable {
             RHIThreadRoleScope record_owner(ERHIThreadRole::RecordWorker);
-            ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Record", job.pass_name);
             ProducerGateGuard producer_gate_guard{.gate = job.completion};
+            std::string_view pass_name = job.passes.front().pass_name;
             bool lifetime_attached = false;
             auto attach_lifetime = [&] {
                 if (lifetime_attached) {
                     return;
                 }
-                attach_recording_lifetime(
-                    *job.command_list,
-                    std::move(job.keepalive),
-                    std::move(job.record)
-                );
+                attach_recording_lifetime(job);
                 lifetime_attached = true;
             };
             auto fail_job =
                 [&](std::string_view detail, bool has_detail) noexcept {
                     try {
                         std::string message =
-                            "record pass '" + job.pass_name + "' failed";
+                            "record pass '" + std::string(pass_name) + "' failed";
                         if (has_detail) {
                             message += ": ";
                             message += detail;
@@ -2842,7 +2394,7 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                         try {
                             store_error(
                                 error,
-                                "record pass '" + job.pass_name +
+                                "record pass '" + std::string(pass_name) +
                                     "' failed while retaining its recording "
                                     "lifetime"
                             );
@@ -2853,57 +2405,44 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     producer_gate_guard.Disarm();
                 };
             try {
-                const bool owns_explicit_state = !job.keepalive.empty();
-                if (owns_explicit_state || !job.before.empty() || !job.after.empty()) {
+                if (owns_explicit_state) {
                     job.command_list->SetResourceStateOwnership(
-                        ERHIResourceStateOwnership::Explicit
+                        state_ownership
                     );
                 }
-                if (!job.before.empty()) {
-                    job.command_list->Barriers(
-                        std::span<const BarrierCreateInfo>(
-                            job.before.data(), job.before.size()
-                        )
-                    );
-                }
-                const uint64 seal_generation =
-                    job.command_list->GetSealGeneration();
-                if (job.gpu_profile_requested) {
-                    ScopedGpuMarker pass_marker(
-                        *job.command_list,
-                        job.pass_name,
-                        GpuMarkerPalette::Pass(),
-                        job.gpu_profile_bound ?
-                            EGpuMarkerMode::Timestamp :
-                            EGpuMarkerMode::Label
-                    );
-                    job.record(*job.command_list);
-                } else {
-                    job.record(*job.command_list);
-                }
-                if (job.command_list->GetSealGeneration() != seal_generation) {
-                    throw std::logic_error(
-                        "record callback sealed its managed CommandList"
-                    );
-                }
-                if (owns_explicit_state &&
-                    !job.command_list->HasExplicitResourceStateOwnership()) {
-                    throw std::logic_error(
-                        "record callback changed explicit state ownership"
-                    );
-                }
-                if (job.command_list->GetTranslateExecutionClass() !=
-                    job.translate_execution_class) {
-                    throw std::logic_error(
-                        "record callback changed its managed translation class"
-                    );
-                }
-                if (!job.after.empty()) {
-                    job.command_list->Barriers(
-                        std::span<const BarrierCreateInfo>(
-                            job.after.data(), job.after.size()
-                        )
-                    );
+                for (auto& pass : job.passes) {
+                    pass_name = pass.pass_name;
+                    ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.Record", pass.pass_name);
+                    if (!pass.before.empty()) { job.command_list->Barriers(pass.before); }
+                    if (owns_explicit_state) {
+                        job.command_list->BeginResourceAccesses(pass.accesses, pass.pass_name);
+                    }
+                    const uint64 seal_generation = job.command_list->GetSealGeneration();
+                    if (job.gpu_profile_requested) {
+                        ScopedGpuMarker pass_marker(
+                            *job.command_list,
+                            pass.pass_name,
+                            GpuMarkerPalette::Pass(),
+                            job.gpu_profile_bound ? EGpuMarkerMode::Timestamp : EGpuMarkerMode::Label
+                        );
+                        pass.record(*job.command_list);
+                    } else {
+                        pass.record(*job.command_list);
+                    }
+                    if (job.command_list->GetSealGeneration() != seal_generation) {
+                        throw std::logic_error("record callback sealed its managed CommandList");
+                    }
+                    if (owns_explicit_state &&
+                        job.command_list->GetResourceStateOwnership() != state_ownership) {
+                        throw std::logic_error("record callback changed explicit state ownership");
+                    }
+                    if (job.command_list->GetTranslateExecutionClass() != job.translate_execution_class) {
+                        throw std::logic_error("record callback changed its managed translation class");
+                    }
+                    if (owns_explicit_state) {
+                        job.command_list->EndResourceAccesses();
+                    }
+                    if (!pass.after.empty()) { job.command_list->Barriers(pass.after); }
                 }
                 attach_lifetime();
                 if (!job.completion->Signal()) {
@@ -2978,23 +2517,25 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                      ERHIRecordingStatus::Pending)) {
                 compile_error =
                     "frontend source publisher mutated pending source state for pass '" +
-                    job.pass_name + "'";
+                    job.passes.front().pass_name + "'";
                 return false;
             }
         }
 
         // Dispatch only inside the compiler-approved group; serial modes use
         // the same recording body inline.
-        const bool task_graph_available = TaskGraph::IsInitialized();
         const bool can_dispatch_parallel =
-            first_unit.record_execution_class ==
-                PassExecutionClass::ParallelRecordEligible &&
-            parallel_recording_enabled && task_graph_available;
-        if (first_unit.record_execution_class ==
-                PassExecutionClass::SerialRecord ||
-            !parallel_recording_enabled || !task_graph_available) {
-            for (auto& job : jobs) {
-                run_job(std::move(job));
+            dispatch_group.parallel && jobs.size() > 1;
+        std::exception_ptr dispatch_error;
+        if (!can_dispatch_parallel) {
+            for (size_t index = 0; index < jobs.size(); ++index) {
+                run_job(std::move(jobs[index]));
+                if (producer_gates[index]->Status() != ERHIRecordingStatus::Succeeded) {
+                    for (size_t pending = index + 1; pending < jobs.size(); ++pending) {
+                        producer_gates[pending]->Fail();
+                    }
+                    break;
+                }
             }
         } else {
             GraphEventArray record_task_events{};
@@ -3008,13 +2549,10 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                         }
                     ));
                 }
-            } catch (const std::exception& exception) {
-                store_error(error, std::string("failed to dispatch recording task: ") + exception.what());
-                for (size_t index = dispatched_count; index < jobs.size(); ++index) {
-                    producer_gates[index]->Fail();
-                }
             } catch (...) {
-                store_error(error, "failed to dispatch recording task");
+                // Allocation failure must not bypass the join or release leases
+                // while already dispatched producers are still writing.
+                dispatch_error = std::current_exception();
                 for (size_t index = dispatched_count; index < jobs.size(); ++index) {
                     producer_gates[index]->Fail();
                 }
@@ -3039,6 +2577,16 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             group_succeeded =
                 gate->Wait() == ERHIRecordingStatus::Succeeded && group_succeeded;
         }
+        if (dispatch_error) {
+            try {
+                std::rethrow_exception(dispatch_error);
+            } catch (const std::exception& exception) {
+                compile_error = std::string("failed to dispatch recording task: ") + exception.what();
+            } catch (...) {
+                compile_error = "failed to dispatch recording task";
+            }
+            return false;
+        }
         if (!group_succeeded) {
             std::lock_guard lock(error->mutex);
             compile_error =
@@ -3047,15 +2595,16 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     error->message;
             return false;
         }
-        if (can_dispatch_parallel && unit_end - record_unit_index > 1) {
+        if (can_dispatch_parallel) {
             std::ostringstream pass_list;
-            for (size_t index = record_unit_index; index < unit_end; ++index) {
-                if (index != record_unit_index) {
+            for (size_t index = dispatch_group.first_unit;
+                 index < dispatch_group.first_unit + dispatch_group.unit_count; ++index) {
+                if (index != dispatch_group.first_unit) {
                     pass_list << ',';
                 }
                 const auto pass_handle =
                     compiled_plan.frontend_record_units[index].pass;
-                pass_list << passes[pass_handle.index].name;
+                pass_list << passes[pass_handle.pass_id].name;
             }
 
             const std::string pass_names = pass_list.str();
@@ -3073,22 +2622,12 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
                     "dispatch=task-graph worker_jobs={} completed=true",
                     name,
                     pass_names,
-                    unit_end - record_unit_index
+                    jobs.size()
                 );
             }
         }
         pending_gate_guard.Disarm();
-        if (gpu_profiling.try_bind_source &&
-            gpu_profile_main_thread_generation) {
-            gpu_profile_managed_source_since_main_thread = true;
-        }
-        record_unit_index = unit_end;
-        ++dispatch_group_index;
     }
-    assert(
-        dispatch_group_index ==
-        compiled_plan.frontend_dispatch_groups.size()
-    );
     // Make the already-published active graph consumable only after every
     // producer has succeeded.
     if (!active_transaction_guard.Commit()) {
@@ -3096,7 +2635,6 @@ bool RenderGraph::ExecuteFrontendRecordingPlan(
             "active recording transaction gate completed before graph commit";
         return false;
     }
-    active_main_stream_guard.Commit();
     return true;
 }
 
@@ -3123,26 +2661,26 @@ std::string RenderGraph::Dump() const {
 
     stream << "passes:\n";
     const bool has_execution_order = compiled_plan.execution_order.size() == passes.size();
-    for (uint32_t item_index = 0; item_index < passes.size(); ++item_index) {
-        const uint32_t pass_index =
-            has_execution_order ? compiled_plan.execution_order[item_index].index : item_index;
+    for (uint32 item_index = 0; item_index < passes.size(); ++item_index) {
+        const uint32 pass_index =
+            has_execution_order ? compiled_plan.execution_order[item_index].pass_id : item_index;
         const auto& pass = passes[pass_index];
         stream << "  [" << item_index << "] " << pass.name << " declared=" << pass_index
                << " scheduled=" << (has_execution_order ? "true" : "false")
                << " queue=" << ToString(pass.domain.queue)
-               << " pipeline=" << ToString(pass.domain.pipeline)
-               << " cpu=" << ToString(pass.execution_class)
+               << " work=" << ToString(pass.domain.work)
+               << " cpu=" << ToString(pass.record_policy)
                << " translate=" << ToString(pass.translate_execution_class)
-               << " workload=" << pass.workload
+
                << " side_effect=" << (pass.side_effect ? "true" : "false") << " accesses=[";
-        for (uint32_t access_index = 0; access_index < pass.accesses.size(); ++access_index) {
+        for (uint32 access_index = 0; access_index < pass.accesses.size(); ++access_index) {
             const auto& access = pass.accesses[access_index];
             if (access_index != 0) {
                 stream << ", ";
             }
             stream << ToString(access.mode) << ':';
             if (IsValidResource(access.resource)) {
-                stream << resources[access.resource.index].name;
+                stream << resources[access.resource.resource_id].name;
             } else {
                 stream << "invalid";
             }
@@ -3157,19 +2695,19 @@ std::string RenderGraph::Dump() const {
             stream << ')';
         }
         stream << "] references=[";
-        for (uint32_t reference_index = 0; reference_index < pass.references.size();
+        for (uint32 reference_index = 0; reference_index < pass.references.size();
              ++reference_index) {
             if (reference_index != 0) {
                 stream << ", ";
             }
             const auto reference = pass.references[reference_index];
-            stream << (IsValidResource(reference) ? resources[reference.index].name : "invalid");
+            stream << (IsValidResource(reference) ? resources[reference.resource_id].name : "invalid");
         }
         stream << "]\n";
     }
 
     stream << "resources:\n";
-    for (uint32_t index = 0; index < resources.size(); ++index) {
+    for (uint32 index = 0; index < resources.size(); ++index) {
         const auto& resource = resources[index];
         stream << "  [" << index << "] " << resource.name << " kind=" << ToString(resource.kind)
                << " lifetime=" << (resource.imported ? "imported" : "transient");
@@ -3178,31 +2716,31 @@ std::string RenderGraph::Dump() const {
                    << " layers=" << resource.texture_desc.layer_count << " aspects=";
             AppendTextureAspects(stream, resource.texture_desc.aspects);
             stream << " sharing="
-                   << (resource.texture_desc.sharing_mode == TextureDesc::SharingMode::Exclusive ?
+                   << (resource.texture_desc.sharing_mode == SharingMode::Exclusive ?
                            "exclusive" :
                            "concurrent")
                    << ']';
         } else if (resource.kind == ResourceKind::Buffer && resource.typed_desc) {
             stream << " desc=[bytes=" << resource.buffer_desc.byte_size << " sharing="
-                   << (resource.buffer_desc.sharing_mode == TextureDesc::SharingMode::Exclusive ?
+                   << (resource.buffer_desc.sharing_mode == SharingMode::Exclusive ?
                            "exclusive" :
                            "concurrent")
                    << ']';
         }
         stream << " first=";
-        if (resource.first_use == PassHandle::InvalidIndex) {
+        if (resource.first_use == InvalidIndex) {
             stream << "unused";
         } else {
             stream << resource.first_use;
         }
         stream << " last=";
-        if (resource.last_use == PassHandle::InvalidIndex) {
+        if (resource.last_use == InvalidIndex) {
             stream << "unused";
         } else {
             stream << resource.last_use;
         }
-        uint32_t version_count = 0;
-        uint32_t transient_slot = PassHandle::InvalidIndex;
+        uint32 version_count  = 0;
+        uint32 transient_slot = InvalidIndex;
         if (index < compiled_plan.resources.size()) {
             version_count  = compiled_plan.resources[index].version_count;
             transient_slot = compiled_plan.resources[index].transient_slot;
@@ -3212,14 +2750,14 @@ std::string RenderGraph::Dump() const {
                << " aliases=[";
         auto aliases = resource.aliases;
         std::sort(aliases.begin(), aliases.end());
-        for (uint32_t alias_index = 0; alias_index < aliases.size(); ++alias_index) {
+        for (uint32 alias_index = 0; alias_index < aliases.size(); ++alias_index) {
             if (alias_index != 0) {
                 stream << ", ";
             }
             stream << aliases[alias_index];
         }
         stream << "] slot=";
-        if (transient_slot == PassHandle::InvalidIndex) {
+        if (transient_slot == InvalidIndex) {
             stream << "none";
         } else {
             stream << transient_slot;
@@ -3230,12 +2768,12 @@ std::string RenderGraph::Dump() const {
 
     stream << "compiled_accesses:\n";
     for (const auto& access : compiled_plan.accesses) {
-        stream << "  " << passes[access.pass.index].name << ' ' << ToString(access.mode) << ':'
-               << resources[access.resource.index].name << ' ';
+        stream << "  " << passes[access.pass.pass_id].name << ' ' << ToString(access.mode) << ':'
+               << resources[access.resource.resource_id].name << ' ';
         AppendRange(stream, access.range);
         stream << " state=";
         AppendState(stream, access.state);
-        stream << " domain=" << ToString(access.domain.queue) << '/' << ToString(access.domain.pipeline);
+        stream << " domain=" << ToString(access.domain.queue) << '/' << ToString(access.domain.work);
         stream << " version=";
         AppendVersion(stream, access.input_version);
         stream << "->";
@@ -3245,16 +2783,20 @@ std::string RenderGraph::Dump() const {
 
     stream << "edges:\n";
     for (const auto& edge : compiled_plan.edges) {
-        stream << "  " << passes[edge.src.index].name << " -> " << passes[edge.dst.index].name
+        stream << "  " << passes[edge.src.pass_id].name << " -> " << passes[edge.dst.pass_id].name
                << " reasons=[";
-        for (uint32_t reason_index = 0; reason_index < edge.reasons.size(); ++reason_index) {
-            const auto& reason = edge.reasons[reason_index];
+        if (!compiled_plan.dependency_reasons) {
+            stream << "not captured";
+        }
+        const auto reasons = compiled_plan.GetDependencyReasons(edge.src, edge.dst);
+        for (uint32 reason_index = 0; reason_index < reasons.size(); ++reason_index) {
+            const auto& reason = reasons[reason_index].reason;
             if (reason_index != 0) {
                 stream << ", ";
             }
             stream << ToString(reason.kind);
             if (reason.resource.IsValid()) {
-                stream << ':' << resources[reason.resource.index].name << '@';
+                stream << ':' << resources[reason.resource.resource_id].name << '@';
                 AppendRange(stream, reason.range);
                 stream << ' ';
                 AppendVersion(stream, reason.input_version);
@@ -3266,8 +2808,8 @@ std::string RenderGraph::Dump() const {
     }
 
     auto append_pass_endpoint = [&](PassHandle pass, bool import_boundary, bool export_boundary) {
-        if (pass.IsValid() && pass.owner_id == graph_id && pass.index < passes.size()) {
-            stream << passes[pass.index].name;
+        if (pass.IsValid() && pass.graph_id == graph_id && pass.pass_id < passes.size()) {
+            stream << passes[pass.pass_id].name;
         } else if (import_boundary) {
             stream << "<import>";
         } else if (export_boundary) {
@@ -3278,19 +2820,19 @@ std::string RenderGraph::Dump() const {
     };
 
     stream << "barriers:\n";
-    for (uint32_t barrier_index = 0; barrier_index < compiled_plan.barriers.size(); ++barrier_index) {
+    for (uint32 barrier_index = 0; barrier_index < compiled_plan.barriers.size(); ++barrier_index) {
         const auto& barrier = compiled_plan.barriers[barrier_index];
-        stream << "  [" << barrier_index << "] " << resources[barrier.resource.index].name << '@';
+        stream << "  [" << barrier_index << "] " << resources[barrier.resource.resource_id].name << '@';
         AppendRange(stream, barrier.range);
         stream << ' ';
         append_pass_endpoint(barrier.src_pass, barrier.import_boundary, false);
         stream << '(' << ToString(barrier.src_domain.queue) << '/'
-               << ToString(barrier.src_domain.pipeline) << ' ';
+               << ToString(barrier.src_domain.work) << ' ';
         AppendState(stream, barrier.before_state);
         stream << ' ' << ToString(barrier.before_access) << ") -> ";
         append_pass_endpoint(barrier.dst_pass, false, barrier.export_boundary);
         stream << '(' << ToString(barrier.dst_domain.queue) << '/'
-               << ToString(barrier.dst_domain.pipeline) << ' ';
+               << ToString(barrier.dst_domain.work) << ' ';
         AppendState(stream, barrier.after_state);
         stream << ' ' << ToString(barrier.after_access) << ") flags=[";
         bool wrote_flag = false;
@@ -3318,14 +2860,14 @@ std::string RenderGraph::Dump() const {
             stream << "none";
         }
         stream << "] sources=[";
-        for (uint32_t source_index = 0; source_index < barrier.sources.size(); ++source_index) {
+        for (uint32 source_index = 0; source_index < barrier.sources.size(); ++source_index) {
             if (source_index != 0) {
                 stream << ',';
             }
             const auto& source = barrier.sources[source_index];
             append_pass_endpoint(source.pass, false, false);
             stream << '(' << ToString(source.domain.queue) << '/'
-                   << ToString(source.domain.pipeline) << ' ';
+                   << ToString(source.domain.work) << ' ';
             AppendState(stream, source.state);
             stream << ' ' << ToString(source.access) << ')';
         }
@@ -3335,29 +2877,29 @@ std::string RenderGraph::Dump() const {
     stream << "alias_boundaries:\n";
     for (const auto& alias : compiled_plan.alias_boundaries) {
         stream << "  slot=" << alias.transient_slot << ' '
-               << resources[alias.predecessor_resource.index].name << " -> "
-               << resources[alias.successor_resource.index].name << " passes="
-               << passes[alias.primary_src_pass.index].name << "->"
-               << passes[alias.dst_pass.index].name
+               << resources[alias.predecessor_resource.resource_id].name << " -> "
+               << resources[alias.successor_resource.resource_id].name << " passes="
+               << passes[alias.primary_src_pass.pass_id].name << "->"
+               << passes[alias.dst_pass.pass_id].name
                << " frontier=[";
-        for (uint32_t index = 0; index < alias.source_frontier.size(); ++index) {
+        for (uint32 index = 0; index < alias.source_frontier.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
-            stream << passes[alias.source_frontier[index].index].name;
+            stream << passes[alias.source_frontier[index].pass_id].name;
         }
         stream << "] barrier=" << alias.barrier_index << '\n';
     }
 
     stream << "barrier_placements:\n  prologue=[";
-    for (uint32_t index = 0; index < compiled_plan.prologue_barriers.size(); ++index) {
+    for (uint32 index = 0; index < compiled_plan.prologue_barriers.size(); ++index) {
         if (index != 0) {
             stream << ',';
         }
         stream << compiled_plan.prologue_barriers[index];
     }
     stream << "] epilogue=[";
-    for (uint32_t index = 0; index < compiled_plan.epilogue_barriers.size(); ++index) {
+    for (uint32 index = 0; index < compiled_plan.epilogue_barriers.size(); ++index) {
         if (index != 0) {
             stream << ',';
         }
@@ -3370,37 +2912,37 @@ std::string RenderGraph::Dump() const {
         stream << "  [" << batch.id << "] " << ToString(batch.queue.role) << " native="
                << batch.queue.native_queue_id << " family=" << batch.queue.family_id
                << " available=" << (batch.queue.available ? "true" : "false")
-               << " external_control=" << (batch.external_control ? "true" : "false")
+
                << " passes=[";
-        for (uint32_t pass_index = 0; pass_index < batch.passes.size(); ++pass_index) {
+        for (uint32 pass_index = 0; pass_index < batch.passes.size(); ++pass_index) {
             if (pass_index != 0) {
                 stream << ',';
             }
-            stream << passes[batch.passes[pass_index].index].name;
+            stream << passes[batch.passes[pass_index].pass_id].name;
         }
         stream << "] pre=[";
-        for (uint32_t index = 0; index < batch.pre_barriers.size(); ++index) {
+        for (uint32 index = 0; index < batch.pre_barriers.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
             stream << batch.pre_barriers[index];
         }
         stream << "] post=[";
-        for (uint32_t index = 0; index < batch.post_barriers.size(); ++index) {
+        for (uint32 index = 0; index < batch.post_barriers.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
             stream << batch.post_barriers[index];
         }
         stream << "] waits=[";
-        for (uint32_t index = 0; index < batch.wait_syncs.size(); ++index) {
+        for (uint32 index = 0; index < batch.wait_syncs.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
             stream << batch.wait_syncs[index];
         }
         stream << "] signals=[";
-        for (uint32_t index = 0; index < batch.signal_syncs.size(); ++index) {
+        for (uint32 index = 0; index < batch.signal_syncs.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
@@ -3414,14 +2956,14 @@ std::string RenderGraph::Dump() const {
         stream << "  [" << sync.id << "] batch" << sync.signal_batch << " -> batch"
                << sync.wait_batch << " mode=" << (sync.gpu_wait_required ? "gpu" : "host-fifo")
                << " edges=[";
-        for (uint32_t index = 0; index < sync.dependency_edges.size(); ++index) {
+        for (uint32 index = 0; index < sync.dependency_edges.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
             stream << sync.dependency_edges[index];
         }
         stream << "] barriers=[";
-        for (uint32_t index = 0; index < sync.barriers.size(); ++index) {
+        for (uint32 index = 0; index < sync.barriers.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
@@ -3432,8 +2974,8 @@ std::string RenderGraph::Dump() const {
 
     stream << "pass_barriers:\n";
     for (const auto& placement : compiled_plan.pass_barriers) {
-        stream << "  " << passes[placement.pass.index].name << " before=[";
-        for (uint32_t index = 0; index < placement.before.size(); ++index) {
+        stream << "  " << passes[placement.pass.pass_id].name << " before=[";
+        for (uint32 index = 0; index < placement.before.size(); ++index) {
             if (index != 0) {
                 stream << ',';
             }
@@ -3442,19 +2984,20 @@ std::string RenderGraph::Dump() const {
         stream << "]\n";
     }
 
+    const auto dependency_levels = compiled_plan.BuildDependencyLevels();
     stream << "dependency_levels:\n";
-    for (uint32_t level_index = 0;
-         level_index < compiled_plan.dependency_levels.size();
+    for (uint32 level_index = 0;
+         level_index < dependency_levels.size();
          ++level_index) {
         stream << "  [" << level_index << "] [";
-        const auto& level = compiled_plan.dependency_levels[level_index];
-        for (uint32_t pass_index = 0;
+        const auto& level = dependency_levels[level_index];
+        for (uint32 pass_index = 0;
              pass_index < level.passes.size();
              ++pass_index) {
             if (pass_index != 0) {
                 stream << ", ";
             }
-            stream << passes[level.passes[pass_index].index].name;
+            stream << passes[level.passes[pass_index].pass_id].name;
         }
         stream << "]\n";
     }
@@ -3465,21 +3008,16 @@ std::string RenderGraph::Dump() const {
                << ToString(unit.target_queue.role) << "/native"
                << unit.target_queue.native_queue_id << "/family"
                << unit.target_queue.family_id << " record="
-               << ToString(unit.record_execution_class) << " native="
-               << ToString(unit.native_translate_class) << " work="
-               << unit.estimated_record_work << " level=";
-        if (unit.dependency_level_index == PassHandle::InvalidIndex) {
-            stream << "none";
-        } else {
-            stream << unit.dependency_level_index;
-        }
-        stream << " pass=" << passes[unit.pass.index].name << '\n';
+               << ToString(unit.record_policy) << " native="
+               << ToString(unit.native_translate_class);
+        stream << " pass=" << passes[unit.pass.pass_id].name
+               << " record_workload=" << unit.recording_workload << '\n';
     }
     return stream.str();
 }
 
 void RenderGraph::AddAccess(
-    uint32_t         pass_index,
+    uint32           pass_index,
     ResourceHandle   resource,
     AccessMode       mode,
     ResourceRange    range,
@@ -3501,13 +3039,13 @@ void RenderGraph::AddAccess(
         );
         return;
     }
-    if (range.kind != resources[resource.index].kind) {
+    if (RenderGraph::GetRangeKind(range) != resources[resource.resource_id].kind) {
         declaration_errors.emplace_back(
             "pass '" + passes[pass_index].name + "' used a typed handle with the wrong resource kind"
         );
         return;
     }
-    if (state.kind != resources[resource.index].kind) {
+    if (RenderGraph::GetStateKind(state) != resources[resource.resource_id].kind) {
         declaration_errors.emplace_back(
             "pass '" + passes[pass_index].name + "' used a state with the wrong resource kind"
         );
@@ -3547,9 +3085,9 @@ void RenderGraph::AddStateDeclaration(
         declaration_errors.emplace_back("state declaration received an invalid resource handle");
         return;
     }
-    auto& declaration = resources[resource.index];
-    if (declaration.kind == ResourceKind::Token || range.kind != declaration.kind ||
-        state.kind != declaration.kind) {
+    auto& declaration = resources[resource.resource_id];
+    if (declaration.kind == ResourceKind::Token || RenderGraph::GetRangeKind(range) != declaration.kind ||
+        RenderGraph::GetStateKind(state) != declaration.kind) {
         declaration_errors.emplace_back(
             "state declaration has the wrong resource kind for '" + declaration.name + "'"
         );
@@ -3563,10 +3101,12 @@ void RenderGraph::AddStateDeclaration(
     }
     StateDeclaration state_declaration{range, state, queue, boundary_access};
     auto&            target = initial ? declaration.initial_states : declaration.final_states;
-    target.push_back(std::move(state_declaration));
+    if (std::find(target.begin(), target.end(), state_declaration) == target.end()) {
+        target.push_back(std::move(state_declaration));
+    }
 }
 
-void RenderGraph::AddDependency(uint32_t pass_index, PassHandle dependency) {
+void RenderGraph::AddDependency(uint32 pass_index, PassHandle dependency) {
     if (!InvalidateCompile()) {
         return;
     }
@@ -3574,7 +3114,7 @@ void RenderGraph::AddDependency(uint32_t pass_index, PassHandle dependency) {
         declaration_errors.emplace_back("explicit dependency contains an invalid pass handle");
         return;
     }
-    if (dependency.index == pass_index) {
+    if (dependency.pass_id == pass_index) {
         declaration_errors.emplace_back("pass cannot depend on itself: " + passes[pass_index].name);
         return;
     }
@@ -3584,7 +3124,7 @@ void RenderGraph::AddDependency(uint32_t pass_index, PassHandle dependency) {
     }
 }
 
-void RenderGraph::MarkSideEffect(uint32_t pass_index) {
+void RenderGraph::MarkSideEffect(uint32 pass_index) {
     if (!InvalidateCompile()) {
         return;
     }
@@ -3596,9 +3136,9 @@ void RenderGraph::MarkSideEffect(uint32_t pass_index) {
 }
 
 void RenderGraph::SetExecutionDomain(
-    uint32_t pass_index,
-    QueueRole queue,
-    PipelineType pipeline
+    uint32      pass_index,
+    QueueRole   queue,
+    GpuWorkType work
 ) {
     if (!InvalidateCompile()) {
         return;
@@ -3607,10 +3147,10 @@ void RenderGraph::SetExecutionDomain(
         declaration_errors.emplace_back("execution-domain declaration has invalid pass index");
         return;
     }
-    passes[pass_index].domain = ExecutionDomain{queue, pipeline};
+    passes[pass_index].domain = ExecutionDomain{queue, work};
 }
 
-void RenderGraph::AddReference(uint32_t pass_index, ResourceHandle resource) {
+void RenderGraph::AddReference(uint32 pass_index, ResourceHandle resource) {
     if (!InvalidateCompile()) {
         return;
     }
@@ -3630,30 +3170,8 @@ void RenderGraph::AddReference(uint32_t pass_index, ResourceHandle resource) {
     }
 }
 
-void RenderGraph::SetPassExecutionClass(
-    uint32_t           pass_index,
-    PassExecutionClass execution_class,
-    uint32_t           workload
-) {
-    if (!InvalidateCompile()) {
-        return;
-    }
-    if (pass_index >= passes.size()) {
-        declaration_errors.emplace_back("recording-class declaration has invalid pass index");
-        return;
-    }
-    if (workload == 0) {
-        declaration_errors.emplace_back(
-            "pass '" + passes[pass_index].name + "' has zero recording workload"
-        );
-        return;
-    }
-    passes[pass_index].execution_class = execution_class;
-    passes[pass_index].workload        = workload;
-}
-
 void RenderGraph::SetPassTranslateExecutionClass(
-    uint32_t                    pass_index,
+    uint32                      pass_index,
     ERHITranslateExecutionClass execution_class
 ) {
     if (!InvalidateCompile()) {
@@ -3679,7 +3197,7 @@ void RenderGraph::SetPassTranslateExecutionClass(
 RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
     std::string_view                         setup_name,
     std::span<const SetupPassHandle>         dependencies,
-    PrepareSafety                            safety,
+    SetupPassSafety                          safety,
     std::function<void()>                    execute,
     std::function<void(std::string_view)>    fail,
     std::function<void(std::string_view)>    annotate_failure
@@ -3711,11 +3229,11 @@ RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
         return {};
     }
 
-    std::vector<uint32_t> dependency_indices{};
+    std::vector<uint32> dependency_indices{};
     dependency_indices.reserve(dependencies.size());
     for (const SetupPassHandle dependency : dependencies) {
-        if (!dependency.IsValid() || dependency.owner_id != graph_id ||
-            dependency.index >= setup_passes.size()) {
+        if (!dependency.IsValid() || dependency.graph_id != graph_id ||
+            dependency.setup_pass_id >= setup_passes.size()) {
             declaration_errors.emplace_back(
                 "setup pass '" + std::string(setup_name) +
                 "' has an invalid or forward dependency"
@@ -3725,9 +3243,9 @@ RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
         if (std::find(
                 dependency_indices.begin(),
                 dependency_indices.end(),
-                dependency.index
+                dependency.setup_pass_id
             ) == dependency_indices.end()) {
-            dependency_indices.emplace_back(dependency.index);
+            dependency_indices.emplace_back(dependency.setup_pass_id);
         }
     }
 
@@ -3740,12 +3258,13 @@ RenderGraph::SetupPassHandle RenderGraph::RegisterSetupPass(
         .annotate_failure = std::move(annotate_failure),
     });
     return SetupPassHandle{
-        .index    = static_cast<uint32_t>(setup_passes.size() - 1),
-        .owner_id = graph_id,
+        .setup_pass_id = static_cast<uint32>(setup_passes.size() - 1),
+        .graph_id      = graph_id,
     };
 }
 
 void RenderGraph::DispatchSetupPassesAsync() {
+    ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.DispatchSetup", name);
     if (setup_dispatched || setup_passes.empty()) {
         return;
     }
@@ -3754,7 +3273,7 @@ void RenderGraph::DispatchSetupPassesAsync() {
     // failure callbacks. Adoption and publication are then noexcept commits.
     try {
         if ((setup_faults_for_testing &
-             static_cast<uint8_t>(SetupFaultForTesting::BatchOwnerCreate)) != 0) {
+             static_cast<uint8>(SetupFaultForTesting::BatchOwnerCreate)) != 0) {
             throw std::bad_alloc{};
         }
         auto candidate = std::make_shared<SetupBatchState>(
@@ -3800,7 +3319,7 @@ void RenderGraph::DispatchSetupPassesAsync() {
     const auto batch = setup_batch;
     try {
         if ((setup_faults_for_testing &
-             static_cast<uint8_t>(SetupFaultForTesting::TaskDispatchThrows)) != 0) {
+             static_cast<uint8>(SetupFaultForTesting::TaskDispatchThrows)) != 0) {
             throw InjectedSetupDispatchFault{};
         }
         batch->DispatchAsync(batch);
@@ -3826,6 +3345,7 @@ void RenderGraph::FailUndispatchedSetupPasses(
 }
 
 bool RenderGraph::WaitSetupPasses(std::string& error) noexcept {
+    ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.WaitSetup", name);
     if (setup_failed_before_batch) {
         try {
             error = "RenderGraph async setup batch creation failed";
@@ -3858,27 +3378,23 @@ bool RenderGraph::InvalidateCompile() {
         declaration_errors.emplace_back("graph declarations cannot be mutated after execution");
         return false;
     }
-    if (setup_dispatched) {
+    // Declarations only invalidate an existing compile result once. A graph
+    // being built has no compiled lifetimes or transient bindings to discard.
+    if (compiled || !compile_error.empty()) {
         compiled = false;
         compile_error.clear();
         compiled_plan.Clear();
         ReleaseNonExportedTransientBindings();
         for (auto& resource : resources) {
-            resource.first_use = PassHandle::InvalidIndex;
-            resource.last_use  = PassHandle::InvalidIndex;
+            resource.first_use = InvalidIndex;
+            resource.last_use  = InvalidIndex;
         }
+    }
+    if (setup_dispatched) {
         declaration_errors.emplace_back(
             "graph declarations cannot be mutated after asynchronous setup dispatch"
         );
         return false;
-    }
-    compiled = false;
-    compile_error.clear();
-    compiled_plan.Clear();
-    ReleaseNonExportedTransientBindings();
-    for (auto& resource : resources) {
-        resource.first_use = PassHandle::InvalidIndex;
-        resource.last_use  = PassHandle::InvalidIndex;
     }
     return true;
 }
@@ -3897,15 +3413,16 @@ void RenderGraph::ReleaseNonExportedTransientBindings() noexcept {
 bool RenderGraph::FailCompile(std::string message) {
     compile_error = std::move(message);
     compiled      = false;
+    compiled_plan.dependency_reasons.reset();
     return false;
 }
 
 bool RenderGraph::IsValidResource(ResourceHandle resource) const {
-    return resource.IsValid() && resource.owner_id == graph_id && resource.index < resources.size();
+    return resource.IsValid() && resource.graph_id == graph_id && resource.resource_id < resources.size();
 }
 
 bool RenderGraph::IsValidPass(PassHandle pass) const {
-    return pass.IsValid() && pass.owner_id == graph_id && pass.index < passes.size();
+    return pass.IsValid() && pass.graph_id == graph_id && pass.pass_id < passes.size();
 }
 
 } // namespace Moer::Render

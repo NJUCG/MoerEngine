@@ -1,5 +1,4 @@
 #pragma once
-#include "ShadowDepthPass.h"
 #include "rendergraph/RenderGraph.h"
 #include "rhi/RHICommand.h"
 #include "scene/gaussian/GaussianRenderSettings.h"
@@ -38,18 +37,11 @@ public:
         RenderGraph::TextureHandle output
     );
     void RecordDebug(CommandList& commands, const RecordParameters& parameters, TextureRef output);
-    // Assemble optional shadow-depth debug inputs from this frame's explicit parameters.
-    void RecordDebug(
-        CommandList&                             commands,
-        RecordParameters                         parameters,
-        TextureRef                               output,
-        ShadowDepthPass&                         shadows,
-        const ShadowDepthPass::RecordParameters* shadow_parameters
-    );
     double                   GetGpuTime();
     const TextureWithHandle& GetOutput() const;
 
 private:
+    void RecordCompositeCommands(CommandList& commands, const RecordParameters& parameters);
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };

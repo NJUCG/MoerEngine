@@ -2,12 +2,12 @@
 #include "config/CVarOverrides.h"
 #include "config/CVarSystem.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -52,7 +52,7 @@ struct RegisterOnDestroy {
 };
 
 struct CountOnDestroy {
-    std::atomic_uint32_t* count = nullptr;
+    std::atomic<uint32>* count = nullptr;
 
     ~CountOnDestroy() {
         if (count) {
@@ -302,7 +302,7 @@ void TestTypedParsingAndRanges() {
             .name      = "Test.Types.PreciseInt",
             .max_value = 9007199254740992.0,
         },
-        std::int64_t{9007199254740992}
+        int64{9007199254740992}
     );
     Expect(
         precise_int.Succeeded() &&
@@ -378,14 +378,14 @@ void TestTypedParsingAndRanges() {
 }
 
 void TestFlagsOwnerSyncAndCallbacks() {
-    std::atomic_uint32_t     read_only_callbacks{0};
+    std::atomic<uint32>      read_only_callbacks{0};
     CVar::RegistrationResult read_only = CVar::RegisterInt(
         CVar::CVarDescriptor{
             .name  = "Test.Flags.ReadOnly",
             .flags = CVar::EFlags::ReadOnly,
         },
         1,
-        [&read_only_callbacks](std::int64_t, std::int64_t) {
+        [&read_only_callbacks](int64, int64) {
             read_only_callbacks.fetch_add(1, std::memory_order_relaxed);
         }
     );
@@ -395,7 +395,7 @@ void TestFlagsOwnerSyncAndCallbacks() {
         "runtime update changed a read-only cvar"
     );
     Expect(
-        read_only.registration.SynchronizeOwnerValue(std::int64_t{2}).Succeeded(),
+        read_only.registration.SynchronizeOwnerValue(int64{2}).Succeeded(),
         "owner could not synchronize a read-only cvar"
     );
     Expect(
@@ -409,11 +409,11 @@ void TestFlagsOwnerSyncAndCallbacks() {
 
     CVar::RegistrationResult target =
         CVar::RegisterInt(CVar::CVarDescriptor{.name = "Test.Callback.Target"}, 0);
-    std::atomic_uint32_t     callback_count{0};
+    std::atomic<uint32>      callback_count{0};
     CVar::RegistrationResult source = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Callback.Source"},
         0,
-        [&callback_count](std::int64_t, std::int64_t _new_value) {
+        [&callback_count](int64, int64 _new_value) {
             Expect(
                 CVar::Find("Test.Callback.Source")->value == std::to_string(_new_value),
                 "callback ran before the new value became visible"
@@ -435,7 +435,7 @@ void TestFlagsOwnerSyncAndCallbacks() {
         "callback did not complete its re-entrant update"
     );
     Expect(
-        source.registration.SynchronizeOwnerValue(std::int64_t{8}).Succeeded() &&
+        source.registration.SynchronizeOwnerValue(int64{8}).Succeeded() &&
             callback_count.load(std::memory_order_relaxed) == 1,
         "owner synchronization unexpectedly invoked a callback"
     );
@@ -443,7 +443,7 @@ void TestFlagsOwnerSyncAndCallbacks() {
     CVar::RegistrationResult throwing = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Callback.Throwing"},
         0,
-        [](std::int64_t, std::int64_t) {
+        [](int64, int64) {
             throw std::runtime_error("injected callback failure");
         }
     );
@@ -458,7 +458,7 @@ void TestFlagsOwnerSyncAndCallbacks() {
     CVar::RegistrationResult self_removing     = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Callback.SelfRemoving"},
         0,
-        [&self_registration](std::int64_t, std::int64_t) {
+        [&self_registration](int64, int64) {
             self_registration->Reset();
         }
     );
@@ -471,13 +471,13 @@ void TestFlagsOwnerSyncAndCallbacks() {
         !CVar::Find("Test.Callback.SelfRemoving"), "self-unregistering callback left the cvar discoverable"
     );
 
-    std::atomic_uint32_t     cross_reset_entered{0};
+    std::atomic<uint32>      cross_reset_entered{0};
     CVar::Registration*      cross_a_registration = nullptr;
     CVar::Registration*      cross_b_registration = nullptr;
     CVar::RegistrationResult cross_a              = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Callback.CrossResetA"},
         0,
-        [&cross_reset_entered, &cross_b_registration](std::int64_t, std::int64_t) {
+        [&cross_reset_entered, &cross_b_registration](int64, int64) {
             cross_reset_entered.fetch_add(1, std::memory_order_acq_rel);
             while (cross_reset_entered.load(std::memory_order_acquire) != 2) {
                 std::this_thread::yield();
@@ -488,7 +488,7 @@ void TestFlagsOwnerSyncAndCallbacks() {
     CVar::RegistrationResult cross_b = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Callback.CrossResetB"},
         0,
-        [&cross_reset_entered, &cross_a_registration](std::int64_t, std::int64_t) {
+        [&cross_reset_entered, &cross_a_registration](int64, int64) {
             cross_reset_entered.fetch_add(1, std::memory_order_acq_rel);
             while (cross_reset_entered.load(std::memory_order_acquire) != 2) {
                 std::this_thread::yield();
@@ -529,7 +529,7 @@ void TestFlagsOwnerSyncAndCallbacks() {
     CVar::RegistrationResult blocking = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Callback.Quiescence"},
         0,
-        [&blocking_entered, &release_blocking](std::int64_t, std::int64_t) {
+        [&blocking_entered, &release_blocking](int64, int64) {
             blocking_entered.store(true, std::memory_order_release);
             while (!release_blocking.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
@@ -566,12 +566,12 @@ void TestFlagsOwnerSyncAndCallbacks() {
     std::atomic_bool          first_callback_entered{false};
     std::atomic_bool          release_first_callback{false};
     std::mutex                callback_order_mutex;
-    std::vector<std::int64_t> callback_order;
+    std::vector<int64>        callback_order;
     CVar::RegistrationResult  ordered = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Callback.Ordered"},
         0,
         [&first_callback_entered, &release_first_callback, &callback_order_mutex, &callback_order](
-            std::int64_t, std::int64_t _new_value
+            int64, int64 _new_value
         ) {
             if (_new_value == 1) {
                 first_callback_entered.store(true, std::memory_order_release);
@@ -596,18 +596,18 @@ void TestFlagsOwnerSyncAndCallbacks() {
     first_setter.join();
     second_setter.join();
     Expect(
-        ordered.Succeeded() && callback_order == std::vector<std::int64_t>{1, 2} &&
+        ordered.Succeeded() && callback_order == std::vector<int64>{1, 2} &&
             CVar::Find("Test.Callback.Ordered")->value == "2",
         "concurrent updates reordered callbacks relative to commits"
     );
 
     std::atomic_bool          joined_update_deferred{false};
     std::mutex                joined_order_mutex;
-    std::vector<std::int64_t> joined_order;
+    std::vector<int64>        joined_order;
     CVar::RegistrationResult  joined = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Callback.JoinedSetter"},
         0,
-        [&joined_update_deferred, &joined_order_mutex, &joined_order](std::int64_t, std::int64_t _new_value) {
+        [&joined_update_deferred, &joined_order_mutex, &joined_order](int64, int64 _new_value) {
             {
                 std::lock_guard lock(joined_order_mutex);
                 joined_order.push_back(_new_value);
@@ -629,14 +629,14 @@ void TestFlagsOwnerSyncAndCallbacks() {
     Expect(
         joined.Succeeded() && joined_result.Succeeded() && !joined_result.callback_deferred &&
             joined_update_deferred.load(std::memory_order_acquire) &&
-            joined_order == std::vector<std::int64_t>{1, 2} &&
+            joined_order == std::vector<int64>{1, 2} &&
             CVar::Find("Test.Callback.JoinedSetter")->value == "2",
         "callback could not join a concurrent setter without deadlock or FIFO loss"
     );
 
-    std::atomic_uint32_t     bounded_callback_count{0};
-    std::atomic_uint32_t     bounded_deferred_count{0};
-    std::atomic_uint32_t     bounded_rejected_count{0};
+    std::atomic<uint32>      bounded_callback_count{0};
+    std::atomic<uint32>      bounded_deferred_count{0};
+    std::atomic<uint32>      bounded_rejected_count{0};
     CVar::RegistrationResult bounded_callbacks = CVar::RegisterInt(
         CVar::CVarDescriptor{
             .name                     = "Test.Callback.BoundedDispatch",
@@ -645,7 +645,7 @@ void TestFlagsOwnerSyncAndCallbacks() {
         0,
         [&bounded_callback_count,
          &bounded_deferred_count,
-         &bounded_rejected_count](std::int64_t, std::int64_t _new_value) {
+         &bounded_rejected_count](int64, int64 _new_value) {
             bounded_callback_count.fetch_add(1, std::memory_order_relaxed);
             if (_new_value >= 4) {
                 return;
@@ -680,7 +680,7 @@ void TestFlagsOwnerSyncAndCallbacks() {
         "callback dispatch budget did not reset for the next idle-to-dispatch epoch"
     );
 
-    std::atomic_uint32_t     queued_callback_count{0};
+    std::atomic<uint32>      queued_callback_count{0};
     std::atomic_bool         queued_first_entered{false};
     std::atomic_bool         allow_self_reset{false};
     std::atomic_bool         queued_second_deferred{false};
@@ -689,7 +689,7 @@ void TestFlagsOwnerSyncAndCallbacks() {
         CVar::CVarDescriptor{.name = "Test.Callback.QueuedAfterReset"},
         0,
         [&queued_callback_count, &queued_first_entered, &allow_self_reset, &queued_registration](
-            std::int64_t, std::int64_t _new_value
+            int64, int64 _new_value
         ) {
             queued_callback_count.fetch_add(1, std::memory_order_relaxed);
             if (_new_value != 1) {
@@ -728,10 +728,10 @@ void TestFlagsOwnerSyncAndCallbacks() {
         "self-Reset allowed a queued mutation to invoke a late callback"
     );
 
-    std::atomic_uint32_t            pinned_callback_destroyed{0};
+    std::atomic<uint32>             pinned_callback_destroyed{0};
     std::shared_ptr<CountOnDestroy> pinned_lifetime = std::make_shared<CountOnDestroy>();
     pinned_lifetime->count                          = &pinned_callback_destroyed;
-    auto pinned_callback                            = [pinned_lifetime](std::int64_t, std::int64_t) {};
+    auto pinned_callback                            = [pinned_lifetime](int64, int64) {};
     pinned_lifetime.reset();
     CVar::RegistrationResult visitor_target = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Visitor.Pin.Target"}, 0, std::move(pinned_callback)
@@ -741,7 +741,7 @@ void TestFlagsOwnerSyncAndCallbacks() {
         std::atomic_bool entered{false};
         std::atomic_bool release{false};
         std::atomic_bool view_remained_valid{false};
-        std::uint64_t    expected_id = 0;
+        uint64           expected_id = 0;
     } visitor_context{
         .expected_id = visitor_target.registration.GetId(),
     };
@@ -808,10 +808,10 @@ void TestFlagsOwnerSyncAndCallbacks() {
     );
     struct CrossVisitorContext {
         CVar::Registration*   target = nullptr;
-        std::atomic_uint32_t* entered = nullptr;
+        std::atomic<uint32>*  entered   = nullptr;
         std::atomic_bool*     completed = nullptr;
     };
-    std::atomic_uint32_t cross_visitor_entered{0};
+    std::atomic<uint32>  cross_visitor_entered{0};
     std::atomic_bool     cross_visitor_a_completed{false};
     std::atomic_bool     cross_visitor_b_completed{false};
     CrossVisitorContext  cross_visitor_a_context{
@@ -858,10 +858,10 @@ void TestFlagsOwnerSyncAndCallbacks() {
     std::mutex              visitor_cycle_returned_mutex;
     std::condition_variable visitor_cycle_returned_cv;
     bool                    visitor_cycle_reset_returned = false;
-    CVar::RegistrationResult visitor_callback_cycle = CVar::RegisterInt(
+    CVar::RegistrationResult visitor_callback_cycle       = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Test.Visitor.CallbackWaitCycle"},
         0,
-        [&](std::int64_t, std::int64_t) {
+        [&](int64, int64) {
             callback_wait_entered.store(true, std::memory_order_release);
             while (!reset_visitor_started.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
@@ -1011,7 +1011,7 @@ void TestCommandProcessing() {
     CVar::RegistrationResult             reentrant = CVar::RegisterInt(
         CVar::CVarDescriptor{.name = "Cmd.Reentrant"},
         0,
-        [&reentrant_processor, &reentrant_process_status](std::int64_t, std::int64_t) {
+        [&reentrant_processor, &reentrant_process_status](int64, int64) {
             Expect(
                 reentrant_processor->SubmitText("/help") == Command::ESubmitStatus::Accepted,
                 "callback could not submit a follow-up command"
@@ -1098,12 +1098,12 @@ void TestCommandProcessing() {
 
 void TestBoundedQueuesAndOutputCursor() {
     Command::EngineCommandProcessor processor({.pending_capacity = 32, .output_capacity = 3});
-    std::atomic_uint32_t            accepted{0};
-    std::atomic_uint32_t            full{0};
+    std::atomic<uint32>             accepted{0};
+    std::atomic<uint32>             full{0};
     std::vector<std::jthread>       producers;
-    for (std::uint32_t thread_index = 0; thread_index < 8; ++thread_index) {
+    for (uint32 thread_index = 0; thread_index < 8; ++thread_index) {
         producers.emplace_back([&processor, &accepted, &full] {
-            for (std::uint32_t index = 0; index < 64; ++index) {
+            for (uint32 index = 0; index < 64; ++index) {
                 const Command::ESubmitStatus status = processor.SubmitText("/unknown");
                 if (status == Command::ESubmitStatus::Accepted) {
                     accepted.fetch_add(1, std::memory_order_relaxed);

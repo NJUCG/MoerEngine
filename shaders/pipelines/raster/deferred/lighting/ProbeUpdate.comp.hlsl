@@ -15,7 +15,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5);
 #include "shared/utils/Packing.h"
 #include "pipelines/raytracing/inline/RaytracingCommon.hlsli"
 
-[[vk::push_constant]] ConstantBuffer<Moer::ProbeUpdateParam> param;
+DEFINE_SHADER_CONSTANT(Moer::ProbeUpdateParam, param)
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Moer::ProbeGridProbeData> rw_probe_data;
 [[vk::binding(1, 0)]] RWStructuredBuffer<Moer::ProbeGridVisibilityTexel> rw_visibility_atlas;
@@ -52,7 +52,7 @@ uint ProbeGetAtlasTexelIndex(float3 direction) {
 }
 
 float3 ProbeRotateDirection(float3 direction) {
-    const float4 rotation = param.probe_ray_rotation * rsqrt(max(dot(param.probe_ray_rotation, param.probe_ray_rotation), 1e-6));
+    const float4 rotation = moer_constants.param.probe_ray_rotation * rsqrt(max(dot(moer_constants.param.probe_ray_rotation, moer_constants.param.probe_ray_rotation), 1e-6));
     const float3 twice_cross = 2.0 * cross(rotation.xyz, direction);
     return ProbeSafeNormalize(
         direction + rotation.w * twice_cross + cross(rotation.xyz, twice_cross),
@@ -181,7 +181,7 @@ bool ProbeMarkAtlasTexelVisited(uint atlas_texel_index, inout uint visited_low, 
 }
 
 float ProbeGetMinSpacing() {
-    return max(min(min(param.probe_volume_spacing.x, param.probe_volume_spacing.y), param.probe_volume_spacing.z), 0.05);
+    return max(min(min(moer_constants.param.probe_volume_spacing.x, moer_constants.param.probe_volume_spacing.y), moer_constants.param.probe_volume_spacing.z), 0.05);
 }
 
 float ProbeGetNearGeometryDistance(float max_trace_distance, float trace_bias) {
@@ -192,15 +192,15 @@ float ProbeGetNearGeometryDistance(float max_trace_distance, float trace_bias) {
 }
 
 float3 ProbeEstimateMissRadiance(float3 direction) {
-    if (param.probe_update_context.z != 0u) {
+    if (moer_constants.param.probe_update_context.z != 0u) {
         const float3 environment_radiance =
-            TextureHandle(param.probe_update_context.z).SampleLevelCube<float3>(direction, 0.0);
-        return max(environment_radiance * param.probe_sky_color.a, float3(0.0, 0.0, 0.0));
+            TextureHandle(moer_constants.param.probe_update_context.z).SampleLevelCube<float3>(direction, 0.0);
+        return max(environment_radiance * moer_constants.param.probe_sky_color.a, float3(0.0, 0.0, 0.0));
     }
 
     const float sky_weight = saturate(direction.y * 0.5 + 0.5);
     return max(
-        lerp(param.probe_ground_color.rgb, param.probe_sky_color.rgb, sky_weight) * param.probe_sky_color.a,
+        lerp(moer_constants.param.probe_ground_color.rgb, moer_constants.param.probe_sky_color.rgb, sky_weight) * moer_constants.param.probe_sky_color.a,
         float3(0.0, 0.0, 0.0)
     );
 }
@@ -274,16 +274,16 @@ float ProbeTraceShadow(float3 origin, float3 direction, float max_distance) {
 }
 
 float3 ProbeEvaluateDirectIrradiance(float3 world_position, float3 surface_normal, float trace_bias) {
-    if (param.probe_update_context.x == 0u || param.probe_update_context.y == 0u) {
+    if (moer_constants.param.probe_update_context.x == 0u || moer_constants.param.probe_update_context.y == 0u) {
         return float3(0.0, 0.0, 0.0);
     }
 
-    ArrayBuffer light_buffer = ArrayBuffer(param.probe_update_context.x);
+    ArrayBuffer light_buffer = ArrayBuffer(moer_constants.param.probe_update_context.x);
     float3 direct_irradiance = float3(0.0, 0.0, 0.0);
     const float surface_offset = max(trace_bias, 0.002);
     const float3 shadow_origin = world_position + surface_normal * surface_offset;
 
-    [loop] for (uint light_index = 0u; light_index < param.probe_update_context.y; ++light_index) {
+    [loop] for (uint light_index = 0u; light_index < moer_constants.param.probe_update_context.y; ++light_index) {
         const Moer::GLight light = light_buffer.Load<Moer::GLight>(light_index);
         const float3 light_energy = max(light.color * light.intensity, float3(0.0, 0.0, 0.0));
 
@@ -294,7 +294,7 @@ float3 ProbeEvaluateDirectIrradiance(float3 world_position, float3 surface_norma
                 continue;
             }
 
-            const float shadow_distance = max(param.probe_trace_config.x * 64.0, 1024.0);
+            const float shadow_distance = max(moer_constants.param.probe_trace_config.x * 64.0, 1024.0);
             const float shadow = ProbeTraceShadow(shadow_origin, direction_to_light, shadow_distance);
             direct_irradiance += light_energy * n_dot_light * shadow;
             continue;
@@ -495,7 +495,7 @@ ProbePlacementResult ProbeClassifyAndRelocate(
     result.state = Moer::RASTER_PROBE_STATE_ACTIVE;
 
 #if PROBE_GI_USE_RAY_QUERY
-    if (param.probe_trace_config.w <= 0.0 || trace_ray_count == 0u) {
+    if (moer_constants.param.probe_trace_config.w <= 0.0 || trace_ray_count == 0u) {
         return result;
     }
 
@@ -615,13 +615,13 @@ ProbePlacementResult ProbeClassifyAndRelocate(
 }
 
 [numthreads(64, 1, 1)] void main(uint local_probe_index : SV_DispatchThreadID) {
-    const uint brick_index = param.probe_update_context.w;
+    const uint brick_index = moer_constants.param.probe_update_context.w;
     const Moer::ProbeBrickGpuDesc brick = probe_brick_data[brick_index];
-    if (brick.probe_range.z == 0u || brick.coord_volume.w != param.probe_volume_counts.w) {
+    if (brick.probe_range.z == 0u || brick.coord_volume.w != moer_constants.param.probe_volume_counts.w) {
         return;
     }
 
-    const uint3 counts = max(param.probe_volume_counts.xyz, uint3(1, 1, 1));
+    const uint3 counts = max(moer_constants.param.probe_volume_counts.xyz, uint3(1, 1, 1));
     const uint3 local_counts = max(brick.local_counts.xyz, uint3(1, 1, 1));
     const uint local_probe_count = local_counts.x * local_counts.y * local_counts.z;
     if (local_probe_index >= local_probe_count) {
@@ -639,17 +639,17 @@ ProbePlacementResult ProbeClassifyAndRelocate(
     }
     const uint probe_index = brick.probe_range.x + local_probe_index;
 
-    const float3 grid_position = param.probe_volume_origin.xyz + param.probe_volume_spacing.xyz * float3(coord);
+    const float3 grid_position = moer_constants.param.probe_volume_origin.xyz + moer_constants.param.probe_volume_spacing.xyz * float3(coord);
 
-    const float max_trace_distance = max(param.probe_trace_config.x, 0.1);
-    const float trace_bias = max(param.probe_trace_config.y, 0.02);
+    const float max_trace_distance = max(moer_constants.param.probe_trace_config.x, 0.1);
+    const float trace_bias = max(moer_constants.param.probe_trace_config.y, 0.02);
     const uint trace_ray_count =
-        clamp(uint(param.probe_trace_config.z), 1u, Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT);
-    const float trace_blend = saturate(param.probe_trace_config.w);
-    const float3 volume_min = param.probe_volume_origin.xyz;
-    const float3 volume_max = param.probe_volume_origin.xyz + param.probe_volume_spacing.xyz * float3(counts - uint3(1, 1, 1));
-    const float irradiance_history_weight = saturate(param.probe_volume_origin.w);
-    const float visibility_history_weight = saturate(param.probe_volume_spacing.w);
+        clamp(uint(moer_constants.param.probe_trace_config.z), 1u, Moer::RASTER_PROBE_VISIBILITY_ATLAS_TEXEL_COUNT);
+    const float trace_blend = saturate(moer_constants.param.probe_trace_config.w);
+    const float3 volume_min = moer_constants.param.probe_volume_origin.xyz;
+    const float3 volume_max = moer_constants.param.probe_volume_origin.xyz + moer_constants.param.probe_volume_spacing.xyz * float3(counts - uint3(1, 1, 1));
+    const float irradiance_history_weight = saturate(moer_constants.param.probe_volume_origin.w);
+    const float visibility_history_weight = saturate(moer_constants.param.probe_volume_spacing.w);
     const Moer::ProbeGridProbeData history_probe = rw_probe_data[probe_index];
     const bool placement_history_valid =
         irradiance_history_weight > 0.0 || visibility_history_weight > 0.0;

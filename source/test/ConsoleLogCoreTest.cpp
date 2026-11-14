@@ -4,11 +4,11 @@
 #include "spdlog/details/os.h"
 #include "spdlog/sinks/null_sink.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -45,7 +45,7 @@ constexpr std::size_t FileLogThreadCount = 4;
 constexpr std::size_t FileLogEntriesPerThread = 64;
 
 struct CapturedEntry {
-    std::uint64_t             sequence = 0;
+    uint64                    sequence = 0;
     spdlog::level::level_enum level    = spdlog::level::info;
     std::string               message;
 };
@@ -64,9 +64,9 @@ void Expect(bool _condition, std::string_view _message) {
 class ScopedDirectory {
 public:
     ScopedDirectory() {
-        static std::atomic<std::uint64_t> next_id{1};
-        for (std::uint32_t attempt = 0; attempt < 64; ++attempt) {
-            const auto tick = static_cast<std::uint64_t>(
+        static std::atomic<uint64> next_id{1};
+        for (uint32 attempt = 0; attempt < 64; ++attempt) {
+            const auto tick = static_cast<uint64>(
                 std::chrono::steady_clock::now().time_since_epoch().count()
             );
             const std::filesystem::path candidate =
@@ -124,7 +124,7 @@ std::vector<std::filesystem::path> FindLogFiles(const std::filesystem::path& _di
     return files;
 }
 
-CapturedBatch Poll(std::uint64_t _next_sequence, std::size_t _max_count) {
+CapturedBatch Poll(uint64 _next_sequence, std::size_t _max_count) {
     CapturedBatch batch;
     batch.result = LogSystem::VisitConsoleLogs(
         _next_sequence,
@@ -141,7 +141,7 @@ CapturedBatch Poll(std::uint64_t _next_sequence, std::size_t _max_count) {
     return batch;
 }
 
-std::uint64_t ClearAndGetNextSequence() {
+uint64 ClearAndGetNextSequence() {
     LogSystem::ClearConsoleLogs();
     return LogSystem::VisitConsoleLogs(1, 0, nullptr, nullptr).next_sequence;
 }
@@ -203,7 +203,7 @@ int RunFileLogChild(const std::filesystem::path& _directory, std::string_view _f
         "file logging changed the ABI-safe forwarding logger contract"
     );
 
-    const std::uint64_t cursor = ClearAndGetNextSequence();
+    const uint64 cursor = ClearAndGetNextSequence();
     Expect(
         LogSystem::Init(options) == LogSystem::EFileLogInitStatus::Active &&
             spdlog::default_logger().get() == installed_logger.get(),
@@ -286,7 +286,7 @@ int RunFileLogFailureChild(const std::filesystem::path& _directory) {
         "file logging failure prevented console forwarding installation"
     );
 
-    const std::uint64_t cursor = ClearAndGetNextSequence();
+    const uint64 cursor = ClearAndGetNextSequence();
     installed_logger->info("file-log-failure-console-sentinel");
     LogSystem::Flush();
     const CapturedBatch batch = Poll(cursor, 4);
@@ -495,7 +495,7 @@ void TestInstallationAndCapture(
     installed_logger->sinks().push_back(external_sink);
     installed_logger->sinks().reserve(8);
 
-    const std::uint64_t cursor = ClearAndGetNextSequence();
+    const uint64 cursor = ClearAndGetNextSequence();
     LOG_INFO("console-log-contract-info");
     spdlog::warn("console-log-contract-warning");
 
@@ -539,7 +539,7 @@ void TestBacktraceDump(
     const std::shared_ptr<spdlog::logger>& _logger,
     const std::shared_ptr<CountingSink>&   _downstream_sink
 ) {
-    const std::uint64_t cursor               = ClearAndGetNextSequence();
+    const uint64        cursor               = ClearAndGetNextSequence();
     const std::size_t   downstream_log_count = _downstream_sink->log_count.load();
 
     _logger->set_level(spdlog::level::warn);
@@ -574,7 +574,7 @@ void TestVirtualLoggerBacktraceDispatch(std::shared_ptr<spdlog::logger>& _logger
         "LogSystem::Init did not create a private virtual-dispatch clone"
     );
 
-    const std::uint64_t cursor = ClearAndGetNextSequence();
+    const uint64 cursor = ClearAndGetNextSequence();
     installed_logger->set_level(spdlog::level::warn);
     installed_logger->enable_backtrace(4);
     installed_logger->debug("console-log-virtual-backtrace");
@@ -601,7 +601,7 @@ void TestBacktraceThreadMetadata(std::shared_ptr<spdlog::logger>& _logger) {
 
     LogSystem::Init();
     const std::shared_ptr<spdlog::logger> installed_logger = spdlog::default_logger();
-    const std::uint64_t                   cursor           = ClearAndGetNextSequence();
+    const uint64                          cursor           = ClearAndGetNextSequence();
     installed_logger->set_level(spdlog::level::warn);
     installed_logger->enable_backtrace(4);
 
@@ -628,7 +628,7 @@ void TestBacktraceThreadMetadata(std::shared_ptr<spdlog::logger>& _logger) {
 }
 
 void TestRuntimeFiltering(const std::shared_ptr<spdlog::logger>& _logger) {
-    const std::uint64_t cursor = ClearAndGetNextSequence();
+    const uint64 cursor = ClearAndGetNextSequence();
     _logger->set_level(spdlog::level::warn);
     spdlog::info("console-log-filtered-info");
     spdlog::warn("console-log-admitted-warning");
@@ -644,7 +644,7 @@ void TestRuntimeFiltering(const std::shared_ptr<spdlog::logger>& _logger) {
 }
 
 void TestPagingAndClear(const std::shared_ptr<spdlog::logger>& _logger) {
-    const std::uint64_t cursor = ClearAndGetNextSequence();
+    const uint64 cursor = ClearAndGetNextSequence();
     _logger->info("console-log-page-a");
     _logger->info("console-log-page-b");
     _logger->info("console-log-page-c");
@@ -659,7 +659,7 @@ void TestPagingAndClear(const std::shared_ptr<spdlog::logger>& _logger) {
         "console log cursor paging skipped or duplicated retained entries"
     );
 
-    const std::uint64_t stale_cursor = ClearAndGetNextSequence();
+    const uint64 stale_cursor = ClearAndGetNextSequence();
     _logger->info("console-log-clear-a");
     _logger->info("console-log-clear-b");
     LogSystem::ClearConsoleLogs();
@@ -682,7 +682,7 @@ void TestPagingAndClear(const std::shared_ptr<spdlog::logger>& _logger) {
 void TestBoundedOverwrite(const std::shared_ptr<spdlog::logger>& _logger) {
     constexpr std::size_t overflow_count = 17;
     constexpr std::size_t produced_count = ConsoleLogCapacity + overflow_count;
-    const std::uint64_t   cursor         = ClearAndGetNextSequence();
+    const uint64          cursor         = ClearAndGetNextSequence();
 
     for (std::size_t index = 0; index < produced_count; ++index) {
         _logger->info("console-log-overflow-{}", index);
@@ -703,7 +703,7 @@ void TestConcurrentProducers(const std::shared_ptr<spdlog::logger>& _logger) {
     constexpr std::size_t producer_count     = 8;
     constexpr std::size_t entries_per_thread = 128;
     constexpr std::size_t expected_count     = producer_count * entries_per_thread;
-    const std::uint64_t   cursor             = ClearAndGetNextSequence();
+    const uint64          cursor             = ClearAndGetNextSequence();
 
     std::vector<std::jthread> producers;
     producers.reserve(producer_count);
@@ -736,7 +736,7 @@ void TestConcurrentProducers(const std::shared_ptr<spdlog::logger>& _logger) {
 struct ReentrantVisitorContext {
     std::shared_ptr<spdlog::logger> logger;
     std::vector<CapturedEntry>      entries;
-    std::uint64_t                   new_entry_sequence = 0;
+    uint64                          new_entry_sequence = 0;
     LogSystem::ConsoleLogPollResult nested_result;
     bool                            reentered = false;
 };
@@ -759,7 +759,7 @@ void ReentrantVisitor(const LogSystem::ConsoleLogEntryView& _entry, void* _conte
 }
 
 void TestVisitorReentry(const std::shared_ptr<spdlog::logger>& _logger) {
-    const std::uint64_t cursor = ClearAndGetNextSequence();
+    const uint64 cursor = ClearAndGetNextSequence();
     _logger->info("console-log-reentrant-a");
     _logger->info("console-log-reentrant-b");
 
@@ -786,7 +786,7 @@ void TestVisitorReentry(const std::shared_ptr<spdlog::logger>& _logger) {
 }
 
 void TestSpdlogTeardownAndReattach(std::shared_ptr<spdlog::logger>& _logger) {
-    const std::uint64_t cursor = ClearAndGetNextSequence();
+    const uint64 cursor = ClearAndGetNextSequence();
     _logger->warn("console-log-before-spdlog-shutdown");
     spdlog::shutdown();
     _logger.reset();
@@ -813,7 +813,7 @@ void TestSpdlogTeardownAndReattach(std::shared_ptr<spdlog::logger>& _logger) {
         "LogSystem::Init did not install exactly one ABI-safe forwarding logger after replacement"
     );
 
-    const std::uint64_t replacement_cursor = ClearAndGetNextSequence();
+    const uint64 replacement_cursor = ClearAndGetNextSequence();
     installed_replacement->error("console-log-after-reattach");
     const CapturedBatch replacement_batch = Poll(replacement_cursor, 4);
     Expect(
@@ -926,7 +926,7 @@ int main(int _argc, char** _argv) {
     );
 
     LogSystem::Init();
-    const std::uint64_t process_default_cursor = ClearAndGetNextSequence();
+    const Moer::uint64 process_default_cursor = ClearAndGetNextSequence();
     LOG_INFO("console-log-process-default-forwarding");
     const CapturedBatch process_default_batch = Poll(process_default_cursor, 2);
     Expect(

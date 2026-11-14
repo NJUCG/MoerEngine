@@ -4,7 +4,7 @@
 #include "config/CVarSystem.h"
 #include "renderer/EditorConfig.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -86,7 +86,7 @@ Command::ESubmitStatus EngineCommandEndpoint::SubmitText(std::string_view text) 
 }
 
 Command::CommandOutputBatch
-EngineCommandEndpoint::PollOutput(std::uint64_t next_sequence, std::size_t max_count) const {
+EngineCommandEndpoint::PollOutput(uint64 next_sequence, std::size_t max_count) const {
     std::scoped_lock lock(impl->mutex);
     return impl->processor.PollOutput(next_sequence, max_count);
 }
@@ -139,7 +139,7 @@ struct EngineConsoleControl::Impl {
         const auto register_uint = [this](
                                        std::string name,
                                        std::string helper,
-                                       std::uint32_t EngineConsoleStartupConfig::* member
+                                       uint32 EngineConsoleStartupConfig::* member
                                    ) {
             const std::string registered_name = name;
             RequireRegistration(
@@ -150,11 +150,11 @@ struct EngineConsoleControl::Impl {
                         std::move(helper),
                         kStartupFlags,
                         0.0,
-                        static_cast<double>((std::numeric_limits<std::uint32_t>::max)())
+                        static_cast<double>((std::numeric_limits<uint32>::max)())
                     ),
                     startup_config.*member,
-                    [this, member](std::int64_t, std::int64_t value) {
-                        startup_config.*member = static_cast<std::uint32_t>(value);
+                    [this, member](int64, int64 value) {
+                        startup_config.*member = static_cast<uint32>(value);
                     }
                 ),
                 registered_name
@@ -167,16 +167,6 @@ struct EngineConsoleControl::Impl {
             &EngineConsoleStartupConfig::render_thread
         );
         register_bool(
-            "Engine.Threading.RHIThread",
-            "Configured request for a dedicated RHI thread; bypass and backend policy may disable it.",
-            &EngineConsoleStartupConfig::rhi_thread
-        );
-        register_bool(
-            "Engine.Threading.RHIBypass",
-            "Configured request to bypass queued RHI translation.",
-            &EngineConsoleStartupConfig::rhi_bypass
-        );
-        register_bool(
             "Engine.Threading.ProfileLogging",
             "Configured request for periodic threading profile diagnostics.",
             &EngineConsoleStartupConfig::profile_logging
@@ -186,64 +176,18 @@ struct EngineConsoleControl::Impl {
             "Configured maximum Render Thread frame lag; runtime policy may clamp it.",
             &EngineConsoleStartupConfig::max_frame_lag
         );
-        register_bool(
-            "RHI.CommandRecording.Parallel",
-            "Configured request for parallel backend command-list translation/recording.",
-            &EngineConsoleStartupConfig::parallel_recording
-        );
-        register_uint(
-            "RHI.CommandRecording.Parallel.Workers",
-            "Configured parallel command-recording worker count; zero selects the runtime default.",
-            &EngineConsoleStartupConfig::parallel_record_workers
-        );
-        register_bool(
-            "RHI.CommandRecording.Parallel.Verify",
-            "Whether parallel command recording runs verification checks.",
-            &EngineConsoleStartupConfig::parallel_record_verify
-        );
-        register_bool(
-            "RHI.CommandRecording.Parallel.Profile",
-            "Whether parallel command recording emits profiling diagnostics.",
-            &EngineConsoleStartupConfig::parallel_record_profile
-        );
-        register_uint(
-            "RHI.CommandRecording.Parallel.MinWorkUnitsPerJob",
-            "Minimum estimated work units assigned to each parallel recording job.",
-            &EngineConsoleStartupConfig::parallel_record_min_work_units_per_job
-        );
         register_uint(
             "RHI.Submission.BatchWindow",
             "Configured bounded submission batch window before policy clamping.",
             &EngineConsoleStartupConfig::configured_submission_batch_window
         );
-        register_bool(
-            "RHI.Heartbeat.Enabled",
-            "Configured request for the RHI ownership heartbeat watchdog.",
-            &EngineConsoleStartupConfig::rhi_heartbeat_enabled
-        );
-        register_uint(
-            "RHI.Heartbeat.StallTimeoutMs",
-            "Configured RHI heartbeat stall timeout in milliseconds.",
-            &EngineConsoleStartupConfig::rhi_heartbeat_stall_timeout_ms
-        );
-        register_uint(
-            "RHI.Heartbeat.PollIntervalMs",
-            "Configured RHI heartbeat polling interval in milliseconds.",
-            &EngineConsoleStartupConfig::rhi_heartbeat_poll_interval_ms
-        );
 
         const auto register_rdg =
             [&register_bool](
                 std::string_view prefix,
-                bool EngineConsoleStartupConfig::* enabled,
                 bool EngineConsoleStartupConfig::* debug_dump,
                 bool EngineConsoleStartupConfig::* parallel_recording
             ) {
-                register_bool(
-                    std::string(prefix) + ".Enabled",
-                    "Configured request for the compiled Render Dependency Graph path.",
-                    enabled
-                );
                 register_bool(
                     std::string(prefix) + ".DebugDump",
                     "Whether the renderer emits compiled RDG diagnostic dumps.",
@@ -257,13 +201,11 @@ struct EngineConsoleControl::Impl {
             };
         register_rdg(
             "Render.Raster.RDG",
-            &EngineConsoleStartupConfig::raster_rdg_enabled,
             &EngineConsoleStartupConfig::raster_rdg_debug_dump,
             &EngineConsoleStartupConfig::raster_rdg_parallel_recording
         );
         register_rdg(
             "Render.Raytracing.RDG",
-            &EngineConsoleStartupConfig::raytracing_rdg_enabled,
             &EngineConsoleStartupConfig::raytracing_rdg_debug_dump,
             &EngineConsoleStartupConfig::raytracing_rdg_parallel_recording
         );

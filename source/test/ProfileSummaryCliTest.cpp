@@ -4,12 +4,12 @@
 
 #include <nlohmann/json.hpp>
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -61,7 +61,7 @@ void Expect(bool _condition, std::string_view _message) {
 class SessionBuilder {
 public:
     void Begin() {
-        Moer::Array<std::uint8_t> payload;
+        Moer::Array<Moer::uint8> payload;
         EncodeSessionBeginPayload(
             {
                 .generation      = generation,
@@ -73,7 +73,7 @@ public:
     }
 
     void End() {
-        Moer::Array<std::uint8_t> payload;
+        Moer::Array<Moer::uint8> payload;
         EncodeSessionEndPayload(
             {
                 .generation      = generation,
@@ -86,7 +86,7 @@ public:
     }
 
     void Schema(const SchemaDescriptor& _schema) {
-        Moer::Array<std::uint8_t> payload;
+        Moer::Array<Moer::uint8> payload;
         Expect(
             EncodeSchemaPayload(_schema, {}, payload) == EncodeStatus::Ok, "fixture schema failed to encode"
         );
@@ -95,10 +95,10 @@ public:
 
     void Record(
         const SchemaDescriptor&         _schema,
-        std::uint64_t                   _sequence,
+        Moer::uint64                    _sequence,
         std::span<const FieldValueView> _values
     ) {
-        Moer::Array<std::uint8_t> payload;
+        Moer::Array<Moer::uint8> payload;
         Expect(
             EncodeRecordPayload(
                 ComputeSchemaHash(_schema), _sequence, _schema.fields, _values, {}, payload
@@ -110,17 +110,17 @@ public:
     }
 
     void Loss(const LossNotice& _loss) {
-        Moer::Array<std::uint8_t> payload;
+        Moer::Array<Moer::uint8> payload;
         EncodeLossPayload(_loss, payload);
         Append(PacketType::Loss, payload);
         dropped_count += _loss.record_count;
     }
 
-    std::vector<std::uint8_t> bytes{};
+    std::vector<Moer::uint8> bytes{};
 
 private:
-    void Append(PacketType _type, std::span<const std::uint8_t> _payload) {
-        Moer::Array<std::uint8_t> packet;
+    void Append(PacketType _type, std::span<const Moer::uint8> _payload) {
+        Moer::Array<Moer::uint8> packet;
         Expect(
             WrapPacket(_type, next_packet_index++, _payload, {}, packet) == EncodeStatus::Ok,
             "fixture packet failed to encode"
@@ -128,10 +128,10 @@ private:
         bytes.insert(bytes.end(), packet.begin(), packet.end());
     }
 
-    std::uint64_t generation{17};
-    std::uint64_t next_packet_index{0};
-    std::uint64_t record_count{0};
-    std::uint64_t dropped_count{0};
+    Moer::uint64 generation{17};
+    Moer::uint64 next_packet_index{0};
+    Moer::uint64 record_count{0};
+    Moer::uint64 dropped_count{0};
 };
 
 SchemaDescriptor UnknownSchema() {
@@ -154,55 +154,55 @@ void PopulateCompleteSession(SessionBuilder& _builder) {
     _builder.Schema(unknown);
 
     const std::array<FieldValueView, 5> cpu{
-        std::uint64_t{7},
+        Moer::uint64{7},
         std::string_view("cli-cpu"),
-        std::uint64_t{10},
-        std::uint64_t{20},
-        std::uint32_t{0},
+        Moer::uint64{10},
+        Moer::uint64{20},
+        Moer::uint32{0},
     };
     _builder.Record(Templates::CpuScope(), 1, cpu);
 
     const std::array<FieldValueView, 7> frame{
-        std::uint64_t{42},
-        std::uint32_t{0},
+        Moer::uint64{42},
+        Moer::uint32{0},
         true,
-        std::uint64_t{1},
-        std::uint64_t{0},
-        std::uint64_t{0},
+        Moer::uint64{1},
+        Moer::uint64{0},
+        Moer::uint64{0},
         std::string_view{},
     };
     _builder.Record(Templates::GpuFrame(), 2, frame);
 
     const std::array<FieldValueView, 18> scope{
-        std::uint64_t{42},
-        std::uint64_t{1},
-        std::uint64_t{0},
-        std::uint64_t{0},
-        std::uint64_t{0},
-        std::uint32_t{0},
-        std::uint32_t{5},
-        std::uint32_t{6},
+        Moer::uint64{42},
+        Moer::uint64{1},
+        Moer::uint64{0},
+        Moer::uint64{0},
+        Moer::uint64{0},
+        Moer::uint32{0},
+        Moer::uint32{5},
+        Moer::uint32{6},
         std::string_view("cli-gpu"),
-        std::uint32_t{0},
-        std::uint64_t{100},
-        std::uint64_t{110},
-        std::uint32_t{64},
+        Moer::uint32{0},
+        Moer::uint64{100},
+        Moer::uint64{110},
+        Moer::uint32{64},
         2.0,
         20.0,
         20.0,
-        std::uint32_t{0},
+        Moer::uint32{0},
         std::string_view{},
     };
     _builder.Record(Templates::GpuScope(), 3, scope);
 
-    const std::array<FieldValueView, 1> counter{std::uint64_t{9}};
+    const std::array<FieldValueView, 1> counter{Moer::uint64{9}};
     _builder.Record(unknown, 4, counter);
     _builder.Loss({
         .first_sequence = 5,
         .last_sequence  = 5,
         .record_count   = 1,
         .value_bytes    = 8,
-        .reason_mask    = static_cast<std::uint32_t>(LossReason::QueueFull),
+        .reason_mask    = static_cast<Moer::uint32>(LossReason::QueueFull),
     });
     _builder.End();
 }
@@ -210,8 +210,8 @@ void PopulateCompleteSession(SessionBuilder& _builder) {
 class ScopedTempDirectory {
 public:
     ScopedTempDirectory() {
-        static std::atomic<std::uint64_t> next{0};
-        for (std::uint32_t attempt = 0; attempt < 32; ++attempt) {
+        static std::atomic<Moer::uint64> next{0};
+        for (Moer::uint32 attempt = 0; attempt < 32; ++attempt) {
             const auto                  tick = std::chrono::steady_clock::now().time_since_epoch().count();
             const std::filesystem::path candidate =
                 std::filesystem::temp_directory_path() /
@@ -233,7 +233,7 @@ public:
     std::filesystem::path path{};
 };
 
-void WriteBytes(const std::filesystem::path& _path, std::span<const std::uint8_t> _bytes) {
+void WriteBytes(const std::filesystem::path& _path, std::span<const Moer::uint8> _bytes) {
     std::ofstream stream(_path, std::ios::binary | std::ios::trunc);
     Expect(stream.is_open(), "could not create ProfileDump fixture");
     stream.write(reinterpret_cast<const char*>(_bytes.data()), static_cast<std::streamsize>(_bytes.size()));
@@ -666,7 +666,7 @@ void TestComplete(ProcessRunner& _runner, const std::filesystem::path& _path) {
     Expect(
         loss.at("noticed_records") == "1" && loss.at("unnotified_records") == "0" &&
             loss.at("value_bytes") == "8" &&
-            loss.at("reason_mask") == std::to_string(static_cast<std::uint32_t>(LossReason::QueueFull)),
+            loss.at("reason_mask") == std::to_string(static_cast<Moer::uint32>(LossReason::QueueFull)),
         "complete Loss summary changed"
     );
     const Json& cpu = document.at("cpu");
@@ -813,11 +813,11 @@ int main(int _argument_count, char** _arguments) {
         WriteBytes(protocol_path, protocol.bytes);
 
         CodecLimits               oversized_limits{};
-        Moer::Array<std::uint8_t> oversized_payload(
-            oversized_limits.max_packet_payload_bytes + 1, std::uint8_t{0}
+        Moer::Array<Moer::uint8>  oversized_payload(
+            oversized_limits.max_packet_payload_bytes + 1, Moer::uint8{0}
         );
         oversized_limits.max_packet_payload_bytes = oversized_payload.size();
-        Moer::Array<std::uint8_t> oversized_packet;
+        Moer::Array<Moer::uint8> oversized_packet;
         Expect(
             WrapPacket(PacketType::Schema, 0, oversized_payload, oversized_limits, oversized_packet) ==
                 EncodeStatus::Ok,

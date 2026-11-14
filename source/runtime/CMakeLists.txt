@@ -20,6 +20,9 @@ file(GLOB engine_headers CONFIGURE_DEPENDS "*.h")
 file(GLOB engine_sources CONFIGURE_DEPENDS "*.cpp")
 add_library(${target_name} STATIC ${engine_headers} ${engine_sources})
 add_library(Moer::Runtime ALIAS ${target_name})
+if (MOER_VULKAN_TEST_SUPPORT)
+    target_include_directories(${target_name} PRIVATE "${moer_source_dir}/test")
+endif()
 
 set_target_properties(${target_name} PROPERTIES 
     FOLDER "runtime"  )

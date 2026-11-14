@@ -2,7 +2,7 @@
 
 #include "remote/RemoteApi.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <string>
 
 namespace Moer::Config {
@@ -15,8 +15,8 @@ namespace Moer::remote {
 struct REMOTE_API RemoteConfig {
     bool        enable         = false;
     std::string bind_address   = "127.0.0.1";
-    uint16_t    http_port      = 18080;
-    uint16_t    websocket_port = 18081;
+    uint16      http_port      = 18080;
+    uint16      websocket_port = 18081;
 };
 
 // 从全局配置中提取 Remote 模块所需的配置项

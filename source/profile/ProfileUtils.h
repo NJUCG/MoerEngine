@@ -1,13 +1,16 @@
 #pragma once
-#include "ProfileTypes.h"
 
-uint64_t now_us();
+#include "ProfileTypes.h"
+#include "misc/Types.h"
+
+Moer::uint64 now_us();
 
 void capture_frames_fast(
-    void**   out_frames,
-    int      max_frames,
-    uint16_t& out_count,
-    uint16_t  skip = 1);
+    void**        out_frames,
+    int           max_frames,
+    Moer::uint16& out_count,
+    Moer::uint16  skip = 1
+);
 
 std::string symbolicate_address(void* addr);
 void        ShutdownSymbolEngine();

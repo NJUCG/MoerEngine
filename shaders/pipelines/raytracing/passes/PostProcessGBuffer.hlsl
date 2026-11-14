@@ -11,7 +11,7 @@
 #endif
 
 [[vk::binding(1, 0)]] RWTexture2D<uint> rw_specular_roughness : register(u0);
-[[vk::binding(2, 0)]] RWTexture2D<float4> rw_normal_roughness : register(u1);
+[[vk::binding(2, 0), vk::image_format("rgba8")]] RWTexture2D<float4> rw_normal_roughness : register(u1);
 [[vk::binding(3, 0)]] Texture2D<uint> r_normal : register(t0);
 [[vk::binding(4, 0)]] Texture2D<float> r_view_depth : register(t1);
 

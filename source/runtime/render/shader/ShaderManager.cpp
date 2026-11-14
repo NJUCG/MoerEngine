@@ -1,40 +1,38 @@
+#include "misc/Types.h"
+#include "shader/ShaderResourceManager.h"
+
 #include "config/ConfigManager.h"
 #include "misc/STL.h"
-#include "rhi/RHI.h"
-#include "rhi/RHICommon.h"
-#include "rhi/RHIResource.h"
-#include "rhi/ShaderStageUtils.h"
-#include "serialize/Serializer.h"
-#include "shader/ShaderCommon.h"
 #include "shader/ShaderCompiler.h"
-#include "shader/ShaderPipeline.h"
-#include "shader/ShaderResourceManager.h"
-#include <fstream>
-#include <ostream>
+
+#include <format>
 #include <stdexcept>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace Moer::Render {
-using std::move;
 
 namespace {
 
-constexpr uint32_t k_shader_cache_magic          = 0x4D534443; // "MSDC"
-constexpr uint32_t k_shader_cache_format_version = 4;
-
-void ConfigureShaderConstantLayout(ShaderAsset& asset, const PipelineShaderInfo& shader_info,
-                                  EShaderPlatform platform) {
-    const auto& metadata = shader_info.argument_metadata;
-    if (platform == SP_WIN_D3D_SM6 && metadata.GetConstantLayouts().size() > 1) {
-        throw std::invalid_argument("D3D12 does not yet support multiple logical constant arguments");
+std::string FormatShaderCompileDiagnostic(std::string diagnostic) {
+    constexpr std::string_view asset_prefixes[] = {
+        "target/bin/Debug/asset/",
+        "target/bin/Release/asset/",
+        "target/Debug/bin/asset/",
+        "target/Release/bin/asset/"
+    };
+    for (std::string_view prefix : asset_prefixes) {
+        size_t position = 0;
+        while ((position = diagnostic.find(prefix)) != std::string::npos) {
+            diagnostic.erase(position, prefix.size());
+        }
     }
-    asset.environment.SetDefine("MOER_PC_LAYOUT_VERSION", uint32_t(1));
-    asset.environment.SetDefine("MOER_PC_BYTE_SIZE", metadata.GetConstantByteSize());
-    for (const auto& argument : metadata.GetConstantLayouts()) {
-        const auto name = metadata.GetArguments()[argument.argument_index].name;
-        asset.environment.SetDefine("MOER_PC_OFFSET_" + std::string(name), argument.byte_offset);
-        asset.environment.SetDefine("MOER_PC_SIZE_" + std::string(name), argument.byte_size);
+    constexpr std::string_view shared_directory = "shaderheaders";
+    if (const size_t position = diagnostic.find(shared_directory); position != std::string::npos) {
+        diagnostic.replace(position, shared_directory.size(), "source/runtime/render/shaderheaders");
     }
+    return diagnostic;
 }
 
 std::string_view GetShaderTypeName(EShaderType shader_type) {
@@ -57,72 +55,7 @@ std::string_view GetShaderTypeName(EShaderType shader_type) {
     }
 }
 
-uint64 GetNextShaderKeyOffset(const TypedShaderCache& cache) {
-    uint64 next_key_offset = 0;
-
-    for (const auto& [shader_input, shader_key] : cache.shader_cache_map) {
-        next_key_offset = std::max(next_key_offset, shader_key.hash + 1);
-    }
-    for (const auto& [shader_key, shader_entry] : cache.shader_entry_cache) {
-        next_key_offset = std::max(next_key_offset, shader_key.hash + 1);
-    }
-
-    return next_key_offset;
-}
-
-void RebuildLoadedShaderCacheRuntimeState(ShaderResourcesCache& cache) {
-    for (auto& typed_cache : cache.code_cache) {
-        typed_cache.key_offset = GetNextShaderKeyOffset(typed_cache);
-    }
-}
-
-uint64 CountCachedShaders(const ShaderResourcesCache& cache) {
-    uint64 cached_shader_count = 0;
-
-    for (const auto& typed_cache : cache.code_cache) {
-        cached_shader_count += typed_cache.shader_cache.size();
-    }
-
-    return cached_shader_count;
-}
-
 } // namespace
-
-#pragma region[Shader Resource Cache]
-
-bool ShaderResourcesCache::HasCache(const ShaderCompilerInput& _input) const {
-    auto it = code_cache[_input.target_info.shader_type].shader_cache.find(_input);
-    return it != code_cache[_input.target_info.shader_type].shader_cache.end();
-}
-
-void ShaderResourcesCache::RegisterCache(const ShaderCompilerInput& _input, ShaderCompilerOutput&& _output) {
-    auto& cache = code_cache[_input.target_info.shader_type];
-    auto  it    = cache.shader_cache.find(_input);
-    if (it == cache.shader_cache.end()) {
-
-        ShaderEntryKey key = cache.AllocateShaderKey(_input);
-
-        cache.shader_entry_cache[key] = MakeShared<ShaderEntry>(
-            (EShaderType)_input.target_info.shader_type,
-            (EShaderPlatform)_input.target_info.shader_platform,
-            std::move(_output.shader_code)
-        );
-
-        cache.shader_cache[_input] = MakeShared<Shader>(
-            _output.parameter_map,
-            _output.mutation_id,
-            (EShaderType)_input.target_info.shader_type,
-            StaticArray<uint64, 2>{_output.compiled_hash1, _output.compiled_hash2},
-            uint64(_input.shader_name_hash),
-            _output.compiled_entry_name.empty() ? _input.entry_point : _output.compiled_entry_name,
-            _input.relative_source_file_path,
-            key,
-            std::move(_output.source_dependencies)
-        );
-    }
-}
-
-#pragma endregion
 
 struct ShaderManager::Impl {
 
@@ -134,10 +67,6 @@ struct ShaderManager::Impl {
 
     RasterPipelineConstructor Raster() {
         return RasterPipelineConstructor(device, manager);
-    }
-
-    RTConstructor Raytracing() {
-        return RTConstructor(device);
     }
 
     ShaderManager& manager;
@@ -162,103 +91,12 @@ void ShaderManager::ShutDown() {
     }
 }
 
-std::string GetCacheFileName(RenderDevice& _device) {
-    return std::string(ToString(_device.GetShaderPlatform())) + ".sdc";
-}
-void ShaderManager::DumpCache(std::filesystem::path _path) {
-    if (!std::filesystem::exists(_path)) {
-        //make directories
-        std::filesystem::create_directories(_path);
-    }
-
-    auto file_path = _path / GetCacheFileName(impl->device);
-
-    std::ofstream fs(file_path, std::ios::binary);
-    OutputStream  stream(fs);
-    stream << k_shader_cache_magic << k_shader_cache_format_version << shader_resources_cache;
-    if (!fs.good()) {
-        LOG_WARNING("[Startup][Shader] DumpCache failed to write shader cache: {}", file_path.string());
-    }
+RenderDevice& ShaderManager::GetDevice() {
+    return impl->device;
 }
 
-void ShaderManager::LoadCache(std::filesystem::path _path) {
-    if (!std::filesystem::exists(_path)) {
-        //make directories
-        std::filesystem::create_directories(_path);
-    }
-
-    auto file_path = _path / GetCacheFileName(impl->device);
-    if (!std::filesystem::exists(file_path)) {
-        //create file
-        std::ofstream fs(file_path, std::ios::binary);
-        fs.close();
-        LOG_DEBUG("[Startup][Shader] LoadCache created empty cache file: {}", file_path.string());
-        return;
-    }
-
-    if (std::filesystem::file_size(file_path) == 0) {
-        LOG_DEBUG("[Startup][Shader] LoadCache skipped empty cache file");
-        return;
-    }
-
-    std::ifstream fs(file_path, std::ios::binary);
-    if (!fs.is_open()) {
-        LOG_WARNING(
-            "[Startup][Shader] LoadCache failed to open cache file for reading. requested='{}', actual_open_path='{}'",
-            file_path.string(),
-            file_path.string()
-        );
-        return;
-    }
-
-    ShaderResourcesCache loaded_cache;
-    InputStream          stream(fs);
-
-    try {
-        uint32_t cache_magic   = 0;
-        uint32_t cache_version = 0;
-        stream >> cache_magic >> cache_version;
-        if (fs.fail()) {
-            LOG_WARNING(
-                "[Startup][Shader] LoadCache discarded truncated or unversioned shader cache: {}",
-                file_path.string()
-            );
-            return;
-        }
-        if (cache_magic != k_shader_cache_magic || cache_version != k_shader_cache_format_version) {
-            LOG_INFO(
-                "[Startup][Shader] LoadCache discarded incompatible shader cache: path='{}', magic=0x{:08X}, version={}, expected_version={}",
-                file_path.string(),
-                cache_magic,
-                cache_version,
-                k_shader_cache_format_version
-            );
-            return;
-        }
-        stream >> loaded_cache;
-    } catch (const std::exception& e) {
-        LOG_WARNING(
-            "[Startup][Shader] LoadCache caught exception during deserialization (cache format may have changed): {}",
-            e.what()
-        );
-        return;
-    } catch (...) {
-        LOG_WARNING("[Startup][Shader] LoadCache caught unknown exception during deserialization, discarding cache");
-        return;
-    }
-
-    if (fs.fail()) {
-        LOG_WARNING("[Startup][Shader] LoadCache failed to deserialize shader cache: {}", file_path.string());
-        return;
-    }
-
-    RebuildLoadedShaderCacheRuntimeState(loaded_cache);
-    shader_resources_cache = std::move(loaded_cache);
-
-    LOG_DEBUG(
-        "[Startup][Shader] LoadCache loaded {} cached shaders",
-        CountCachedShaders(shader_resources_cache)
-    );
+RasterPipelineConstructor ShaderManager::Raster() {
+    return impl->Raster();
 }
 
 Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
@@ -273,52 +111,19 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
         .environment               = std::move(_asset.environment)
     };
 
-    auto it = shader_resources_cache.TryGetShader(input);
-
-    // LOG_DEBUG("ShaderManager::CompileShader, FileName: {}, EntryName: {}, MutationID: {}, Environment: {} <=> {}",
-    //           input.relative_source_file_path,
-    //           input.entry_point,
-    //           input.mutation_id,
-    //           input.environment.ToString(),
-    //           (it.first != nullptr ? "Cached" : "Compile"));
-
-    static auto get_all_removed_target_strings =
-        [](std::string input_string, const Array<std::string>& target_substring_array) -> std::string {
-        for (const auto& target_substring : target_substring_array) {
-            while (true) {
-                size_t pos = input_string.find(target_substring);
-                if (pos != std::string::npos) {
-                    input_string =
-                        input_string.substr(0, pos) + input_string.substr(pos + target_substring.length());
-                } else {
-                    break;
-                }
-            }
-        }
-        return input_string;
-    };
-
-    static auto replace_shared_directry_strings = [](std::string input_string) -> std::string {
-        // shaderheaders
-        // => source/runtime/render/shaderheaders
-        size_t pos = input_string.find("shaderheaders");
-        if (pos != std::string::npos) {
-            input_string = input_string.substr(0, pos) + "source/runtime/render/shaderheaders" +
-                           input_string.substr(pos + 13);
-        }
-        return input_string;
-    };
-
-    if (it.first != nullptr) {
-        return *it.first;
+    if (Shader* cached_shader = shader_resources_cache.TryGetShader(input)) {
+        return *cached_shader;
     }
 
-    const std::string     shader_path       = input.relative_source_file_path;
-    const std::string     entry_point       = input.entry_point;
-    const uint32_t        mutation_id       = input.mutation_id;
+    const std::string      shader_path       = input.relative_source_file_path;
+    const std::string      entry_point       = input.entry_point;
+    const uint32           mutation_id       = input.mutation_id;
     const std::string_view shader_type_name = GetShaderTypeName(_type);
 
-    auto&& output = ShaderCompiler::Compile(std::move(input));
+    if (input.target_info.shader_platform == SP_WIN_D3D_SM6) {
+        LOG_INFO("[Startup][D3D12Shader] Compiling {} / {} ({})", shader_path, entry_point, shader_type_name);
+    }
+    ShaderCompilerOutput output = ShaderCompiler::Compile(std::move(input));
 
     if (!output.b_succeeded) {
         LOG_WARNING(
@@ -329,153 +134,17 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
             mutation_id
         );
         for (const auto& error : output.errors) {
-            std::string error_string = get_all_removed_target_strings(
-                error,
-                {"target/bin/Debug/asset/",
-                 "target/bin/Release/asset/",
-                 "target/Debug/bin/asset/",
-                 "target/Release/bin/asset/"}
-            );
-            error_string = replace_shared_directry_strings(error_string);
-
-            LOG_ERROR("Shader Compile Error: {}", error_string);
+            LOG_ERROR("Shader Compile Error: {}", FormatShaderCompileDiagnostic(error));
         }
-        assert(
-            false &&
-            std::format("Shader Compile Error, FileName: {}", input.relative_source_file_path).c_str()
-        );
-        return *it.first;
+        throw std::runtime_error(std::format(
+            "Shader compile failed: type={}, path={}, entry={}, mutation_id={}",
+            shader_type_name,
+            shader_path,
+            entry_point,
+            mutation_id
+        ));
     }
-    shader_resources_cache.RegisterCache(input, std::move(output));
-    return *shader_resources_cache.TryGetShader(input).first;
+    return shader_resources_cache.RegisterCache(input, std::move(output));
 }
-
-RenderDevice& ShaderManager::GetDevice() {
-    return impl->device;
-}
-
-RasterPipelineConstructor ShaderManager::Raster() {
-    return impl->Raster();
-}
-RasterPipelineConstructor::RasterPipelineConstructor(Render::RenderDevice& _device, ShaderManager& _manager) :
-    device(_device),
-    shader_manager(_manager) {}
-
-RTConstructor ShaderManager::Raytracing() {
-    return impl->Raytracing();
-}
-
-PipelineHandle RasterPipelineConstructor::CreatePipeline(
-    GfxPsoCreateInfo&&         pso_info,
-    PipelineArgumentMetadata&& argument_metadata
-) {
-    const auto is_empty = [](const ShaderAssetOrCache& source) {
-        if (const auto* shader = std::get_if<Shader*>(&source)) {
-            return *shader == nullptr;
-        }
-        const auto& asset = std::get<ShaderAsset>(source);
-        return asset.path.empty() || asset.entry_name.empty();
-    };
-    struct StageSource {
-        EShaderType         shader_type;
-        ShaderAssetOrCache* source;
-    };
-    const StageSource k_stage_sources[] = {
-        {ST_VERTEX, &vertex_path},
-        {ST_HULL, &hull_path},
-        {ST_DOMAIN, &domain_path},
-        {ST_GEOMETRY, &geometry_path},
-        {ST_AMPLIFICATION, &task_path},
-        {ST_MESH, &mesh_path},
-        {ST_FRAGMENT, &pixel_path}
-    };
-    PipelineShaderInfo pipeline_shader_info{.argument_metadata = std::move(argument_metadata)};
-    for (const auto& stage : k_stage_sources) {
-        if (!is_empty(*stage.source)) {
-            pipeline_shader_info.shaders.push_back(SingleShaderInfo{.shader_type = stage.shader_type});
-        }
-    }
-    if (const auto error = ValidateGraphicsShaderStages(pipeline_shader_info.shaders); !error.empty()) {
-        LOG_ERROR("Cannot create raster pipeline: {}", error);
-        return {};
-    }
-    const bool uses_tessellation = FindShaderStage(pipeline_shader_info.shaders, ST_HULL) != nullptr;
-    const auto target_info       = device.GetShaderPlatform();
-    const auto get_shader_output = [&](const ShaderAssetOrCache& source, EShaderType shader_type) -> Shader& {
-        if (const auto* shader = std::get_if<Shader*>(&source)) {
-            return **shader;
-        }
-        ShaderAsset asset = std::get<ShaderAsset>(source);
-        ConfigureShaderConstantLayout(asset, pipeline_shader_info, target_info);
-        if (uses_tessellation && target_info == SP_METAL_MSL && shader_type == ST_VERTEX) {
-            asset.environment.SetDefine("MOER_METAL_TESS_VS_CAPTURE", true);
-            asset.environment.SetDefine("MOER_METAL_TESS_VS_GRID_BUFFER", true);
-        }
-        return shader_manager.CompileShader(shader_type, std::move(asset));
-    };
-    size_t shader_id = 0;
-    for (const auto& stage : k_stage_sources) {
-        if (is_empty(*stage.source)) {
-            continue;
-        }
-        Shader&      output                       = get_shader_output(*stage.source, stage.shader_type);
-        ShaderEntry& entry                        = shader_manager.GetShaderEntry(output);
-        pipeline_shader_info.shaders[shader_id++] = SingleShaderInfo{
-            .name               = output.shader_path,
-            .entry_point        = output.entry_name,
-            .shader_data        = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
-            .shader_type        = stage.shader_type,
-            .shader_param_map   = &output.reflection,
-            .compute_local_size = output.reflection.compute_local_size
-        };
-    }
-    return device.CreatePipeline(std::move(pso_info), std::move(pipeline_shader_info));
-}
-
-#pragma region[ compute pipeline ]
-
-ComputeConstructor::ComputeConstructor(RenderDevice& _device, ShaderAsset&& _asset, ShaderManager& _mgr) :
-    device(_device),
-    shader_manager(_mgr),
-    shader_info(std::move(_asset)) {}
-
-PipelineShaderInfo ComputeConstructor::CompileShaderInfo(PipelineArgumentMetadata&& argument_metadata) {
-    PipelineShaderInfo sd_info{.argument_metadata = std::move(argument_metadata)};
-    auto target_info       = device.GetShaderPlatform();
-    auto get_shader_output = [&](const ShaderAssetOrCache& _info, EShaderType _type) -> Shader& {
-        if (std::holds_alternative<ShaderAsset>(_info) == false) {
-            Shader& shader = *std::get<Shader*>(_info);
-
-            return shader;
-        }
-
-        ShaderAsset asset = std::get<ShaderAsset>(_info);
-        ConfigureShaderConstantLayout(asset, sd_info, target_info);
-        return shader_manager.CompileShader(_type, std::move(asset));
-    };
-    auto get_shader_info = [&](EShaderType _type, Shader& _output) {
-        ShaderEntry& entry = shader_manager.GetShaderEntry(_output);
-        return std::move(
-            SingleShaderInfo{
-                .name             = _output.shader_path,
-                .entry_point      = _output.entry_name,
-                .shader_data      = std::span<uint8_t>(entry.blob_data.data(), entry.blob_data.size()),
-                .shader_type      = _type,
-                .shader_param_map = &_output.reflection,
-                .compute_local_size = _output.reflection.compute_local_size
-            }
-        );
-    };
-
-    auto&              output = get_shader_output(shader_info, ST_COMPUTE);
-    sd_info.shaders.push_back(get_shader_info(ST_COMPUTE, output));
-    return std::move(sd_info);
-}
-
-PipelineHandle ComputeConstructor::CreatePipeline(PipelineArgumentMetadata&& argument_metadata) {
-    return device.CreatePipeline(CompileShaderInfo(std::move(argument_metadata)));
-}
-
-#pragma endregion
 
 } // namespace Moer::Render

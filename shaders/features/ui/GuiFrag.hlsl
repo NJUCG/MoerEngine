@@ -1,12 +1,6 @@
 #include "features/ui/Gui.hlsli"
-struct PS_INPUT {
-  float4 pos : SV_POSITION;
-  float4 col : COLOR0;
-  float2 uv : TEXCOORD0;
-  uint id : INSTANCEID;
-};
 
-float4 main(PS_INPUT input) : SV_Target {
+float4 main(GuiVertexOutput input) : SV_Target {
 
   DrawParam draw_param = arg_buffer[input.id];
 

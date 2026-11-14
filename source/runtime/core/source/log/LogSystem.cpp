@@ -1,5 +1,5 @@
 #include "log/LogSystem.h"
-
+#include "misc/Types.h"
 #include "spdlog/details/os.h"
 #include "spdlog/sinks/basic_file_sink.h"
 #include "spdlog/sinks/sink.h"
@@ -128,7 +128,7 @@ FileLogSetupResult CreateFileLogSink(const FileLogInitOptions& _options) {
 }
 
 struct ConsoleLogEntryStorage {
-    std::uint64_t             sequence = 0;
+    uint64                    sequence = 0;
     spdlog::level::level_enum level    = spdlog::level::info;
     std::string               message;
 };
@@ -161,7 +161,7 @@ public:
     void set_formatter(std::unique_ptr<spdlog::formatter>) override {}
 
     [[nodiscard]] ConsoleLogPollResult
-    Visit(std::uint64_t _next_sequence, std::size_t _max_count, ConsoleLogVisitor _visitor, void* _context) {
+    Visit(uint64 _next_sequence, std::size_t _max_count, ConsoleLogVisitor _visitor, void* _context) {
         ConsoleLogPollResult result;
         result.next_sequence = _next_sequence == 0 ? 1 : _next_sequence;
 
@@ -176,7 +176,7 @@ public:
                 return result;
             }
 
-            const std::uint64_t first_sequence = entries.front().sequence;
+            const uint64 first_sequence = entries.front().sequence;
             if (result.next_sequence < first_sequence) {
                 result.dropped_count = first_sequence - result.next_sequence;
                 result.next_sequence = first_sequence;
@@ -220,7 +220,7 @@ public:
 private:
     std::mutex                         storage_mutex;
     std::deque<ConsoleLogEntryStorage> entries;
-    std::uint64_t                      next_sequence = 1;
+    uint64                             next_sequence = 1;
 };
 
 // spdlog exposes these operations to derived logger implementations. This
@@ -530,7 +530,7 @@ void Flush() noexcept {
 }
 
 ConsoleLogPollResult VisitConsoleLogs(
-    std::uint64_t     _next_sequence,
+    uint64            _next_sequence,
     std::size_t       _max_count,
     ConsoleLogVisitor _visitor,
     void*             _context

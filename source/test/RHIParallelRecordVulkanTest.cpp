@@ -2,31 +2,39 @@
 #include "config/ConfigManager.h"
 #include "log/LogSystem.h"
 #include "platform/Platform.h"
+#include "renderer/raster/BloomPass.h"
+#include "renderer/raster/TonemappingPass.h"
+#include "renderer/raytracing/RaytracingExportSubmission.h"
+#include "renderer/raytracing/AntiAliasPass.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
+#include "rendergraph/RenderGraphPassParameters.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
-#include "rhi/RHIExecutor.h"
 #include "rhi/RHIGpuScope.h"
 #include "rhi/RHISubmissionPipelinePolicy.h"
 #include "rhi/RHIThreadOwnership.h"
-#include "rhi/vulkan/VulkanCustomCommand.h"
-#include "rhi/vulkan/VulkanDevice.h"
-#include "rhi/vulkan/VulkanIOService.h"
-#include "rhi/vulkan/VulkanQueue.h"
-#include "rhi/vulkan/VulkanRHIResource.h"
-#include "rhi/vulkan/VulkanSubmissionDiagnostics.h"
-#include "renderer/raytracing/RaytracingExportSubmission.h"
+#include "rhi/backends/vulkan/VulkanCommandProfiler.h"
+#include "rhi/backends/vulkan/VulkanCommandQueries.h"
+#include "rhi/backends/vulkan/VulkanCustomCommand.h"
+#include "rhi/backends/vulkan/VulkanDevice.h"
+#include "rhi/backends/vulkan/VulkanQueue.h"
+#include "rhi/backends/vulkan/VulkanRHIResource.h"
+#include "rhi/backends/vulkan/VulkanTimeline.h"
+#include "rhi/executor/RHIExecutor.h"
 #include "shader/ShaderResourceManager.h"
 #include "taskgraph/TaskSystem.h"
+#include "vulkan/VulkanFaultInjection.h"
+#include "vulkan/VulkanSubmissionProbe.h"
+#include "vulkan/VulkanSubmissionTestHooks.h"
 
+#include "misc/Types.h"
 #include <algorithm>
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -50,13 +58,162 @@ namespace {
 
 constexpr size_t kElementCount = 64;
 constexpr uint32 kIterations   = 24;
-constexpr uint32 kHeavyCopiesPerWave = 48;
-constexpr uint32 kHeavyCopyCount = kHeavyCopiesPerWave * 2;
+
+// Only for test-owned fences with no GPU producer. This does not update the
+// GPU completion cache. Signal the native semaphore before publishing acceptance
+// so both GPU dependency waits and the Submission owner's wait can proceed.
+void ReleaseTestSubmissionDependency(Fence& _dependency, uint64 _value) {
+    auto* device = static_cast<VulkanDevice*>(RenderDevice::Get().GetImpl());
+    VkSemaphoreSignalInfo signal_info{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+    signal_info.semaphore = ResourceCast(&_dependency)->GetSemaphore();
+    signal_info.value     = _value;
+
+    // Static Volk linkage can give the test executable its own dispatch globals,
+    // separate from the Render DLL. Leave an already-loaded dispatch untouched.
+    VkResult result = VK_SUCCESS;
+    if (vkGetDeviceProcAddr == nullptr) {
+        result = volkInitialize();
+        if (result == VK_SUCCESS) {
+            volkLoadInstanceOnly(device->GetInstance());
+        }
+    }
+    if (result == VK_SUCCESS) {
+        const auto signal_semaphore = reinterpret_cast<PFN_vkSignalSemaphore>(
+            vkGetDeviceProcAddr(device->GetDevice(), "vkSignalSemaphore")
+        );
+        result = signal_semaphore != nullptr ?
+                     signal_semaphore(device->GetDevice(), &signal_info) :
+                     VK_ERROR_INITIALIZATION_FAILED;
+    }
+    if (result != VK_SUCCESS) {
+        // Unblock submission cleanup even when the test cannot release its gate.
+        _dependency.Reject(_value);
+        throw std::runtime_error(
+            "Failed to release test submission dependency: VkResult=" +
+            std::to_string(static_cast<int32>(result))
+        );
+    }
+    _dependency.MarkSubmitted(_value);
+}
+
+void RunTimelineGpuProgressContract() {
+    using namespace std::chrono_literals;
+
+    // No queue submission/completion owner participates in this fixture. Native
+    // host signals stand in for a producer, never for CPU retirement work.
+    FenceRef fence = RenderDevice::Get().CreateFence();
+    auto* timeline = ResourceCast(fence.Get());
+    if (fence->GetValue() != 0 || timeline->QueryGpuCompletion(1) != VK_NOT_READY) {
+        throw std::runtime_error("new timeline reported unobserved GPU progress");
+    }
+    ReleaseTestSubmissionDependency(*fence, 1);
+    if (fence->GetValue() != 0 || timeline->QueryGpuCompletion(1) != VK_SUCCESS ||
+        fence->GetValue() != 1) {
+        throw std::runtime_error("timeline query did not refresh its stale GPU cache");
+    }
+
+    // RHI Wait must observe the semaphore itself; no RecordGpuCompletion call
+    // or completion-thread notification will arrive to rescue it.
+    std::binary_semaphore waited{0};
+    bool wait_succeeded = false;
+    std::jthread waiter([&] {
+        wait_succeeded = fence->Wait(2);
+        waited.release();
+    });
+    try {
+        ReleaseTestSubmissionDependency(*fence, 2);
+        if (!waited.try_acquire_for(5s)) {
+            throw std::runtime_error("RHI Wait still depends on CPU completion notification");
+        }
+    } catch (...) {
+        timeline->Fail(VK_ERROR_UNKNOWN);
+        throw;
+    }
+    waiter.join();
+    if (!wait_succeeded || fence->GetValue() < 2 || timeline->QueryGpuCompletion(3) != VK_NOT_READY ||
+        !timeline->Wait(1) || fence->GetValue() < 2) {
+        throw std::runtime_error("timeline wait failed to retain monotonic GPU progress");
+    }
+
+    // A native wait on a never-signalled value must also observe CPU rejection.
+    bool cancelled_wait_succeeded = true;
+    std::jthread cancelled_waiter([&] {
+        cancelled_wait_succeeded = timeline->Wait(3);
+        waited.release();
+    });
+    fence->Reject(3);
+    if (!waited.try_acquire_for(5s)) {
+        timeline->Fail(VK_ERROR_UNKNOWN);
+        throw std::runtime_error("CPU rejection did not interrupt a native timeline wait");
+    }
+    cancelled_waiter.join();
+    if (cancelled_wait_succeeded) {
+        throw std::runtime_error("rejected native wait reported success");
+    }
+
+    ReleaseTestSubmissionDependency(*fence, 4);
+    if (timeline->QueryGpuCompletion(3) != VK_ERROR_UNKNOWN ||
+        timeline->QueryGpuCompletion(4) != VK_SUCCESS || fence->GetValue() != 4 ||
+        timeline->QueryGpuCompletion(3) != VK_ERROR_UNKNOWN ||
+        timeline->Wait(3) || fence->WaitSubmitted(3) ||
+        !fence->WaitSubmitted(4)) {
+        throw std::runtime_error("later GPU progress hid an exact rejected timeline value");
+    }
+
+    timeline->Fail(VK_ERROR_UNKNOWN);
+    if (timeline->QueryGpuCompletion(4) != VK_ERROR_UNKNOWN ||
+        timeline->Wait(4)) {
+        throw std::runtime_error("cached GPU success hid a failed timeline");
+    }
+    LOG_INFO("[TESTCASE][PASS] name=TimelineGpuProgress cache=refresh wait=native rejection=exact");
+}
 
 class MultiviewLayerPipeline final : public RasterPipeline {
 public:
     DEFINE_RASTER_PIPELINE_CLASS(MultiviewLayerPipeline);
     DEFINE_SHADER_ARGS();
+};
+
+class CompiledBindlessPipeline final : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(CompiledBindlessPipeline);
+    DEFINE_SHADER_BUFFER(result);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT(uint32, index);
+    DEFINE_SHADER_CONSTANT(float, scale);
+    DEFINE_SHADER_ARGS(result, bdls, index, scale);
+};
+
+class SsrTraceRegressionPipeline final : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(SsrTraceRegressionPipeline);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT(SsrPipelineBindlessParam, param);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+
+class AoCompositeRegressionPipeline final : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(AoCompositeRegressionPipeline);
+    DEFINE_SHADER_CONSTANT(AoCompositeParam, param);
+    DEFINE_SHADER_TEX(rw_output);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(param, rw_output, bdls);
+};
+
+struct CompiledBindlessParameters {
+    RGBufferAccess<RenderGraph::AccessMode::Read, RenderGraph::BufferAccessType::ShaderRead>  input;
+    RGTextureAccess<RenderGraph::AccessMode::Read, RenderGraph::TextureAccessType::Sampled>   texture;
+    RGBufferAccess<RenderGraph::AccessMode::Write, RenderGraph::BufferAccessType::Storage>    output;
+    uint32                                                                                    index = 0;
+    RGOptionalAccess<RGTokenAccess<RenderGraph::AccessMode::Read>> publication;
+
+    void DeclareRGAccess(RGParameterAccessCollector& accesses) const {
+        accesses.Add(input);
+        accesses.Add(texture);
+        accesses.Add(output);
+        accesses.Add(publication);
+    }
 };
 
 bool IsExpectedZeroOcclusionResult(
@@ -68,12 +225,14 @@ bool IsExpectedZeroOcclusionResult(
     }
     return _precise ?
                _result->sample_count ==
-                   std::optional<std::uint64_t>{0} :
+                   std::optional<uint64>{0} :
                !_result->sample_count.has_value();
 }
 
 class TranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
+    bool PreservesCompiledResourceStates() const override { return true; }
+
     explicit TranslateProbeCommand(
         std::binary_semaphore* _translated,
         EQueueType             _queue = EQueueType::Graphics
@@ -111,21 +270,17 @@ public:
     }
 };
 
-class BindlessPresentationAccessProbeCommand final
+class BindlessAccessProbeCommand final
     : public VkCustomDispatchCmd {
 public:
-    explicit BindlessPresentationAccessProbeCommand(
+    bool PreservesCompiledResourceStates() const override { return true; }
+
+    explicit BindlessAccessProbeCommand(
         BindlessArrayRef _bindless,
         EQueueType       _queue = EQueueType::Graphics
     ) :
         queue(_queue) {
-        usages.emplace_back(
-            std::move(_bindless),
-            ParamInfoFlags{
-                .state_flags    = 0,
-                .pipeline_flags = 0,
-            }
-        );
+        usages.emplace_back(std::move(_bindless), VulkanArgumentInfo{});
     }
 
     void Execute(const VkDispatchContext&) const override {}
@@ -146,6 +301,8 @@ private:
 
 class PipelineTranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
+    bool PreservesCompiledResourceStates() const override { return true; }
+
     PipelineTranslateProbeCommand(
         EQueueType               _queue,
         std::binary_semaphore*   _translated,
@@ -186,6 +343,8 @@ private:
 
 class BlockingTranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
+    bool PreservesCompiledResourceStates() const override { return true; }
+
     BlockingTranslateProbeCommand(
         EQueueType               _queue,
         std::binary_semaphore*   _entered,
@@ -233,6 +392,8 @@ private:
 
 class ThrowingTranslateProbeCommand final : public VkCustomDispatchCmd {
 public:
+    bool PreservesCompiledResourceStates() const override { return true; }
+
     explicit ThrowingTranslateProbeCommand(bool) {}
 
     void Execute(const VkDispatchContext&) const override {
@@ -626,7 +787,7 @@ private:
             return;
         }
 
-        // TranslateForRuntime has returned, but Submission has not yet
+        // Recorder has returned, but Submission has not yet
         // consumed that result. The terminal-packet path therefore cannot
         // have enqueued Completion yet. The regressed path enqueued the
         // current source directly before reporting Failed; while this gate is
@@ -874,15 +1035,15 @@ class ScopedScriptedPresentOverride final {
 public:
     explicit ScopedScriptedPresentOverride(
         ScriptedPresentCapture& _capture,
-        bool _require_present_source_ready = false,
-        bool _latch_fault_before_source_rejection = false,
-        bool _observe_source_rejection_owner = false
+        bool                    _validate_source_access              = false,
+        bool                    _latch_fault_before_source_rejection = false,
+        bool                    _observe_source_rejection_owner      = false
     ) :
         scripted_override{
             .context  = &_capture,
             .callback = &ScriptedPresentCapture::Observe,
-            .require_present_source_ready =
-                _require_present_source_ready,
+            .validate_source_access =
+                _validate_source_access,
             .before_source_rejection =
                 _latch_fault_before_source_rejection ?
                     &ScriptedPresentCapture::
@@ -1070,9 +1231,12 @@ private:
     bool installed{false};
 };
 
-class DependencyWaitCapture final {
+// Observes entry into queue-level dependency waiting, not a blocked fence.
+// These tests keep the dependency unpublished until they release it or stop
+// the runtime, and verify that native/source submission cannot pass it.
+class DependencyWaitBeginCapture final {
 public:
-    explicit DependencyWaitCapture(EQueueType _queue) :
+    explicit DependencyWaitBeginCapture(EQueueType _queue) :
         queue(_queue) {}
 
     static void Observe(
@@ -1080,7 +1244,7 @@ public:
         const VulkanSubmissionDependencyWaitEvent& _event
     ) noexcept {
         auto& capture =
-            *static_cast<DependencyWaitCapture*>(_context);
+            *static_cast<DependencyWaitBeginCapture*>(_context);
         if (_event.queue != capture.queue) {
             return;
         }
@@ -1103,11 +1267,11 @@ private:
 class ScopedDependencyWaitObserver final {
 public:
     explicit ScopedDependencyWaitObserver(
-        DependencyWaitCapture& _capture
+        DependencyWaitBeginCapture& _capture
     ) :
         observer{
             .context  = &_capture,
-            .callback = &DependencyWaitCapture::Observe,
+            .callback = &DependencyWaitBeginCapture::Observe,
         } {
         if (!TryInstallVulkanSubmissionDependencyWaitObserver(
                 &observer
@@ -1190,206 +1354,14 @@ private:
     bool                          installed{false};
 };
 
-class QueueLocalSyncWaitCapture final {
+class DeviceIdleWaitCapture final {
 public:
-    static void Observe(
-        void*                                    _context,
-        const VulkanQueueLocalSyncWaitEvent& _event
-    ) noexcept {
-        auto& capture =
-            *static_cast<QueueLocalSyncWaitCapture*>(_context);
-        const uint32 queue_bit =
-            _event.queue == EQueueType::Graphics ? 1u :
-            _event.queue == EQueueType::Compute ? 2u :
-            _event.queue == EQueueType::Copy ? 4u :
-            0u;
-        if (queue_bit == 0 ||
-            _event.thread_role == ERHIThreadRole::Completion ||
-            _event.target_retirement_serial == 0 ||
-            _event.completion_group_count == 0) {
-            capture.invalid.store(true, std::memory_order_release);
-        }
-        capture.queue_mask.fetch_or(
-            queue_bit, std::memory_order_acq_rel
-        );
-        capture.count.fetch_add(1, std::memory_order_acq_rel);
-        capture.entered.release();
-    }
-
-    [[nodiscard]] bool WaitForTwo(
-        std::chrono::milliseconds _timeout
-    ) noexcept {
-        return entered.try_acquire_for(_timeout) &&
-               entered.try_acquire_for(_timeout);
-    }
-
-    [[nodiscard]] bool ValidGraphicsComputePair() const noexcept {
-        return !invalid.load(std::memory_order_acquire) &&
-               count.load(std::memory_order_acquire) == 2 &&
-               queue_mask.load(std::memory_order_acquire) == 3u;
-    }
-
-private:
-    std::counting_semaphore<2> entered{0};
-    std::atomic<uint32>        count{0};
-    std::atomic<uint32>        queue_mask{0};
-    std::atomic<bool>          invalid{false};
-};
-
-class ScopedQueueLocalSyncWaitObserver final {
-public:
-    explicit ScopedQueueLocalSyncWaitObserver(
-        QueueLocalSyncWaitCapture& _capture
-    ) :
-        observer{
-            .context  = &_capture,
-            .callback = &QueueLocalSyncWaitCapture::Observe,
-        } {
-        if (!TryInstallVulkanQueueLocalSyncWaitObserver(
-                &observer
-            )) {
-            throw std::runtime_error(
-                "Vulkan queue-local Sync observer was already installed"
-            );
-        }
-        installed = true;
-    }
-
-    ~ScopedQueueLocalSyncWaitObserver() noexcept {
-        if (installed &&
-            !RemoveVulkanQueueLocalSyncWaitObserver(&observer)) {
-            std::terminate();
-        }
-    }
-
-    ScopedQueueLocalSyncWaitObserver(
-        const ScopedQueueLocalSyncWaitObserver&
-    ) = delete;
-    ScopedQueueLocalSyncWaitObserver& operator=(
-        const ScopedQueueLocalSyncWaitObserver&
-    ) = delete;
-
-private:
-    VulkanQueueLocalSyncWaitObserver observer{};
-    bool                             installed{false};
-};
-
-class PresentFenceStatusCapture final {
-public:
-    PresentFenceStatusCapture(
-        uint64 _blocked_issue,
-        uint64 _ready_issue
-    ) :
-        blocked_issue(_blocked_issue),
-        ready_issue(_ready_issue) {}
-
-    static VkResult Observe(void* _context, uint64 _issue) noexcept {
-        auto& capture =
-            *static_cast<PresentFenceStatusCapture*>(_context);
-        const uint32 current_thread =
-            Platform::GetCurrentThreadID();
-        uint32 expected_thread = 0;
-        if (!capture.completion_thread.compare_exchange_strong(
-                expected_thread,
-                current_thread,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire
-            ) &&
-            expected_thread != current_thread) {
-            capture.invalid.store(true, std::memory_order_release);
-        }
-        if (GetCurrentRHIThreadRole() !=
-            ERHIThreadRole::Completion) {
-            capture.invalid.store(true, std::memory_order_release);
-        }
-        capture.poll_count.fetch_add(
-            1, std::memory_order_acq_rel
-        );
-        if (_issue == capture.blocked_issue) {
-            capture.blocked_poll_count.fetch_add(
-                1, std::memory_order_acq_rel
-            );
-            return capture.release_blocked.load(
-                       std::memory_order_acquire
-                   ) ?
-                       VK_SUCCESS :
-                       VK_NOT_READY;
-        }
-        if (_issue == capture.ready_issue) {
-            capture.ready_poll_count.fetch_add(
-                1, std::memory_order_acq_rel
-            );
-            return VK_SUCCESS;
-        }
-        capture.invalid.store(true, std::memory_order_release);
-        return VK_ERROR_UNKNOWN;
-    }
-
-    std::atomic_bool   release_blocked{false};
-    std::atomic<uint32> completion_thread{0};
-    std::atomic<uint32> poll_count{0};
-    std::atomic<uint32> blocked_poll_count{0};
-    std::atomic<uint32> ready_poll_count{0};
-    std::atomic_bool   invalid{false};
-
-private:
-    uint64 blocked_issue{0};
-    uint64 ready_issue{0};
-};
-
-class ScopedPresentFenceStatusOverride final {
-public:
-    explicit ScopedPresentFenceStatusOverride(
-        PresentFenceStatusCapture& _capture
-    ) :
-        scripted_override{
-            .context  = &_capture,
-            .callback = &PresentFenceStatusCapture::Observe,
-        } {
-        if (!TryInstallVulkanScriptedPresentFenceStatusOverrideForTesting(
-                &scripted_override
-            )) {
-            throw std::runtime_error(
-                "Vulkan Present-fence status override was already installed"
-            );
-        }
-        installed = true;
-    }
-
-    ~ScopedPresentFenceStatusOverride() noexcept {
-        if (installed &&
-            !RemoveVulkanScriptedPresentFenceStatusOverrideForTesting(
-                &scripted_override
-            )) {
-            std::terminate();
-        }
-    }
-
-    ScopedPresentFenceStatusOverride(
-        const ScopedPresentFenceStatusOverride&
-    ) = delete;
-    ScopedPresentFenceStatusOverride& operator=(
-        const ScopedPresentFenceStatusOverride&
-    ) = delete;
-
-private:
-    VulkanScriptedPresentFenceStatusOverrideForTesting
-        scripted_override{};
-    bool installed{false};
-};
-
-class QueueIdleWaitCapture final {
-public:
-    static void Observe(
-        void*                             _context,
-        const VulkanQueueIdleWaitEvent& _event
-    ) noexcept {
-        auto& capture =
-            *static_cast<QueueIdleWaitCapture*>(_context);
+    const std::atomic_bool* required_completion{nullptr};
+    static void             Observe(void* _context, const VulkanDeviceIdleWaitEvent& _event) noexcept {
+        auto& capture = *static_cast<DeviceIdleWaitCapture*>(_context);
         if (_event.thread_role != ERHIThreadRole::Submission ||
-            _event.context.operation !=
-                EVulkanFaultOperation::QueueWaitIdle ||
-            _event.native_queue_handle == 0) {
+            _event.context.operation != EVulkanFaultOperation::DeviceWaitIdle ||
+            (capture.required_completion && !capture.required_completion->load(std::memory_order_acquire))) {
             capture.invalid.store(true, std::memory_order_release);
         }
         const uint32 current_thread = _event.thread_id;
@@ -1411,39 +1383,30 @@ public:
     std::atomic_bool    invalid{false};
 };
 
-class ScopedQueueIdleWaitObserver final {
+class ScopedDeviceIdleWaitObserver final {
 public:
-    explicit ScopedQueueIdleWaitObserver(
-        QueueIdleWaitCapture& _capture
-    ) :
+    explicit ScopedDeviceIdleWaitObserver(DeviceIdleWaitCapture& _capture) :
         observer{
             .context  = &_capture,
-            .callback = &QueueIdleWaitCapture::Observe,
+            .callback = &DeviceIdleWaitCapture::Observe,
         } {
-        if (!TryInstallVulkanQueueIdleWaitObserver(&observer)) {
-            throw std::runtime_error(
-                "Vulkan queue-idle observer was already installed"
-            );
+        if (!TryInstallVulkanDeviceIdleWaitObserver(&observer)) {
+            throw std::runtime_error("Vulkan device-idle observer was already installed");
         }
         installed = true;
     }
 
-    ~ScopedQueueIdleWaitObserver() noexcept {
-        if (installed &&
-            !RemoveVulkanQueueIdleWaitObserver(&observer)) {
+    ~ScopedDeviceIdleWaitObserver() noexcept {
+        if (installed && !RemoveVulkanDeviceIdleWaitObserver(&observer)) {
             std::terminate();
         }
     }
 
-    ScopedQueueIdleWaitObserver(
-        const ScopedQueueIdleWaitObserver&
-    ) = delete;
-    ScopedQueueIdleWaitObserver& operator=(
-        const ScopedQueueIdleWaitObserver&
-    ) = delete;
+    ScopedDeviceIdleWaitObserver(const ScopedDeviceIdleWaitObserver&)            = delete;
+    ScopedDeviceIdleWaitObserver& operator=(const ScopedDeviceIdleWaitObserver&) = delete;
 
 private:
-    VulkanQueueIdleWaitObserver observer{};
+    VulkanDeviceIdleWaitObserver observer{};
     bool                        installed{false};
 };
 
@@ -1519,9 +1482,9 @@ private:
     bool                                  installed{false};
 };
 
-template<size_t N>
-Array<Moer::byte> OwnedBytes(const std::array<uint32, N>& _values) {
-    Array<Moer::byte> bytes(sizeof(uint32) * N);
+template<typename T, size_t N>
+Array<Moer::byte> OwnedBytes(const std::array<T, N>& _values) {
+    Array<Moer::byte> bytes(sizeof(T) * N);
     std::memcpy(bytes.data(), _values.data(), bytes.size());
     return bytes;
 }
@@ -1546,16 +1509,14 @@ bool HasArgument(int _argc, const char** _argv, std::string_view _argument) {
 void ValidateArguments(int _argc, const char** _argv) {
     for (int index = 1; index < _argc; ++index) {
         const std::string_view argument = _argv[index];
-        if (argument != "--parallel" && argument != "--inject-worker-failure" &&
-            argument != "--production-gate" && argument != "--production-heavy" &&
+        if (argument != "--parallel" &&
             argument != "--inject-translate-failure" &&
             argument != "--inject-multi-segment-translate-failure" &&
             argument != "--pipeline-window1" &&
             argument != "--pipeline-window2" &&
             argument != "--present-boundary" &&
             argument != "--present-hard" &&
-            argument != "--present-legacy-owner" &&
-            argument != "--present-completion-shutdown" &&
+            argument != "--direct-queue-rejection" &&
             argument != "--rt-export-rejection" &&
             argument != "--readback-future" &&
             argument != "--occlusion-query" &&
@@ -1564,7 +1525,8 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--timestamp-query-mid-failure" &&
             argument != "--timestamp-query-record-failure" &&
             argument != "--gpu-scope-stream" &&
-            argument != "--multiview") {
+            argument != "--multiview" && argument != "--compiled-commands" &&
+            argument != "--postprocess-regression") {
             throw std::invalid_argument("unsupported argument: " + std::string(argument));
         }
     }
@@ -1580,37 +1542,60 @@ void ValidateArguments(int _argc, const char** _argv) {
             "--present-boundary and --present-hard are mutually exclusive"
         );
     }
-    if (HasArgument(_argc, _argv, "--inject-worker-failure") &&
-        !HasArgument(_argc, _argv, "--parallel")) {
-        throw std::invalid_argument("--inject-worker-failure requires --parallel");
-    }
-    if (HasArgument(_argc, _argv, "--production-gate") &&
-        !HasArgument(_argc, _argv, "--parallel")) {
-        throw std::invalid_argument("--production-gate requires --parallel");
-    }
-    if (HasArgument(_argc, _argv, "--production-heavy") &&
-        !HasArgument(_argc, _argv, "--parallel")) {
-        throw std::invalid_argument("--production-heavy requires --parallel");
-    }
-    if (HasArgument(_argc, _argv, "--inject-translate-failure") &&
-        HasArgument(_argc, _argv, "--inject-worker-failure")) {
-        throw std::invalid_argument("--inject-translate-failure cannot be combined with "
-                                    "--inject-worker-failure");
-    }
     if (HasArgument(_argc, _argv, "--inject-multi-segment-translate-failure") &&
-        (HasArgument(_argc, _argv, "--inject-worker-failure") ||
-         HasArgument(_argc, _argv, "--inject-translate-failure"))) {
-        throw std::invalid_argument("--inject-multi-segment-translate-failure cannot be combined with "
-                                    "another fault injection");
+        HasArgument(_argc, _argv, "--inject-translate-failure")) {
+        throw std::invalid_argument("failure modes are mutually exclusive");
     }
 }
 
-void RunOrderedReadback(
-    bool _parallel,
-    bool _inject_worker_failure,
-    bool _production_gate,
-    bool _production_heavy
-) {
+// Low-level submission tests own their transfer dependencies explicitly. These
+// helpers use a conservative buffer memory scope; texture layouts are declared
+// at the call site. RDG tests use CommandList directly so these barriers cannot
+// mask missing graph dependencies.
+template<class T>
+void PrepareTestBufferTransfer(CommandList& commands, const T& resource) {
+    if constexpr (std::is_same_v<T, BufferView>) {
+        commands.Barriers({BarrierCreateInfo::Transition(
+            resource,
+            BarrierState::Buffer(ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+                                 ERHIAccessFlags::MEMORY_READ | ERHIAccessFlags::MEMORY_WRITE),
+            BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER,
+                                 ERHIAccessFlags::TRANSFER_READ | ERHIAccessFlags::TRANSFER_WRITE))});
+    }
+}
+
+template<class From, class To>
+void CopyTestTransfer(CommandList& commands, From&& from, To&& to, std::string name = "TestTransfer") {
+    PrepareTestBufferTransfer(commands, from);
+    PrepareTestBufferTransfer(commands, to);
+    commands.CopyFrom(std::forward<From>(from), std::forward<To>(to), std::move(name));
+}
+
+template<class View>
+ReadbackFuture ReadbackTestTransfer(CommandList& commands, const View& view, std::string name = "TestReadback") {
+    PrepareTestBufferTransfer(commands, view);
+    return commands.Readback(view, std::move(name));
+}
+
+void TransitionTestTexture(CommandList& commands, const TextureView& view,
+                           ETextureLayout before, ETextureLayout after,
+                           bool publish = false) {
+    auto barrier = BarrierCreateInfo::Transition(
+        view,
+        BarrierState::Texture(before == ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ?
+                                  ERHIPipelineStageFlags::PS_NONE : ERHIPipelineStageFlags::PS_ALL_COMMANDS,
+                              before == ETextureLayout::TEXTURE_LAYOUT_UNDEFINED ?
+                                  ERHIAccessFlags::UNDEFINED :
+                                  ERHIAccessFlags::MEMORY_READ | ERHIAccessFlags::MEMORY_WRITE, before),
+        BarrierState::Texture(ERHIPipelineStageFlags::PS_TRANSFER,
+                              after == ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST ? ERHIAccessFlags::TRANSFER_WRITE :
+                                  ERHIAccessFlags::TRANSFER_READ, after),
+        view.texture->GetAspectFlags());
+    barrier.publish_external_state = publish;
+    commands.Barriers({barrier});
+}
+
+void RunOrderedReadback(bool _parallel) {
     auto& device = RenderDevice::Get();
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
@@ -1629,15 +1614,6 @@ void RunOrderedReadback(
         device.CreateBuffer<uint32>("parallel_order_checkpoint_c", kElementCount, usage),
         device.CreateBuffer<uint32>("parallel_order_checkpoint_d", kElementCount, usage),
     };
-    Array<BufferRef> heavy_checkpoints;
-    if (_production_heavy) {
-        heavy_checkpoints.reserve(kHeavyCopyCount);
-        for (uint32 index = 0; index < kHeavyCopyCount; ++index) {
-            heavy_checkpoints.push_back(device.CreateBuffer<uint32>(
-                "parallel_heavy_checkpoint_" + std::to_string(index), kElementCount, usage
-            ));
-        }
-    }
 
     for (uint32 iteration = 0; iteration < kIterations; ++iteration) {
         std::array<std::array<uint32, kElementCount>, 4> values{};
@@ -1648,84 +1624,54 @@ void RunOrderedReadback(
             }
         }
         std::array<std::array<uint32, kElementCount>, 4> readbacks{};
-        Array<std::array<uint32, kElementCount>> heavy_readbacks(
-            _production_heavy ? kHeavyCopyCount : 0
-        );
 
         CommandList commands;
+
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         for (uint32 source = 0; source < sources.size(); ++source) {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 OwnedBytes(values[source]),
                 sources[source]->GetView(),
                 "ParallelOrderUpload"
             );
         }
-        if (_production_heavy) {
-            for (uint32 index = 0; index < kHeavyCopiesPerWave; ++index) {
-                commands.CopyFrom(
-                    sources[0]->GetView(),
-                    heavy_checkpoints[index]->GetView(),
-                    "ParallelHeavyWave0"
-                );
-            }
-        }
 
-        // Two dependent safe-copy layers form the first worker wave. Their
-        // completion order is irrelevant; GPU execution must retain A then B.
-        commands.CopyFrom(
+        // Explicit dependencies preserve A then B even when CPU recording changes.
+        CopyTestTransfer(commands,
             sources[0]->GetView(), destination->GetView(), "ParallelOrderWave0A"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             destination->GetView(), checkpoints[0]->GetView(), "ParallelOrderCheckpointA"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             sources[1]->GetView(), destination->GetView(), "ParallelOrderWave0B"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             destination->GetView(), checkpoints[1]->GetView(), "ParallelOrderCheckpointB"
         );
 
-        // A coordinator-only scope is an explicit serial island. The second
-        // worker wave may not start translating before the first wave joins.
+        // Scope markers do not change resource ordering.
         commands.PushScope("ParallelOrderSerialIsland", {0.8f, 0.3f, 0.1f, 1.0f});
-        if (_production_heavy) {
-            for (uint32 index = kHeavyCopiesPerWave; index < kHeavyCopyCount; ++index) {
-                commands.CopyFrom(
-                    sources[2]->GetView(),
-                    heavy_checkpoints[index]->GetView(),
-                    "ParallelHeavyWave1"
-                );
-            }
-        }
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             sources[2]->GetView(), destination->GetView(), "ParallelOrderWave1C"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             destination->GetView(), checkpoints[2]->GetView(), "ParallelOrderCheckpointC"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             sources[3]->GetView(), destination->GetView(), "ParallelOrderWave1D"
         );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             destination->GetView(), checkpoints[3]->GetView(), "ParallelOrderCheckpointD"
         );
         commands.PopScope();
 
         for (uint32 checkpoint = 0; checkpoint < checkpoints.size(); ++checkpoint) {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 checkpoints[checkpoint]->GetView(),
                 WritableBytes(readbacks[checkpoint]),
                 "ParallelOrderReadback"
             );
-        }
-        if (_production_heavy) {
-            for (uint32 index = 0; index < kHeavyCopyCount; ++index) {
-                commands.CopyFrom(
-                    heavy_checkpoints[index]->GetView(),
-                    WritableBytes(heavy_readbacks[index]),
-                    "ParallelHeavyReadback"
-                );
-            }
         }
 
         RHIExecutor::Get().Submit(
@@ -1752,38 +1698,1195 @@ void RunOrderedReadback(
             }
             throw std::runtime_error("ordered GPU checkpoint mismatch");
         }
-        for (size_t checkpoint = 0; checkpoint < heavy_readbacks.size(); ++checkpoint) {
-            const size_t source = checkpoint < kHeavyCopiesPerWave ? 0 : 2;
-            if (heavy_readbacks[checkpoint] != values[source]) {
-                throw std::runtime_error(
-                    "heavy weighted checkpoint mismatch at iteration=" +
-                    std::to_string(iteration) + " checkpoint=" + std::to_string(checkpoint)
-                );
-            }
-        }
+
     }
 
+    LOG_INFO("[TESTCASE][PASS] name=CompiledOrderedReadback mode={} iterations={}",
+             _parallel ? "parallel" : "serial", kIterations);
+}
+
+void RunCompiledSubmissionContract() {
+    auto& device = RenderDevice::Get();
+    auto buffer = device.CreateBuffer<uint32>("compiled_contract", 1,
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST);
+    for (auto queue : {EQueueType::Graphics, EQueueType::Compute, EQueueType::Copy}) {
+        NativeSubmissionCapture native_capture;
+        ScopedNativeSubmissionObserver observer(native_capture);
+        for (bool inferred_barrier : {false, true}) {
+            std::atomic<uint32> ordinary{0}, success{0};
+            auto done = device.CreateFence();
+            CommandList rejected(queue);
+            if (inferred_barrier) {
+                rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+                rejected.BufferBarriers(queue, queue, EPassType::Copy,
+                    Array<ReadBuffer>{{buffer->GetView(), EBufferState::TRANSFER}}, {});
+            } else {
+                rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::BackendTracked);
+                rejected.PushScope("NoncompiledContract");
+                rejected.PopScope();
+            }
+            rejected.AddCallback([&] { ++ordinary; });
+            rejected.AddSuccessCallback([&] { ++success; });
+            auto submit = rejected.Submit();
+            submit.Signal(done.Get(), 1);
+            RHIExecutor::Get().Submit(queue, std::move(submit), ERHIExecSubmitFlags::FlushGPU);
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            if (!ResourceCast(done.Get())->IsRejected(1) || ResourceCast(done.Get())->IsFailed() ||
+                ordinary != 1 || success != 0 || native_capture.Count() != 0) {
+                throw std::runtime_error("noncompiled or inferred submission escaped pre-record rejection");
+            }
+        }
+        auto done = device.CreateFence();
+        CommandList recovered(queue);
+        recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        recovered.PushScope("CompiledContractRecovery");
+        recovered.PopScope();
+        auto submit = recovered.Submit();
+        submit.Signal(done.Get(), 1);
+        RHIExecutor::Get().Submit(queue, std::move(submit), ERHIExecSubmitFlags::FlushGPU);
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (!ResourceCast(done.Get())->Wait(1) || native_capture.Count() != 1) {
+            throw std::runtime_error("compiled contract rejection latched the runtime");
+        }
+    }
+    LOG_INFO("[TESTCASE][PASS] name=CompiledSubmissionContract queues=Graphics,Compute,Copy "
+             "noncompiled=rejected inferred=rejected native_rejected=0 callbacks=exactly_once recovery=accepted");
+}
+
+void RunCompiledSubrangeSubmission(EQueueType queue) {
+    auto&                  device      = RenderDevice::Get();
+    const auto             usage       = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+    auto                   source      = device.CreateBuffer<uint32>("compiled_source", 64, usage);
+    auto                   destination = device.CreateBuffer<uint32>("compiled_destination", 64, usage);
+    std::array<uint32, 16> values{};
+    for (uint32 i = 0; i < values.size(); ++i) {
+        values[i] = 0xC0110000u + i * 17u;
+    }
+    BufferView source_range(source.Get(), 32, values.size(), sizeof(uint32));
+    BufferView destination_range(destination.Get(), 96, values.size(), sizeof(uint32));
+    const auto undefined = BarrierState::Buffer(ERHIPipelineStageFlags::PS_NONE, ERHIAccessFlags::UNDEFINED);
+    const auto write =
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE);
+    const auto read =
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ);
+
+    CommandList upload(queue);
+
+    upload.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    upload.Barriers(std::array{BarrierCreateInfo::Transition(source_range, undefined, write)}, queue, queue);
+    upload.CopyFrom(OwnedBytes(values), source_range, "CompiledPartialUpload");
+    upload.Barriers(std::array{BarrierCreateInfo::Transition(source_range, write, read)}, queue, queue);
+    auto first = upload.Submit();
+    if (first.resource_state_ownership != ERHIResourceStateOwnership::Compiled) {
+        throw std::runtime_error("explicit barriers downgraded compiled ownership");
+    }
+    RHIExecutor::Get().Submit(queue, std::move(first), ERHIExecSubmitFlags::FlushGPU);
+
+    // The second submit consumes the first one's exported state without a host
+    // wait. Partial barriers also make any accidental legacy inference fail.
+    CommandList consume(queue);
+    consume.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    consume.Barriers(
+        std::array{BarrierCreateInfo::Transition(destination_range, undefined, write)}, queue, queue
+    );
+    consume.CopyFrom(source_range, destination_range, "CompiledPartialCopy");
+    consume.Barriers(std::array{BarrierCreateInfo::Transition(destination_range, write, read)}, queue, queue);
+    auto future = consume.Readback(destination_range);
+    RHIExecutor::Get().Submit(queue, consume.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    const auto result = future.Get();
+    const auto actual = result.CopyAs<uint32>();
+    if (result.status != ReadbackStatus::Ready || !actual || actual->size() != values.size() ||
+        !std::equal(actual->begin(), actual->end(), values.begin())) {
+        throw std::runtime_error("compiled cross-submit subrange readback mismatch");
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     LOG_INFO(
-        "[TESTCASE][PASS] name=ParallelRecordOrderedReadback mode={} worker_fault={} "
-        "production_gate={} production_heavy={} iterations={}",
-        _parallel ? "parallel" : "serial",
-        _inject_worker_failure,
-        _production_gate,
-        _production_heavy,
-        kIterations
+        "[TESTCASE][PASS] name=CompiledSubrangeSubmission queue={} submits=2 readback=verified",
+        static_cast<uint32>(queue)
     );
 }
 
-void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
+void RunCompiledKnownBindlessAccess(ShaderManager& manager, bool parallel, bool publish_in_graph = false) {
     auto& device = RenderDevice::Get();
-    const EBufferUsageFlags usage =
-        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
-    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    auto pipeline = manager.Compute<CompiledBindlessPipeline>("test/ShaderBindlessAddress.hlsl", "ComputeMain");
+    const auto buffer_usage = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
+                              EBufferUsageFlags::TRANSFER_SRC;
+    auto input   = device.CreateBuffer<uint32>("compiled_bindless_input", 1, buffer_usage);
+    auto output  = device.CreateBuffer<float>("compiled_bindless_output", 1, buffer_usage);
+    auto texture = device.CreateTexture(
+        "compiled_bindless_texture",
+        Extent3D(1, 1, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+    );
+    auto       table = device.CreateBindlessArray();
+    const uint32 index = table->AllocateBuffer(input->GetView());
+    if (table->AllocateTexture(texture->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)) != index + 1) {
+        throw std::runtime_error("bindless address fixture requires consecutive buffer/texture handles");
+    }
+    if (!publish_in_graph) {
+        // Stable-table case: publication is complete before entering the graph.
+        CommandList publish;
+        publish.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        publish.UpdateBindlessArray(table);
+        RHIExecutor::Get().Submit(EQueueType::Graphics, publish.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    }
 
-    BufferRef source =
-        device.CreateBuffer<uint32>("active_rdg_source", kElementCount, usage);
-    BufferRef destination =
-        device.CreateBuffer<uint32>("active_rdg_destination", kElementCount, usage);
+    RenderGraph graph("CompiledKnownBindlessAccess");
+    const auto  input_handle   = graph.ImportBuffer("Input", input, {.byte_size = input->GetByteSize()});
+    const auto  output_handle  = graph.ImportBuffer("Output", output, {.byte_size = output->GetByteSize()});
+    const auto  texture_handle = graph.ImportTexture("Texture", texture, {});
+    CompiledBindlessParameters parameters{input_handle, texture_handle, output_handle, index};
+    if (publish_in_graph) {
+        const auto publication = graph.ImportToken("BindlessPublication", table.Get());
+        parameters.publication = RGTokenAccess<RenderGraph::AccessMode::Read>{publication};
+        graph.AddRecordPass(
+            "PublishBindless",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                    .Write(publication).TranslateSerialControl();
+            },
+            [=](CommandList& commands) { commands.UpdateBindlessArray(table); },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+    }
+    for (auto handle : {input_handle, output_handle}) {
+        graph.SetInitialState(
+            handle,
+            RenderGraph::BufferBoundary::Undefined,
+            RenderGraph::QueueRole::None,
+            RenderGraph::AccessMode::None
+        );
+    }
+    graph.SetInitialState(
+        texture_handle,
+        RenderGraph::TextureBoundary::Undefined,
+        RenderGraph::QueueRole::None,
+        RenderGraph::AccessMode::None
+    );
+    graph.AddRecordPass(
+        "ProduceTargets",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(input_handle, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(texture_handle, RenderGraph::TextureAccessType::TransferDestination);
+        },
+        [=](CommandList& commands) {
+            commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{41}), input->GetView());
+            commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{0xffffffffu}), texture->GetView());
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
+    graph.AddRecordPass(
+        "ReadKnownBindlessTargets",
+        parameters,
+        [](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute);
+        },
+        [=, &pipeline](CommandList& commands, const CompiledBindlessParameters& parameters) {
+            commands.Compute(pipeline, output, table, parameters.index, 2.0f).Dispatch(uint3(1, 1, 1));
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
+    ReadbackFuture readback;
+    graph.AddRecordPass(
+        "Readback",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Read(output_handle, RenderGraph::BufferAccessType::TransferSource)
+                .SideEffect();
+        },
+        [&](CommandList& commands) {
+            readback = commands.Readback(output->GetView());
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
+    graph.Export(
+        input_handle,
+        RenderGraph::BufferAccessType::ShaderRead,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        texture_handle,
+        RenderGraph::TextureAccessType::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    graph.Export(
+        output_handle,
+        RenderGraph::BufferAccessType::TransferSource,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
+    );
+    if (!graph.Compile() || !graph.ExecuteFrontendRecordingPlan(
+                                {},
+                                parallel,
+                                {},
+                                RenderGraph::ActiveRecordingOptions{
+                                    .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled
+                                }
+                            )) {
+        throw std::runtime_error("known bindless graph failed: " + graph.GetCompileError());
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    const auto result = readback.Get().CopyAs<float>();
+    if (!result || result->size() != 1 || result->front() != 84.0f) {
+        throw std::runtime_error("compiled bindless targets were not synchronized by their typed declarations"
+        );
+    }
+    LOG_INFO("[TESTCASE][PASS] name=CompiledKnownBindlessAccess targets=buffer,texture "
+             "publication={} result=84", publish_in_graph ? "graph-token" : "completed-before-graph");
+}
+
+void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
+    using Graph = RenderGraph;
+    struct Parameters {
+        RGAccessArray<RGBufferAccess<Graph::AccessMode::Read, Graph::BufferAccessType::ShaderRead>> buffers;
+        RGAccessArray<RGTextureAccess<Graph::AccessMode::Read, Graph::TextureAccessType::Sampled>>  textures;
+        RGBufferAccess<Graph::AccessMode::Read, Graph::BufferAccessType::ShaderRead>                selector;
+        RGBufferAccess<Graph::AccessMode::Write, Graph::BufferAccessType::Storage>                  output;
+        RGTokenAccess<Graph::AccessMode::Read> publication;
+
+        void DeclareRGAccess(RGParameterAccessCollector& accesses) const {
+            accesses.Add(buffers);
+            accesses.Add(textures);
+            accesses.Add(selector);
+            accesses.Add(output);
+            accesses.Add(publication);
+        }
+    };
+    auto& device = RenderDevice::Get();
+    auto  pipeline =
+        manager.Compute<CompiledBindlessPipeline>("test/ShaderBindlessAddress.hlsl", "IndirectMain");
+    const auto usage = EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
+                       EBufferUsageFlags::TRANSFER_SRC;
+    auto                          table          = device.CreateBindlessArray();
+    auto                          selector       = device.CreateBuffer<uint32>("bindless_selector", 1, usage);
+    const uint32                  selector_index = table->AllocateBuffer(selector->GetView());
+    Array<BufferRef>              buffers;
+    Array<TextureRef>             textures;
+    Array<uint32>                 indices;
+    std::array<ReadbackFuture, 2> readbacks;
+    size_t                        previous_count = 0;
+    for (uint32 generation = 0; generation < readbacks.size(); ++generation) {
+        // Publish two candidates, then extend that same table while the first
+        // graph may still be on the GPU. No host completion wait separates them.
+        const uint32 additions = generation == 0 ? 2 : 1;
+        for (uint32 i = 0; i < additions; ++i) {
+            buffers.push_back(device.CreateBuffer<uint32>("bindless_candidate", 1, usage));
+            textures.push_back(device.CreateTexture(
+                "bindless_candidate_texture",
+                Extent3D(1, 1, 1),
+                PF_R8G8B8A8_UNORM,
+                ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+            ));
+            const auto index = table->AllocateBuffer(buffers.back()->GetView());
+            if (table->AllocateTexture(textures.back()->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE)) !=
+                index + 1) {
+                throw std::runtime_error("candidate fixture requires adjacent buffer/texture handles");
+            }
+            indices.push_back(index);
+        }
+        auto       output = device.CreateBuffer<float>("bindless_candidate_output", 1, usage);
+        Graph      graph("CompiledBindlessCandidates");
+        Parameters params;
+        params.selector    = graph.ImportBuffer("Selector", selector, {.byte_size = selector->GetByteSize()});
+        params.output      = graph.ImportBuffer("Output", output, {.byte_size = output->GetByteSize()});
+        params.publication = graph.ImportToken("TablePublication", table.Get());
+        auto initial_buffer = [&](Graph::BufferHandle handle, bool existing) {
+            graph.SetInitialState(
+                handle,
+                existing ? Graph::BufferBoundaryState{Graph::BufferAccessType::ShaderRead} :
+                           Graph::BufferBoundaryState{Graph::BufferBoundary::Undefined},
+                existing ? Graph::QueueRole::Graphics : Graph::QueueRole::None,
+                existing ? Graph::AccessMode::Read : Graph::AccessMode::None
+            );
+        };
+        initial_buffer(params.selector.resource, generation != 0);
+        initial_buffer(params.output.resource, false);
+        for (size_t i = 0; i < buffers.size(); ++i) {
+            const auto buffer = graph.ImportBuffer(
+                std::format("Candidate{}", i), buffers[i], {.byte_size = buffers[i]->GetByteSize()}
+            );
+            const auto texture  = graph.ImportTexture(std::format("CandidateTexture{}", i), textures[i], {});
+            const bool existing = i < previous_count;
+            initial_buffer(buffer, existing);
+            graph.SetInitialState(
+                texture,
+                existing ? Graph::TextureBoundaryState{Graph::TextureAccessType::Sampled} :
+                           Graph::TextureBoundaryState{Graph::TextureBoundary::Undefined},
+                existing ? Graph::QueueRole::Graphics : Graph::QueueRole::None,
+                existing ? Graph::AccessMode::Read : Graph::AccessMode::None
+            );
+            params.buffers.emplace_back(buffer);
+            params.textures.emplace_back(texture);
+            graph.Export(
+                buffer,
+                Graph::BufferAccessType::ShaderRead,
+                Graph::QueueRole::Graphics,
+                Graph::AccessMode::Read
+            );
+            graph.Export(
+                texture, Graph::TextureAccessType::Sampled, Graph::QueueRole::Graphics, Graph::AccessMode::Read
+            );
+        }
+        graph.AddRecordPass(
+            "ProduceCandidates",
+            [=](Graph::PassBuilder& builder) {
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Transfer)
+                    .Write(params.selector.resource, Graph::BufferAccessType::TransferDestination);
+                for (const auto& access : params.buffers)
+                    builder.Write(access.resource, Graph::BufferAccessType::TransferDestination);
+                for (const auto& access : params.textures)
+                    builder.Write(access.resource, Graph::TextureAccessType::TransferDestination);
+            },
+            [=](CommandList& commands) {
+                commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{indices.back()}), selector->GetView());
+                for (size_t i = 0; i < buffers.size(); ++i) {
+                    commands.CopyFrom(
+                        OwnedBytes(std::array<uint32, 1>{41 + static_cast<uint32>(i)}), buffers[i]->GetView()
+                    );
+                    commands.CopyFrom(OwnedBytes(std::array<uint32, 1>{0xffffffffu}), textures[i]->GetView());
+                }
+            },
+            Graph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.AddRecordPass(
+            "PublishCandidates",
+            [=](Graph::PassBuilder& builder) {
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Compute)
+                    .Write(params.publication.resource)
+                    .TranslateSerialControl();
+            },
+            [=](CommandList& commands) {
+                commands.UpdateBindlessArray(table);
+            },
+            Graph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.AddRecordPass(
+            "ReadGpuSelectedCandidate",
+            params,
+            [](Graph::PassBuilder& builder) {
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Compute);
+            },
+            [=, &pipeline](CommandList& commands, const Parameters&) {
+                commands.Compute(pipeline, output, table, selector_index, 2.0f).Dispatch(uint3(1, 1, 1));
+            },
+            Graph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.AddRecordPass(
+            "Readback",
+            [=](Graph::PassBuilder& builder) {
+                builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Transfer)
+                    .Read(params.output.resource, Graph::BufferAccessType::TransferSource)
+                    .SideEffect();
+            },
+            [&, output, generation](CommandList& commands) {
+                readbacks[generation] = commands.Readback(output->GetView());
+            },
+            Graph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.Export(
+            params.selector.resource,
+            Graph::BufferAccessType::ShaderRead,
+            Graph::QueueRole::Graphics,
+            Graph::AccessMode::Read
+        );
+        graph.Export(
+            params.output.resource,
+            Graph::BufferAccessType::TransferSource,
+            Graph::QueueRole::Graphics,
+            Graph::AccessMode::Read
+        );
+        if (!graph.Compile() ||
+            !graph.ExecuteFrontendRecordingPlan(
+                {},
+                parallel,
+                {},
+                Graph::ActiveRecordingOptions{
+                    .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled
+                }
+            )) {
+            throw std::runtime_error("compiled bindless candidate graph failed: " + graph.GetCompileError());
+        }
+        previous_count = buffers.size();
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    for (size_t i = 0; i < readbacks.size(); ++i) {
+        const auto actual = readbacks[i].Get().CopyAs<float>();
+        if (!actual || actual->size() != 1 || actual->front() != 86.0f + 2.0f * i) {
+            throw std::runtime_error("GPU-selected bindless candidate readback mismatch");
+        }
+    }
+    // Free-only updates have no shuffle payload but must still finalize through
+    // the existing completion protocol on the compiled path.
+    table->UnbindBuffer(selector_index);
+    for (const auto index : indices) {
+        table->UnbindBuffer(index);
+        table->UnbindTexture(index + 1);
+    }
+    CommandList retire;
+    retire.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    retire.UpdateBindlessArray(table);
+    RHIExecutor::Get().Submit(EQueueType::Graphics, retire.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    const auto recycled = table->AllocateBuffer(buffers.front()->GetView());
+    if (recycled == 0 || recycled > indices.back() + 1) {
+        throw std::runtime_error("compiled free-only update did not retire its bindless slots");
+    }
+    table->UnbindBuffer(recycled);
+    // Destroying an unpublished update uses the existing discard path.
+    CommandList discard;
+    discard.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    discard.UpdateBindlessArray(table);
+    LOG_INFO("[TESTCASE][PASS] name=CompiledBindlessCandidates graphs=2 gpu-indexed=true "
+             "results=86,88 slots=recycled");
+}
+
+void ExecutePostprocessRegressionGraph(RenderGraph& graph) {
+    CommandList commands;
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(commands, false)) {
+        throw std::runtime_error("postprocess regression graph failed: " + graph.GetCompileError());
+    }
+    RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+}
+
+void RunTaaNeighborhoodMotionRegression(ShaderManager& manager) {
+    using Raytracing::TAAPipeline;
+    auto& device = RenderDevice::Get();
+    auto pipeline = manager.Compute<TAAPipeline>("pipelines/raytracing/postprocess/TAAPass.hlsl");
+    constexpr uint32 width = 64, height = 64;
+    constexpr uint32 target_x = 24, target_y = 24;
+    std::array<float4, width * height> colors, history;
+    colors.fill(float4(0.2f, 0.2f, 0.2f, 1.f));
+    for (uint32 y = 0; y < height; ++y) {
+        for (uint32 x = 0; x < width; ++x) {
+            history[y * width + x] = float4(0.1f + x * 0.01f, 0.1f + y * 0.01f, 0.3f, 0.f);
+        }
+    }
+    TAAParams params{};
+    params.in_view_size = params.out_view_size = float2(width, height);
+    params.in_pixel_offset = float2(0.0625f, -0.1875f); // First default MSAA jitter sample.
+    params.out_texture_size_inv = float2(1.f / width, 1.f / height);
+    params.input_over_output_size = params.output_over_input_size = float2(1.f);
+    params.clamping_factor = -1.f;
+    params.new_frame_weight = 0.04f;
+    params.pqc = 200.f;
+    params.inv_pqc = 1.f / params.pqc;
+
+    auto run = [&](const std::array<float2, width * height>& motions) {
+        const auto sampled_usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST;
+        const auto output_usage = ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC;
+        auto input = device.CreateTexture("taa_input", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+        auto motion = device.CreateTexture("taa_motion", Extent3D(width, height, 1), PF_R32G32_SFLOAT, sampled_usage);
+        auto previous = device.CreateTexture("taa_history", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+        auto output = device.CreateTexture("taa_output", Extent3D(width, height, 1), PF_R16G16B16A16_SFLOAT, output_usage);
+        auto feedback = device.CreateTexture("taa_feedback", Extent3D(width, height, 1), PF_R16G16B16A16_SNORM, output_usage);
+        auto constants = device.CreateBuffer<Moer::byte>("taa_params", sizeof(params), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RenderGraph graph("TaaNeighborhoodMotionRegression");
+        const auto input_handle = graph.ImportTexture("Input", input, {});
+        const auto motion_handle = graph.ImportTexture("Motion", motion, {});
+        const auto previous_handle = graph.ImportTexture("Previous", previous, {});
+        const auto output_handle = graph.ImportTexture("Output", output, {});
+        const auto feedback_handle = graph.ImportTexture("Feedback", feedback, {});
+        const auto constants_handle = graph.ImportBuffer("Params", constants, {.byte_size = sizeof(params)});
+        for (const auto handle : {input_handle, motion_handle, previous_handle, output_handle, feedback_handle}) {
+            graph.SetInitialState(handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        }
+        graph.SetInitialState(constants_handle, RenderGraph::BufferBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        graph.AddRecordPass(
+            "Upload",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(input_handle, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(motion_handle, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(previous_handle, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(constants_handle, RenderGraph::BufferAccessType::TransferDestination);
+            },
+            [&](CommandList& commands) {
+                commands.CopyFrom(std::as_bytes(std::span(colors)), input->GetView());
+                commands.CopyFrom(std::as_bytes(std::span(motions)), motion->GetView());
+                commands.CopyFrom(std::as_bytes(std::span(history)), previous->GetView());
+                commands.CopyFrom(std::as_bytes(std::span(&params, 1)), constants->GetView());
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.AddRecordPass(
+            "TAA",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                    .Read(input_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Read(motion_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Read(previous_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Read(constants_handle, RenderGraph::BufferAccessType::ShaderRead)
+                    .Write(output_handle, RenderGraph::TextureAccessType::Storage)
+                    .Write(feedback_handle, RenderGraph::TextureAccessType::Storage);
+            },
+            [&](CommandList& commands) {
+                commands.Compute(pipeline, constants, input, motion, previous, Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE), output, feedback)
+                    .Dispatch(uint3(width / 16, height / 16, 1));
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        ReadbackFuture readback;
+        graph.AddRecordPass(
+            "Readback",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(output_handle, RenderGraph::TextureAccessType::TransferSource).SideEffect();
+            },
+            [&](CommandList& commands) { readback = commands.Readback(output->GetView()); },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.Export(output_handle, RenderGraph::TextureAccessType::TransferSource, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        for (const auto handle : {input_handle, motion_handle, previous_handle}) {
+            graph.Export(handle, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        }
+        graph.Export(feedback_handle, RenderGraph::TextureAccessType::Storage, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Write);
+        graph.Export(constants_handle, RenderGraph::BufferAccessType::ShaderRead, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        ExecutePostprocessRegressionGraph(graph);
+        const auto pixels = readback.Get().CopyAs<uint16>();
+        if (!pixels || pixels->size() != width * height * 4) {
+            throw std::runtime_error("TAA regression readback is invalid");
+        }
+        const size_t first_channel = (target_y * width + target_x) * 4;
+        return std::array<uint16, 3>{(*pixels)[first_channel], (*pixels)[first_channel + 1], (*pixels)[first_channel + 2]};
+    };
+    std::array<float2, width * height> motions{};
+    const auto stationary = run(motions);
+    // This tile's shared [0][0] is source (15,14), outside target (24,24)'s 3x3 neighborhood.
+    motions[14 * width + 15] = float2(2.f, 0.f);
+    if (run(motions) != stationary) {
+        throw std::runtime_error("TAA zero-motion neighborhood borrowed motion from the tile origin");
+    }
+    motions.fill(float2(0.f));
+    motions[target_y * width + target_x] = float2(2.f, 0.f);
+    const auto neighborhood_motion = run(motions);
+    motions.fill(float2(2.f, 0.f));
+    if (neighborhood_motion == stationary || run(motions) != neighborhood_motion) {
+        throw std::runtime_error("TAA failed to select the longest motion inside its neighborhood");
+    }
+    LOG_INFO("[TESTCASE][PASS] name=TaaNeighborhoodMotion zero=stationary outside=ignored inside=selected");
+}
+
+void RunSsrTraceExitRegression(ShaderManager& manager) {
+    auto& device = RenderDevice::Get();
+    GfxPsoCreateInfo pipeline_info(RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)});
+    auto pipeline = manager.Raster().Vertex("core/utils/FullScreenQuad.hlsl")
+        .Pixel("test/ShaderSsrTraceRegression.hlsl").Build<SsrTraceRegressionPipeline>(std::move(pipeline_info));
+    struct TraceCase {
+        const char* name;
+        uint32 samples;
+        float3 origin;
+        float step;
+        float depth;
+        float clip_w;
+        bool expected_hit;
+    };
+    const TraceCase cases[] = {
+        {"zero-budget", 0, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 1.f, false},
+        {"budget-exhausted", 3, float3(0.f, 0.f, 0.5f), 0.1f, 0.f, 1.f, false},
+        {"outside-viewport", 4, float3(0.95f, 0.f, 0.5f), 0.1f, 0.52f, 1.f, false},
+        {"outside-depth", 4, float3(0.f, 0.f, 1.1f), 0.1f, 0.52f, 1.f, false},
+        {"zero-projection-w", 4, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 0.f, false},
+        {"behind-camera", 4, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, -1.f, false},
+        {"refinement-outside", 1, float3(-1.3f, 0.f, 0.5f), 0.4f, 0.52f, 1.f, false},
+        {"refined-depth-hit", 1, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 1.f, true},
+    };
+    for (const auto& test : cases) {
+        auto depth = device.CreateTexture(
+            "ssr_depth", Extent3D(1, 1, 1), PF_R32_SFLOAT,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+        );
+        auto output = device.CreateTexture(
+            "ssr_trace_result", Extent3D(2, 2, 1), PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+        );
+        auto table = device.CreateBindlessArray();
+        SsrPipelineBindlessParam params{};
+        params.world2clip = float4x4::Identity();
+        params.world2clip[3][3] = test.clip_w;
+        params.camera_position = test.origin;
+        params.near_clip = 0.1f;
+        params.far_clip = 10.f;
+        params.ssr_step_base = test.step;
+        params.ssr_sample_count = test.samples;
+        params.depth_tex = table->AllocateTexture(depth->GetView(), Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
+        CommandList publish;
+        publish.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        publish.UpdateBindlessArray(table);
+        RHIExecutor::Get().Submit(EQueueType::Graphics, publish.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+        RenderGraph graph("SsrTraceExitRegression");
+        const auto depth_handle = graph.ImportTexture("Depth", depth, {});
+        const auto output_handle = graph.ImportTexture("Result", output, {});
+        graph.SetInitialState(depth_handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        graph.SetInitialState(output_handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        graph.AddRecordPass(
+            "UploadDepth",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(depth_handle, RenderGraph::TextureAccessType::TransferDestination);
+            },
+            [&](CommandList& commands) { commands.CopyFrom(std::as_bytes(std::span(&test.depth, 1)), depth->GetView()); },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.AddRecordPass(
+            "Trace",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                    .Read(depth_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Write(output_handle, RenderGraph::TextureAccessType::ColorAttachment);
+            },
+            [&](CommandList& commands) {
+                commands.Gfx(pipeline, table, params).Draw("SSR Trace Regression", Rect2D(0, 0, 2, 2),
+                    Raster::RasterTool::GetFullScreenDrawDatas(), ColorAttachment(output));
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        ReadbackFuture readback;
+        graph.AddRecordPass(
+            "Readback",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(output_handle, RenderGraph::TextureAccessType::TransferSource).SideEffect();
+            },
+            [&](CommandList& commands) { readback = commands.Readback(output->GetView()); },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.Export(depth_handle, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        graph.Export(output_handle, RenderGraph::TextureAccessType::TransferSource, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        ExecutePostprocessRegressionGraph(graph);
+        const auto result = readback.Get().CopyAs<float>();
+        if (!result || result->size() != 16) {
+            throw std::runtime_error(std::string("SSR trace exit mismatch: ") + test.name);
+        }
+        for (size_t first = 0; first < result->size(); first += 4) {
+            if ((*result)[first] != (test.expected_hit ? 1.f : 0.f)) {
+                throw std::runtime_error(std::string("SSR trace exit mismatch: ") + test.name);
+            }
+            if (test.expected_hit) {
+                // Four unchanged binary-refinement steps end at x=0.1/16, projected onto [0,1].
+                if (std::abs((*result)[first + 1] - 0.503125f) > 1e-6f || std::abs((*result)[first + 2] - 0.5f) > 1e-6f) {
+                    throw std::runtime_error("SSR refined hit UV changed");
+                }
+            } else if ((*result)[first + 1] != 0.f || (*result)[first + 2] != 0.f) {
+                throw std::runtime_error(std::string("SSR miss published a candidate UV: ") + test.name);
+            }
+        }
+        LOG_INFO("[TESTCASE][PASS] name=SsrTraceExit case={} hit={}", test.name, test.expected_hit);
+    }
+}
+
+void RunAoCompositeRgbRegression(ShaderManager& manager) {
+    auto& device = RenderDevice::Get();
+    auto pipeline = manager.Compute<AoCompositeRegressionPipeline>("pipelines/postprocess/lighting_effects/AoComposite.hlsl");
+    constexpr uint32 width = 4, height = 4;
+    struct ModeCase {
+        uint32 mode;
+        const char* name;
+        float3 expected;
+    };
+    const ModeCase modes[] = {
+        {uint32(EAoMode::SSDO), "SSDO", float3(0.625f, 1.25f, 2.f)},
+        {uint32(EAoMode::RTAO), "RTAO", float3(0.5f, 1.f, 1.5f)},
+        {uint32(EAoMode::SSDO_AO_ONLY), "SSDO_AO_ONLY", float3(0.5f)},
+    };
+    std::array<float4, width * height> colors, normals;
+    std::array<float, width * height> depths;
+    colors.fill(float4(1.f, 2.f, 3.f, 1.f));
+    normals.fill(float4(0.5f, 0.5f, 1.f, 1.f));
+    depths.fill(0.5f);
+    for (bool half_resolution : {false, true}) {
+        const uint32 ao_width = half_resolution ? width / 2 : width;
+        const uint32 ao_height = half_resolution ? height / 2 : height;
+        const Array<float> ao_values(ao_width * ao_height, 0.5f);
+        const Array<float4> indirect_values(ao_width * ao_height, float4(0.125f, 0.25f, 0.5f, 0.f));
+        for (const auto& test : modes) {
+            const auto sampled_usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST;
+            auto color = device.CreateTexture("ao_color", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+            auto normal = device.CreateTexture("ao_normal", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+            auto depth = device.CreateTexture("ao_depth", Extent3D(width, height, 1), PF_R32_SFLOAT, sampled_usage);
+            auto ao = device.CreateTexture("ao_scalar", Extent3D(ao_width, ao_height, 1), PF_R32_SFLOAT, sampled_usage);
+            auto indirect = device.CreateTexture("ao_indirect", Extent3D(ao_width, ao_height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+            auto output = device.CreateTexture("ao_composite", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT,
+                ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC);
+            auto table = device.CreateBindlessArray();
+            const Sampler sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE);
+            AoCompositeParam params{};
+            params.full_resolution = float2(width, height);
+            params.inv_full_resolution = float2(1.f / width, 1.f / height);
+            params.ao_resolution = float2(ao_width, ao_height);
+            params.ao_mode = test.mode;
+            params.is_half_resolution = half_resolution;
+            params.color_tex = table->AllocateTexture(color->GetView(), sampler);
+            params.ao_tex = table->AllocateTexture(ao->GetView(), sampler);
+            params.indirect_tex = table->AllocateTexture(indirect->GetView(), sampler);
+            params.depth_tex = table->AllocateTexture(depth->GetView(), sampler);
+            params.normal_tex = table->AllocateTexture(normal->GetView(), sampler);
+            CommandList publish;
+            publish.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+            publish.UpdateBindlessArray(table);
+            RHIExecutor::Get().Submit(EQueueType::Graphics, publish.Submit(), ERHIExecSubmitFlags::FlushGPU);
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+            RenderGraph graph("AoCompositeRgbRegression");
+            const auto color_handle = graph.ImportTexture("Color", color, {});
+            const auto normal_handle = graph.ImportTexture("Normal", normal, {});
+            const auto depth_handle = graph.ImportTexture("Depth", depth, {});
+            const auto ao_handle = graph.ImportTexture("AO", ao, {});
+            const auto indirect_handle = graph.ImportTexture("Indirect", indirect, {});
+            const auto output_handle = graph.ImportTexture("Result", output, {});
+            const std::array inputs{color_handle, normal_handle, depth_handle, ao_handle, indirect_handle};
+            for (const auto handle : inputs) {
+                graph.SetInitialState(handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+            }
+            graph.SetInitialState(output_handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+            graph.AddRecordPass(
+                "Upload",
+                [=](RenderGraph::PassBuilder& builder) {
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer);
+                    for (const auto handle : inputs) {
+                        builder.Write(handle, RenderGraph::TextureAccessType::TransferDestination);
+                    }
+                },
+                [&](CommandList& commands) {
+                    commands.CopyFrom(std::as_bytes(std::span(colors)), color->GetView());
+                    commands.CopyFrom(std::as_bytes(std::span(normals)), normal->GetView());
+                    commands.CopyFrom(std::as_bytes(std::span(depths)), depth->GetView());
+                    commands.CopyFrom(std::as_bytes(std::span(ao_values)), ao->GetView());
+                    commands.CopyFrom(std::as_bytes(std::span(indirect_values)), indirect->GetView());
+                },
+                RenderGraph::PassRecordPolicy::ParallelAllowed
+            );
+            graph.AddRecordPass(
+                "Composite",
+                [=](RenderGraph::PassBuilder& builder) {
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute);
+                    for (const auto handle : inputs) {
+                        builder.Read(handle, RenderGraph::TextureAccessType::Sampled);
+                    }
+                    builder.Write(output_handle, RenderGraph::TextureAccessType::Storage);
+                },
+                [&](CommandList& commands) { commands.Compute(pipeline, params, output, table).Dispatch(uint3(1, 1, 1)); },
+                RenderGraph::PassRecordPolicy::ParallelAllowed
+            );
+            ReadbackFuture readback;
+            graph.AddRecordPass(
+                "Readback",
+                [=](RenderGraph::PassBuilder& builder) {
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                        .Read(output_handle, RenderGraph::TextureAccessType::TransferSource).SideEffect();
+                },
+                [&](CommandList& commands) { readback = commands.Readback(output->GetView()); },
+                RenderGraph::PassRecordPolicy::ParallelAllowed
+            );
+            for (const auto handle : inputs) {
+                graph.Export(handle, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+            }
+            graph.Export(output_handle, RenderGraph::TextureAccessType::TransferSource, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+            ExecutePostprocessRegressionGraph(graph);
+            const auto pixels = readback.Get().CopyAs<float>();
+            if (!pixels || pixels->size() != width * height * 4) {
+                throw std::runtime_error("AO composite RGB readback is invalid");
+            }
+            for (size_t first = 0; first < pixels->size(); first += 4) {
+                if (std::abs((*pixels)[first] - test.expected.x) > 1e-5f ||
+                    std::abs((*pixels)[first + 1] - test.expected.y) > 1e-5f ||
+                    std::abs((*pixels)[first + 2] - test.expected.z) > 1e-5f || (*pixels)[first + 3] != 1.f) {
+                    throw std::runtime_error(std::string("AO composite RGB mismatch: ") + test.name +
+                        (half_resolution ? " half-resolution" : " full-resolution"));
+                }
+            }
+            LOG_INFO("[TESTCASE][PASS] name=AoCompositeRgb mode={} half_resolution={}", test.name, half_resolution);
+        }
+    }
+}
+
+void RunCompiledBloom(ShaderManager& manager, bool parallel) {
+    using namespace Moer::Render::Raster;
+    using Graph                               = RenderGraph;
+    auto&                              device = RenderDevice::Get();
+    BloomPass                          bloom(manager, PF_R32G32B32A32_SFLOAT);
+    constexpr uint32                   width = 64, height = 32;
+    std::array<float4, width * height> pixels{};
+    for (uint32 y = 0; y < height; ++y) {
+        for (uint32 x = 0; x < width; ++x) {
+            pixels[y * width + x] = float4(2.0f + 10.0f * (x % 8), 1.0f + 3.0f * y, 12.0f, 1.0f);
+        }
+    }
+    auto run = [&](uint32 mip_count, bool merge) {
+        const auto usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT |
+                           ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::TRANSFER_SRC;
+        auto input =
+            device.CreateTexture("bloom_scene", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, usage);
+        auto down = device.CreateTexture(
+            "bloom_down", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count
+        );
+        auto up = device.CreateTexture(
+            "bloom_up", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count
+        );
+        auto                  params = bloom.Prepare(true, {input, 0, {}}, {down, 0, {}}, {up, 0, {}});
+        Array<ReadbackFuture> readbacks;
+        auto                  readback = [&](CommandList& commands) {
+            readbacks.push_back(commands.Readback(input->GetView()));
+            for (uint32 mip = 0; mip < mip_count; ++mip)
+                readbacks.push_back(commands.Readback(down->GetView(mip, 1)));
+            // The last upsample mip is never produced or consumed.
+            for (uint32 mip = 0; mip + 1 < mip_count; ++mip)
+                readbacks.push_back(commands.Readback(up->GetView(mip, 1)));
+        };
+        {
+            Graph                     graph("CompiledBloom");
+            BloomPass::GraphResources resources{
+                .input            = graph.ImportTexture("Scene", input, {}),
+                .downsample_chain = graph.ImportTexture("Down", down, {.mip_count = mip_count}),
+                .upsample_chain   = graph.ImportTexture("Up", up, {.mip_count = mip_count})
+            };
+            for (auto resource : {resources.input, resources.downsample_chain, resources.upsample_chain}) {
+                graph.SetInitialState(
+                    resource, Graph::TextureBoundary::Undefined, Graph::QueueRole::None, Graph::AccessMode::None
+                );
+            }
+            graph.AddRecordPass(
+                "Upload",
+                [=](Graph::PassBuilder& builder) {
+                    builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Transfer)
+                        .Write(resources.input, Graph::TextureAccessType::TransferDestination);
+                },
+                [=](CommandList& commands) {
+                    commands.CopyFrom(OwnedBytes(pixels), input->GetView());
+                },
+                Graph::PassRecordPolicy::ParallelAllowed
+            );
+            auto prepared = graph.AddSetupPass("Bloom.Prepare", params, [](const auto& value) {
+                return value;
+            });
+            bloom.AddRecordPasses(graph, resources, prepared, mip_count);
+            graph.AddRecordPass(
+                "Readback",
+                [=](Graph::PassBuilder& builder) {
+                    builder.ExecuteOn(Graph::QueueRole::Graphics, Graph::GpuWorkType::Transfer)
+                        .Read(resources.input, Graph::TextureAccessType::TransferSource)
+                        .Read(resources.downsample_chain, Graph::TextureAccessType::TransferSource)
+                        .SideEffect();
+                    if (mip_count > 1) {
+                        builder.Read(
+                            resources.upsample_chain,
+                            Graph::TextureAccessType::TransferSource,
+                            Graph::TextureRange::Mips(0, mip_count - 1)
+                        );
+                    }
+                },
+                readback,
+                Graph::PassRecordPolicy::ParallelAllowed
+            );
+            graph.Export(
+                resources.input,
+                Graph::TextureAccessType::TransferSource,
+                Graph::QueueRole::Graphics,
+                Graph::AccessMode::Read
+            );
+            graph.Export(
+                resources.downsample_chain,
+                Graph::TextureAccessType::TransferSource,
+                Graph::QueueRole::Graphics,
+                Graph::AccessMode::Read
+            );
+            if (mip_count > 1) {
+                graph.Export(
+                    resources.upsample_chain,
+                    Graph::TextureAccessType::TransferSource,
+                    Graph::QueueRole::Graphics,
+                    Graph::AccessMode::Read,
+                    Graph::TextureRange::Mips(0, mip_count - 1)
+                );
+            }
+            if (!graph.Compile() || graph.GetCompiledPlan().frontend_record_units.size() != 2 * mip_count + 2) {
+                throw std::runtime_error("compiled bloom graph failed: " + graph.GetCompileError());
+            }
+            if (merge) {
+                CommandList commands;
+                commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+                if (!graph.RecordAndMergeFrontendCommands(commands, parallel)) {
+                    throw std::runtime_error("merged bloom graph failed: " + graph.GetCompileError());
+                }
+                RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+            } else if (!graph.ExecuteFrontendRecordingPlan(
+                           {},
+                           parallel,
+                           {},
+                           Graph::ActiveRecordingOptions{
+                               .enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled}
+                       )) {
+                throw std::runtime_error("compiled bloom graph failed: " + graph.GetCompileError());
+            }
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        const auto scene        = readbacks.front().Get().CopyAs<float>();
+        bool       added_energy = false;
+        if (scene && scene->size() == width * height * 4) {
+            for (size_t i = 0; i < pixels.size(); ++i) {
+                added_energy |= (*scene)[i * 4] > pixels[i].x + 0.001f;
+            }
+        }
+        if (!scene || scene->size() != width * height * 4 || !added_energy ||
+            !std::all_of(scene->begin(), scene->end(), [](float value) {
+                return std::isfinite(value);
+            })) {
+            throw std::runtime_error("bloom did not add finite highlight energy to the scene");
+        }
+        Array<Array<uint32>> snapshot;
+        for (auto& future : readbacks) {
+            auto data = future.Get().CopyAs<uint32>();
+            if (!data || data->empty())
+                throw std::runtime_error("bloom subresource readback failed");
+            snapshot.push_back(std::move(*data));
+        }
+        return snapshot;
+    };
+    for (const uint32 mip_count : {1u, 6u}) {
+        const auto reference = run(mip_count, false);
+        const auto merged = run(mip_count, true);
+        if (reference != merged) {
+            throw std::runtime_error("merged Bloom differs from active graph image or pyramid mips");
+        }
+        LOG_INFO(
+            "[TESTCASE][PASS] name=CompiledBloom mips={} stages={} pyramid=matched scene=matched merged=matched",
+            mip_count,
+            2 * mip_count
+        );
+    }
+}
+
+void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_bloom = false) {
+    using namespace Moer::Render::Raster;
+    auto& device = RenderDevice::Get();
+    constexpr uint32 width = 16;
+    constexpr uint32 height = 16;
+    auto             run    = [&](bool record_parallel) {
+        TonemappingPass pass(device, manager, PF_R32G32B32A32_SFLOAT);
+        auto            input = device.CreateTexture(
+            "tonemap_test_input",
+            Extent3D(width, height, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_DST
+        );
+        auto output = device.CreateTexture(
+            "tonemap_test_output",
+            Extent3D(width, height, 1),
+            PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+        );
+        std::array<float4, width * height> pixels{};
+        pixels.fill(with_bloom ? float4(32.0f, 24.0f, 12.0f, 1.0f) : float4(0.25f, 0.5f, 0.75f, 1.0f));
+        TonemappingPass::RecordParameters params{};
+        params.input                 = {input, 0, {}};
+        params.output                = {output, 0, {}};
+        params.histogram             = pass.GetHistogramBuffer();
+        params.exposure              = pass.GetExposureBuffer();
+        params.histogram_groups      = uint3(1, 1, 1);
+        params.shader.resolution     = uint2(width, height);
+        params.shader.resolution_inv = float2(1.0f / width, 1.0f / height);
+        params.shader.exposure_ev    = 1.0f;
+        auto& ae                     = params.shader.ae;
+        ae.enabled                   = 1;
+        ae.log2lum_to01_scale        = 1.0f / 16.0f;
+        ae.log2lum_to01_bias         = 0.5f;
+        ae.log2lum_to01_scale_inv    = 16.0f;
+        ae.log2lum_to01_bias_inv     = -8.0f;
+        ae.histogram_low_percentile  = 0.1f;
+        ae.histogram_high_percentile = 0.9f;
+        ae.min_adapted_luminance     = 0.001f;
+        ae.max_adapted_luminance     = 64.0f;
+        ae.eye_adaptation_speed_up   = 1.0f;
+        ae.eye_adaptation_speed_down = 1.0f;
+        ae.frame_time                = 0.1f;
+        ae.diff_log2_threshold       = 0.01f;
+
+        RenderGraph                     graph("CompiledTonemapping");
+        TonemappingPass::GraphResources resources{
+                           .input     = graph.ImportTexture("Input", input, {}),
+                           .histogram = graph.ImportBuffer(
+                "Histogram", params.histogram, {.byte_size = params.histogram->GetByteSize()}
+            ),
+                           .exposure = graph.ImportBuffer(
+                "Exposure", params.exposure, {.byte_size = params.exposure->GetByteSize()}
+            ),
+                           .tonemapping_output = graph.ImportTexture("Output", output, {}),
+        };
+        for (auto texture : {resources.input, resources.tonemapping_output}) {
+            graph.SetInitialState(
+                texture,
+                RenderGraph::TextureBoundary::Undefined,
+                RenderGraph::QueueRole::None,
+                RenderGraph::AccessMode::None
+            );
+        }
+        for (auto buffer : {resources.histogram, resources.exposure}) {
+            graph.SetInitialState(
+                buffer,
+                RenderGraph::BufferBoundary::Undefined,
+                RenderGraph::QueueRole::None,
+                RenderGraph::AccessMode::None
+            );
+        }
+        graph.AddRecordPass(
+            "Upload",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(resources.input, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(resources.exposure, RenderGraph::BufferAccessType::TransferDestination);
+            },
+            [=](CommandList& commands) {
+                commands.CopyFrom(OwnedBytes(pixels), input->GetView());
+                commands.CopyFrom(OwnedBytes(std::array<float, 1>{1.0f}), params.exposure->GetView());
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        UniquePtr<BloomPass> bloom;
+        if (with_bloom) {
+            constexpr uint32 mip_count = 4;
+            bloom                      = MakeUnique<BloomPass>(manager, PF_R32G32B32A32_SFLOAT);
+            const auto usage           = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::COLOR_ATTACHMENT;
+            auto       down            = device.CreateTexture(
+                "bloom_tonemap_down", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count
+            );
+            auto up = device.CreateTexture(
+                "bloom_tonemap_up", Extent3D(width, height, 1), PF_B10G11R11_UFLOAT_PACK32, usage, mip_count
+            );
+            BloomPass::GraphResources bloom_resources{
+                .input            = resources.input,
+                .downsample_chain = graph.ImportTexture("BloomDown", down, {.mip_count = mip_count}),
+                .upsample_chain   = graph.ImportTexture("BloomUp", up, {.mip_count = mip_count})
+            };
+            for (const auto chain : {bloom_resources.downsample_chain, bloom_resources.upsample_chain}) {
+                graph.SetInitialState(
+                    chain,
+                    RenderGraph::TextureBoundary::Undefined,
+                    RenderGraph::QueueRole::None,
+                    RenderGraph::AccessMode::None
+                );
+            }
+            graph.Export(
+                bloom_resources.downsample_chain,
+                RenderGraph::TextureAccessType::Sampled,
+                RenderGraph::QueueRole::Graphics,
+                RenderGraph::AccessMode::Read
+            );
+            graph.Export(
+                bloom_resources.upsample_chain,
+                RenderGraph::TextureAccessType::Sampled,
+                RenderGraph::QueueRole::Graphics,
+                RenderGraph::AccessMode::Read,
+                RenderGraph::TextureRange::Mips(0, mip_count - 1)
+            );
+            auto bloom_prepared = graph.AddSetupPass(
+                "Bloom.Prepare",
+                bloom->Prepare(true, params.input, {down, 0, {}}, {up, 0, {}}),
+                [](const auto& parameters) {
+                    return parameters;
+                }
+            );
+            bloom->AddRecordPasses(graph, bloom_resources, bloom_prepared, mip_count);
+        }
+        auto prepared = graph.AddSetupPass("Prepare", params, [](const auto& parameters) {
+            return parameters;
+        });
+        pass.AddRecordPasses(graph, resources, prepared);
+        ReadbackFuture output_readback, histogram_readback, exposure_readback;
+        graph.AddRecordPass(
+            "Readback",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(resources.tonemapping_output, RenderGraph::TextureAccessType::TransferSource)
+                    .Read(resources.histogram, RenderGraph::BufferAccessType::TransferSource)
+                    .Read(resources.exposure, RenderGraph::BufferAccessType::TransferSource)
+                    .SideEffect();
+            },
+            [&](CommandList& commands) {
+                output_readback    = commands.Readback(output->GetView());
+                histogram_readback = commands.Readback(params.histogram->GetView());
+                exposure_readback  = commands.Readback(params.exposure->GetView());
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.Export(
+            resources.input,
+            RenderGraph::TextureAccessType::Sampled,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+        graph.Export(
+            resources.tonemapping_output,
+            RenderGraph::TextureAccessType::TransferSource,
+            RenderGraph::QueueRole::Graphics,
+            RenderGraph::AccessMode::Read
+        );
+        for (auto buffer : {resources.histogram, resources.exposure}) {
+            graph.Export(
+                buffer,
+                RenderGraph::BufferAccessType::TransferSource,
+                RenderGraph::QueueRole::Graphics,
+                RenderGraph::AccessMode::Read
+            );
+        }
+        if (!graph.Compile() ||
+            !graph.ExecuteFrontendRecordingPlan(
+                {},
+                record_parallel,
+                {},
+                RenderGraph::ActiveRecordingOptions{.enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled}
+            )) {
+            throw std::runtime_error("tonemapping graph failed: " + graph.GetCompileError());
+        }
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        const auto histogram = histogram_readback.Get().CopyAs<uint32>();
+        const auto exposure  = exposure_readback.Get().CopyAs<float>();
+        auto       result    = output_readback.Get().CopyAs<float>();
+        uint64     sum       = 0;
+        if (histogram) {
+            for (const auto count : *histogram) {
+                sum += count;
+            }
+        }
+        if (sum != width * height * TONEMAPPING_HISTOGRAM_POINT_FRAC_MULTIPLIER || !exposure ||
+            exposure->size() != 1 || !std::isfinite(exposure->front()) || exposure->front() <= 0 || !result ||
+            result->size() != width * height * 4) {
+            throw std::runtime_error("tonemapping histogram/exposure/output readback is invalid");
+        }
+        result->push_back(exposure->front());
+        return *result;
+    };
+    const auto reference = run(false);
+    const auto compiled  = run(parallel);
+    if (reference.size() != compiled.size()) {
+        throw std::runtime_error("compiled tonemapping output size mismatch");
+    }
+    for (size_t i = 0; i < reference.size(); ++i) {
+        if (!std::isfinite(compiled[i]) || std::abs(reference[i] - compiled[i]) > 0.00001f) {
+            throw std::runtime_error("compiled tonemapping differs between serial and selected graph recording");
+        }
+    }
+    LOG_INFO("[TESTCASE][PASS] name={} histogram=verified exposure=verified image=matched",
+             with_bloom ? "CompiledBloomTonemapping" : "CompiledTonemapping");
+}
+
+void RunActiveRdgExplicitBarrierReadback(
+    bool                       _parallel,
+    ERHIResourceStateOwnership ownership = ERHIResourceStateOwnership::Compiled
+) {
+    auto&                   device    = RenderDevice::Get();
+    const EBufferUsageFlags usage     = EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
+    constexpr uint64        byte_size = sizeof(uint32) * kElementCount;
+
+    BufferRef source      = device.CreateBuffer<uint32>("active_rdg_source", kElementCount, usage);
+    BufferRef destination = device.CreateBuffer<uint32>("active_rdg_destination", kElementCount, usage);
 
     std::array<uint32, kElementCount> values{};
     std::array<uint32, kElementCount> readback{};
@@ -1804,13 +2907,13 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
     );
     graph.SetInitialState(
         source_handle,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
     graph.SetInitialState(
         destination_handle,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
@@ -1820,11 +2923,11 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     source_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -1833,19 +2936,19 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
                 OwnedBytes(values), source->GetView(), "ActiveRdgUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "Copy",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
-                .Read(source_handle, RenderGraph::BufferState::TransferSource)
+                       RenderGraph::GpuWorkType::Transfer
+            )
+                .Read(source_handle, RenderGraph::BufferAccessType::TransferSource)
                 .Write(
                     destination_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -1856,18 +2959,18 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
                 "ActiveRdgBufferCopy"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "Readback",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     destination_handle,
-                    RenderGraph::BufferState::TransferSource
+                    RenderGraph::BufferAccessType::TransferSource
                 )
                 .SideEffect();
         },
@@ -1878,17 +2981,17 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
                 "ActiveRdgReadback"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.Export(
         source_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         destination_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -1900,10 +3003,9 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
     }
     if (!graph.ExecuteFrontendRecordingPlan(
             {},
-            {},
             _parallel,
             {},
-            RenderGraph::ActiveRecordingOptions{.enabled = true}
+            RenderGraph::ActiveRecordingOptions{.enabled = true, .state_ownership = ownership}
         )) {
         throw std::runtime_error(
             "active RDG execution failed: " + graph.GetCompileError()
@@ -1918,8 +3020,9 @@ void RunActiveRdgExplicitBarrierReadback(bool _parallel) {
     }
     LOG_INFO(
         "[TESTCASE][PASS] name=ActiveRdgExplicitBarrier mode={} "
-        "passes=3 state_owner=rdg readback=verified",
-        _parallel ? "parallel" : "serial"
+        "passes=3 state_owner=rdg compiled={} readback=verified",
+        _parallel ? "parallel" : "serial",
+        ownership == ERHIResourceStateOwnership::Compiled
     );
 }
 
@@ -1941,26 +3044,26 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Copy
+                           RenderGraph::GpuWorkType::Transfer
                        )
                     .Write(graphics_done)
                     .SideEffect();
             },
             [](CommandList&) {},
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         stale_topology_graph.AddRecordPass(
             "Compute",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Copy
+                           RenderGraph::GpuWorkType::Transfer
                        )
                     .Read(graphics_done)
                     .SideEffect();
             },
             [](CommandList&) {},
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         if (!stale_topology_graph.Compile()) {
             throw std::runtime_error(
@@ -1969,7 +3072,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             );
         }
         if (stale_topology_graph.ExecuteFrontendRecordingPlan(
-                {},
                 {},
                 _parallel,
                 {},
@@ -1994,81 +3096,79 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
 
     std::atomic<uint32> caller_callbacks{0};
     RenderGraph caller_graph(
-        "ActiveRdgRejectCallerThreadMultiQueue", topology
+        "ActiveRdgSerialMultiQueue", topology
     );
     const auto caller_graphics_done =
         caller_graph.CreateTransientToken("GraphicsDone");
-    caller_graph.AddPass(
+    caller_graph.AddRecordPass(
             "Graphics",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Copy
+                           RenderGraph::GpuWorkType::Transfer
                        )
                     .Write(caller_graphics_done)
                     .SideEffect();
             },
-            [&] {
+            [&](Moer::Render::CommandList&) {
                 caller_callbacks.fetch_add(1, std::memory_order_relaxed);
-            }
-    );
-    caller_graph.AddPass(
+            },
+            RenderGraph::PassRecordPolicy::Serial
+        );
+    caller_graph.AddRecordPass(
             "Compute",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Copy
+                           RenderGraph::GpuWorkType::Transfer
                        )
                     .Read(caller_graphics_done)
                     .SideEffect();
             },
-            [&] {
+            [&](Moer::Render::CommandList&) {
                 caller_callbacks.fetch_add(1, std::memory_order_relaxed);
-            }
-    );
+            },
+            RenderGraph::PassRecordPolicy::Serial
+        );
     if (!caller_graph.Compile()) {
         throw std::runtime_error(
-            "caller-thread multi-queue rejection graph failed to compile: " +
+            "serial multi-queue graph failed to compile: " +
             caller_graph.GetCompileError()
         );
     }
-    CommandList caller_commands(EQueueType::Graphics);
-    if (caller_graph.ExecuteFrontendRecordingPlan(
-            {},
+    if (!caller_graph.ExecuteFrontendRecordingPlan(
             {},
             _parallel,
             {},
             RenderGraph::ActiveRecordingOptions{
                 .enabled = true,
-                .main_thread_command_list = &caller_commands,
             }
         )) {
         throw std::runtime_error(
-            "active RDG accepted caller-thread multi-queue endpoints"
+            "active RDG failed serial multi-queue recording: " + caller_graph.GetCompileError()
         );
     }
-    if (caller_callbacks.load(std::memory_order_relaxed) != 0 ||
-        !caller_commands.IsEmpty() ||
-        caller_graph.GetCompileError().find(
-            "managed recording handoff"
-        ) == std::string::npos) {
+    if (caller_callbacks.load(std::memory_order_relaxed) != 2) {
         throw std::runtime_error(
-            "caller-thread multi-queue rejection was not immutable and diagnostic"
+            "serial multi-queue callbacks did not execute exactly once"
         );
     }
     LOG_INFO(
-        "[TESTCASE][PASS] name=ActiveRdgRejectCallerThreadMultiQueue "
-        "callbacks=0 command_stream=empty execution=rejected"
+        "[TESTCASE][PASS] name=ActiveRdgSerialMultiQueue "
+        "callbacks=2 command_stream=managed execution=recorded"
     );
 
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
-    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    constexpr uint64 byte_size = sizeof(uint32) * kElementCount;
 
     struct QueueBuffer {
         BufferRef buffer{};
         std::array<uint32, kElementCount> values{};
         std::array<uint32, kElementCount> readback{};
+    };
+    const auto prepare_readback = [](CommandList& commands, const QueueBuffer& buffer) {
+        commands.Barriers({BarrierCreateInfo::Transition(buffer.buffer->GetView(), BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE), BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ))});
     };
     QueueBuffer graphics_root{
         .buffer = device.CreateBuffer<uint32>(
@@ -2122,7 +3222,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         for (const auto handle : {graphics_handle, compute_handle}) {
             independent_graph.SetInitialState(
                 handle,
-                RenderGraph::BufferState::Undefined,
+                RenderGraph::BufferBoundary::Undefined,
                 RenderGraph::QueueRole::None,
                 RenderGraph::AccessMode::None
             );
@@ -2132,20 +3232,18 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Copy
-                       )
+                           RenderGraph::GpuWorkType::Transfer
+                )
                     .Write(
                         graphics_handle,
-                        RenderGraph::BufferState::TransferDestination
+                        RenderGraph::BufferAccessType::TransferDestination
                     )
                     .SideEffect();
             },
-            [
-                &graphics_independent,
-                &graphics_record_started,
-                &compute_record_started,
-                _parallel
-            ](CommandList& commands) {
+            [&graphics_independent,
+             &graphics_record_started,
+             &compute_record_started,
+             _parallel](CommandList& commands) {
                 if (_parallel) {
                     graphics_record_started.release();
                     if (!compute_record_started.try_acquire_for(
@@ -2162,27 +3260,25 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                     "ActiveRdgIndependentGraphicsRoot"
                 );
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         independent_graph.AddRecordPass(
             "ComputeRoot",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Copy
-                       )
+                           RenderGraph::GpuWorkType::Transfer
+                )
                     .Write(
                         compute_handle,
-                        RenderGraph::BufferState::TransferDestination
+                        RenderGraph::BufferAccessType::TransferDestination
                     )
                     .SideEffect();
             },
-            [
-                &compute_independent,
-                &graphics_record_started,
-                &compute_record_started,
-                _parallel
-            ](CommandList& commands) {
+            [&compute_independent,
+             &graphics_record_started,
+             &compute_record_started,
+             _parallel](CommandList& commands) {
                 if (_parallel) {
                     compute_record_started.release();
                     if (!graphics_record_started.try_acquire_for(
@@ -2199,17 +3295,17 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                     "ActiveRdgIndependentComputeRoot"
                 );
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         independent_graph.Export(
             graphics_handle,
-            RenderGraph::BufferState::TransferDestination,
+            RenderGraph::BufferAccessType::TransferDestination,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Write
         );
         independent_graph.Export(
             compute_handle,
-            RenderGraph::BufferState::TransferDestination,
+            RenderGraph::BufferAccessType::TransferDestination,
             RenderGraph::QueueRole::Compute,
             RenderGraph::AccessMode::Write
         );
@@ -2228,7 +3324,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         }
         if (!independent_graph.ExecuteFrontendRecordingPlan(
                 {},
-                {},
                 _parallel,
                 {},
                 RenderGraph::ActiveRecordingOptions{.enabled = true}
@@ -2240,6 +3335,9 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         }
 
         CommandList compute_readback(EQueueType::Compute);
+
+        compute_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        prepare_readback(compute_readback, compute_independent);
         compute_readback.CopyFrom(
             compute_independent.buffer->GetView(),
             WritableBytes(compute_independent.readback),
@@ -2251,6 +3349,8 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             ERHIExecSubmitFlags::FlushGPU
         );
         CommandList graphics_readback(EQueueType::Graphics);
+        graphics_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        prepare_readback(graphics_readback, graphics_independent);
         graphics_readback.CopyFrom(
             graphics_independent.buffer->GetView(),
             WritableBytes(graphics_independent.readback),
@@ -2318,7 +3418,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         for (const auto handle : {source_handle, destination_handle}) {
             physical_graph.SetInitialState(
                 handle,
-                RenderGraph::BufferState::Undefined,
+                RenderGraph::BufferBoundary::Undefined,
                 RenderGraph::QueueRole::None,
                 RenderGraph::AccessMode::None
             );
@@ -2328,11 +3428,11 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Graphics,
-                           RenderGraph::PipelineType::Copy
-                       )
+                           RenderGraph::GpuWorkType::Transfer
+                )
                     .Write(
                         source_handle,
-                        RenderGraph::BufferState::TransferDestination
+                        RenderGraph::BufferAccessType::TransferDestination
                     )
                     .SideEffect();
             },
@@ -2343,22 +3443,22 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                     "ActiveRdgDistinctNativeGraphicsWrite"
                 );
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         const auto compute_read_pass = physical_graph.AddRecordPass(
             "ComputeReadShared",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(
                            RenderGraph::QueueRole::Compute,
-                           RenderGraph::PipelineType::Copy
-                       )
+                           RenderGraph::GpuWorkType::Transfer
+                )
                     .Read(
                         source_handle,
-                        RenderGraph::BufferState::TransferSource
+                        RenderGraph::BufferAccessType::TransferSource
                     )
                     .Write(
                         destination_handle,
-                        RenderGraph::BufferState::TransferDestination
+                        RenderGraph::BufferAccessType::TransferDestination
                     )
                     .SideEffect();
             },
@@ -2369,17 +3469,17 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                     "ActiveRdgDistinctNativeComputeRead"
                 );
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
         physical_graph.Export(
             source_handle,
-            RenderGraph::BufferState::TransferSource,
+            RenderGraph::BufferAccessType::TransferSource,
             RenderGraph::QueueRole::Compute,
             RenderGraph::AccessMode::Read
         );
         physical_graph.Export(
             destination_handle,
-            RenderGraph::BufferState::TransferDestination,
+            RenderGraph::BufferAccessType::TransferDestination,
             RenderGraph::QueueRole::Compute,
             RenderGraph::AccessMode::Write
         );
@@ -2504,7 +3604,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         }
         if (!physical_graph.ExecuteFrontendRecordingPlan(
                 {},
-                {},
                 _parallel,
                 {},
                 RenderGraph::ActiveRecordingOptions{.enabled = true}
@@ -2515,6 +3614,8 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
             );
         }
         CommandList physical_readback(EQueueType::Compute);
+        physical_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        prepare_readback(physical_readback, shared_destination);
         physical_readback.CopyFrom(
             shared_destination.buffer->GetView(),
             WritableBytes(shared_destination.readback),
@@ -2579,7 +3680,7 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
          }) {
         graph.SetInitialState(
             handle,
-            RenderGraph::BufferState::Undefined,
+            RenderGraph::BufferBoundary::Undefined,
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
@@ -2592,11 +3693,11 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     graphics_root_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .Write(graphics_root_done)
                 .SideEffect();
@@ -2608,18 +3709,18 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 "ActiveRdgAsyncGraphicsRoot"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "ComputeIndependent",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     compute_independent_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -2630,18 +3731,18 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 "ActiveRdgAsyncComputeIndependent"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "GraphicsIndependent",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     graphics_independent_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -2652,19 +3753,19 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 "ActiveRdgAsyncGraphicsIndependent"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "ComputeDependent",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Compute,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(graphics_root_done)
                 .Write(
                     compute_dependent_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -2675,30 +3776,30 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
                 "ActiveRdgAsyncComputeDependent"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(
         graphics_root_handle,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
     graph.Export(
         compute_independent_handle,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Write
     );
     graph.Export(
         graphics_independent_handle,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
     graph.Export(
         compute_dependent_handle,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Write
     );
@@ -2724,7 +3825,6 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     }
     if (!graph.ExecuteFrontendRecordingPlan(
             {},
-            {},
             _parallel,
             {},
             RenderGraph::ActiveRecordingOptions{.enabled = true}
@@ -2736,6 +3836,10 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     }
 
     CommandList compute_readback(EQueueType::Compute);
+
+    compute_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    prepare_readback(compute_readback, compute_independent);
+    prepare_readback(compute_readback, compute_dependent);
     compute_readback.CopyFrom(
         compute_independent.buffer->GetView(),
         WritableBytes(compute_independent.readback),
@@ -2753,6 +3857,10 @@ void RunActiveRdgAsyncQueueDag(bool _parallel) {
     );
 
     CommandList graphics_readback(EQueueType::Graphics);
+
+    graphics_readback.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    prepare_readback(graphics_readback, graphics_root);
+    prepare_readback(graphics_readback, graphics_independent);
     graphics_readback.CopyFrom(
         graphics_root.buffer->GetView(),
         WritableBytes(graphics_root.readback),
@@ -2804,7 +3912,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         return;
     }
 
-    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    constexpr uint64        byte_size = sizeof(uint32) * kElementCount;
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST;
     BufferRef source = device.CreateBuffer<uint32>(
@@ -2835,7 +3943,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         RenderGraph::BufferDesc{
             .byte_size    = byte_size,
             .sharing_mode =
-                RenderGraph::TextureDesc::SharingMode::Exclusive,
+                RenderGraph::SharingMode::Exclusive,
         }
     );
     const auto intermediate_handle = graph.ImportBuffer(
@@ -2844,7 +3952,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         RenderGraph::BufferDesc{
             .byte_size    = byte_size,
             .sharing_mode =
-                RenderGraph::TextureDesc::SharingMode::Exclusive,
+                RenderGraph::SharingMode::Exclusive,
         }
     );
     const auto destination_handle = graph.ImportBuffer(
@@ -2853,7 +3961,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         RenderGraph::BufferDesc{
             .byte_size    = byte_size,
             .sharing_mode =
-                RenderGraph::TextureDesc::SharingMode::Exclusive,
+                RenderGraph::SharingMode::Exclusive,
         }
     );
     for (const auto handle : {
@@ -2863,7 +3971,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
          }) {
         graph.SetInitialState(
             handle,
-            RenderGraph::BufferState::Undefined,
+            RenderGraph::BufferBoundary::Undefined,
             RenderGraph::QueueRole::None,
             RenderGraph::AccessMode::None
         );
@@ -2874,11 +3982,11 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     source_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -2889,22 +3997,22 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
                 "ActiveRdgGraphicsCopyRoundTripUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const auto copy_to_intermediate = graph.AddRecordPass(
         "CopyToIntermediate",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Copy,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     source_handle,
-                    RenderGraph::BufferState::TransferSource
+                    RenderGraph::BufferAccessType::TransferSource
                 )
                 .Write(
                     intermediate_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -2915,22 +4023,22 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
                 "ActiveRdgGraphicsCopyRoundTripToCopy"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const auto graphics_copy_to_destination = graph.AddRecordPass(
         "GraphicsCopyToDestination",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     intermediate_handle,
-                    RenderGraph::BufferState::TransferSource
+                    RenderGraph::BufferAccessType::TransferSource
                 )
                 .Write(
                     destination_handle,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -2941,18 +4049,18 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
                 "ActiveRdgGraphicsCopyRoundTripToGraphics"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "GraphicsReadback",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     destination_handle,
-                    RenderGraph::BufferState::TransferSource
+                    RenderGraph::BufferAccessType::TransferSource
                 )
                 .SideEffect();
         },
@@ -2963,23 +4071,23 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
                 "ActiveRdgGraphicsCopyRoundTripReadback"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.Export(
         source_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Copy,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         intermediate_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         destination_handle,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -3173,7 +4281,6 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
 
     if (!graph.ExecuteFrontendRecordingPlan(
             {},
-            {},
             _parallel,
             {},
             RenderGraph::ActiveRecordingOptions{.enabled = true}
@@ -3203,7 +4310,7 @@ void RunActiveRdgGraphicsCopyRoundTrip(bool _parallel) {
 }
 
 void RunActiveRdgTransientAliasReadback(bool _parallel) {
-    constexpr uint64_t byte_size = sizeof(uint32) * kElementCount;
+    constexpr uint64            byte_size = sizeof(uint32) * kElementCount;
     const RGTransientBufferDesc transient_desc{
         .element_count = kElementCount,
         .stride        = sizeof(uint32),
@@ -3232,11 +4339,11 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     first,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -3253,18 +4360,18 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
                 "ActiveRdgAliasFirstUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "WriteAliasSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     second,
-                    RenderGraph::BufferState::TransferDestination
+                    RenderGraph::BufferAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -3281,18 +4388,18 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
                 "ActiveRdgAliasSecondUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "ReadAliasSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     second,
-                    RenderGraph::BufferState::TransferSource
+                    RenderGraph::BufferAccessType::TransferSource
                 )
                 .SideEffect();
         },
@@ -3309,7 +4416,7 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
                 "ActiveRdgAliasReadback"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     if (!graph.Compile()) {
@@ -3319,10 +4426,10 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
         );
     }
     const auto& plan = graph.GetCompiledPlan();
-    if (plan.resources[first.resource.index].transient_slot ==
-            RenderGraph::PassHandle::InvalidIndex ||
-        plan.resources[first.resource.index].transient_slot !=
-            plan.resources[second.resource.index].transient_slot ||
+    if (plan.resources[first.handle.resource_id].transient_slot ==
+            RenderGraph::InvalidIndex ||
+        plan.resources[first.handle.resource_id].transient_slot !=
+            plan.resources[second.handle.resource_id].transient_slot ||
         plan.alias_boundaries.size() != 1) {
         throw std::runtime_error(
             "active RDG transient alias compiler plan did not reuse one slot"
@@ -3332,7 +4439,6 @@ void RunActiveRdgTransientAliasReadback(bool _parallel) {
         throw std::runtime_error("transient alias descriptor byte size mismatch");
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},
@@ -3405,11 +4511,11 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     first,
-                    RenderGraph::TextureState::TransferDestination
+                    RenderGraph::TextureAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -3426,18 +4532,18 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
                 "ActiveRdgTextureAliasFirstUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "WriteTextureAliasSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     second,
-                    RenderGraph::TextureState::TransferDestination
+                    RenderGraph::TextureAccessType::TransferDestination
                 )
                 .SideEffect();
         },
@@ -3454,18 +4560,18 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
                 "ActiveRdgTextureAliasSecondUpload"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "ReadTextureAliasSecond",
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Read(
                     second,
-                    RenderGraph::TextureState::TransferSource
+                    RenderGraph::TextureAccessType::TransferSource
                 )
                 .SideEffect();
         },
@@ -3482,7 +4588,7 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
                 "ActiveRdgTextureAliasReadback"
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     if (!graph.Compile()) {
@@ -3492,15 +4598,14 @@ void RunActiveRdgTransientTextureAliasReadback(bool _parallel) {
         );
     }
     const auto& plan = graph.GetCompiledPlan();
-    if (plan.resources[first.resource.index].transient_slot !=
-            plan.resources[second.resource.index].transient_slot ||
+    if (plan.resources[first.handle.resource_id].transient_slot !=
+            plan.resources[second.handle.resource_id].transient_slot ||
         plan.alias_boundaries.size() != 1) {
         throw std::runtime_error(
             "active RDG transient texture alias did not reuse one slot"
         );
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},
@@ -3614,7 +4719,7 @@ void RunActiveRdgTextureArraySubrange(bool _parallel) {
     range.aspects = RenderGraph::TextureAspect::Color;
     graph.SetInitialState(
         texture_handle,
-        RenderGraph::TextureState::Undefined,
+        RenderGraph::TextureBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         range
@@ -3624,11 +4729,11 @@ void RunActiveRdgTextureArraySubrange(bool _parallel) {
         [=](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(
                        RenderGraph::QueueRole::Graphics,
-                       RenderGraph::PipelineType::Copy
-                   )
+                       RenderGraph::GpuWorkType::Transfer
+            )
                 .Write(
                     texture_handle,
-                    RenderGraph::TextureState::TransferDestination,
+                    RenderGraph::TextureAccessType::TransferDestination,
                     range
                 )
                 .SideEffect();
@@ -3639,11 +4744,11 @@ void RunActiveRdgTextureArraySubrange(bool _parallel) {
                 float4{0.125f, 0.25f, 0.5f, 1.0f}
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.Export(
         texture_handle,
-        RenderGraph::TextureState::TransferDestination,
+        RenderGraph::TextureAccessType::TransferDestination,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write,
         range
@@ -3655,7 +4760,6 @@ void RunActiveRdgTextureArraySubrange(bool _parallel) {
         );
     }
     if (!graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             _parallel,
             {},
@@ -3704,6 +4808,8 @@ void RunExplicitTextureArrayRangeShapeChange(bool _parallel) {
     );
 
     CommandList commands(EQueueType::Graphics);
+
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     commands.Barriers({
         BarrierCreateInfo::Transition(
             whole,
@@ -3765,20 +4871,20 @@ void RunUpperTopologyBatch() {
 
     Array<CommandList> command_lists{};
     command_lists.emplace_back(EQueueType::Graphics);
-    command_lists.back().CopyFrom(OwnedBytes(expected), source->GetView(), "TopologyUpload");
+    CopyTestTransfer(command_lists.back(), OwnedBytes(expected), source->GetView(), "TopologyUpload");
     command_lists.back().AddCallback(append_callback(0));
 
     command_lists.emplace_back(EQueueType::Graphics);
     command_lists.back().SetTranslateExecutionClass(
         ERHITranslateExecutionClass::SerialControl
     );
-    command_lists.back().CopyFrom(
+    CopyTestTransfer(command_lists.back(),
         source->GetView(), destination->GetView(), "TopologySerialControlCopy"
     );
     command_lists.back().AddCallback(append_callback(1));
 
     command_lists.emplace_back(EQueueType::Graphics);
-    command_lists.back().CopyFrom(
+    CopyTestTransfer(command_lists.back(),
         destination->GetView(), WritableBytes(readback), "TopologyReadback"
     );
     command_lists.back().AddCallback(append_callback(2));
@@ -3836,17 +4942,17 @@ void RunPendingSourceTopologyBatch() {
 
     Array<CommandList> pass_lists{};
     pass_lists.emplace_back(EQueueType::Graphics);
-    pass_lists.back().CopyFrom(OwnedBytes(expected), source->GetView(), "PendingPassUpload");
+    CopyTestTransfer(pass_lists.back(), OwnedBytes(expected), source->GetView(), "PendingPassUpload");
     pass_lists.back().AddCallback(append_callback(0));
 
     pass_lists.emplace_back(EQueueType::Graphics);
-    pass_lists.back().CopyFrom(
+    CopyTestTransfer(pass_lists.back(),
         source->GetView(), destination->GetView(), "PendingPassCopy"
     );
     pass_lists.back().AddCallback(append_callback(1));
 
     pass_lists.emplace_back(EQueueType::Graphics);
-    pass_lists.back().CopyFrom(
+    CopyTestTransfer(pass_lists.back(),
         destination->GetView(), WritableBytes(readback), "PendingPassReadback"
     );
     pass_lists.back().AddCallback(append_callback(2));
@@ -3965,19 +5071,21 @@ void RunContinuousFrameInFlightRetirement() {
             }
 
             CommandList commands(EQueueType::Graphics);
+
+            commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
             if (frame == max_in_flight) {
                 commands.AddCustomCommand(
                     MakeUnique<TranslateProbeCommand>(&fourth_translate_reached),
                     "ContinuousFrameTranslateProbe"
                 );
             }
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 OwnedBytes(frame_values),
                 frame_output->GetView(),
                 "ContinuousFrameUpload"
             );
             if (frame + 1 == frame_count) {
-                commands.CopyFrom(
+                CopyTestTransfer(commands,
                     frame_output->GetView(),
                     WritableBytes(readback),
                     "ContinuousFrameReadback"
@@ -4059,6 +5167,27 @@ void RunContinuousFrameInFlightRetirement() {
     );
 }
 
+void RecordTestTransferHandoff(CommandList& commands, BufferView view,
+                               EQueueType from, EQueueType to, bool release) {
+    const auto topology = RenderDevice::Get().GetQueueTopology();
+    const auto endpoint = release ? from : to;
+    auto barrier = BarrierCreateInfo::Transition(view,
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE),
+        BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ));
+    if (topology.Resolve(from).family_id != topology.Resolve(to).family_id) {
+        barrier.queue_transfer = release ? BarrierQueueTransfer::Release(from, to) :
+                                           BarrierQueueTransfer::Acquire(from, to);
+    }
+    CommandList endpoint_commands(endpoint);
+    endpoint_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    endpoint_commands.Barriers({barrier});
+    // This fixture deliberately creates one source containing different queue
+    // segments. Keep each barrier's explicit endpoint affinity when composing it.
+    auto recorded = endpoint_commands.Submit();
+    commands.AddCustomCommand(std::move(recorded.cmds.front()), "TestTransferHandoff");
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+}
+
 void RunCrossQueueTopologyBatch() {
     auto& device = RenderDevice::Get();
     const RHIQueueTopology topology = device.GetQueueTopology();
@@ -4081,52 +5210,28 @@ void RunCrossQueueTopologyBatch() {
 
     Array<CommandList> command_lists{};
     command_lists.emplace_back(EQueueType::Graphics);
-    command_lists.back().CopyFrom(
+    CopyTestTransfer(command_lists.back(),
         OwnedBytes(expected), source->GetView(), "TopologyCrossQueueUpload"
     );
-    command_lists.back().ExportResourcesToQueue(
-        EQueueType::Compute,
-        {},
-        Array<ExportBuffer>{{source->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(command_lists.back(), source->GetView(), EQueueType::Graphics, EQueueType::Compute, true);
 
     command_lists.emplace_back(EQueueType::Compute);
-    command_lists.back().ImportResourcesFromQueue(
-        EQueueType::Graphics,
-        {},
-        Array<ImportBuffer>{{source->GetView(), EBufferState::TRANSFER}}
-    );
-    command_lists.back().CopyFrom(
+    RecordTestTransferHandoff(command_lists.back(), source->GetView(), EQueueType::Graphics, EQueueType::Compute, false);
+    CopyTestTransfer(command_lists.back(),
         source->GetView(), compute_stage->GetView(), "TopologyCrossQueueCompute"
     );
-    command_lists.back().ExportResourcesToQueue(
-        EQueueType::Copy,
-        {},
-        Array<ExportBuffer>{{compute_stage->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(command_lists.back(), compute_stage->GetView(), EQueueType::Compute, EQueueType::Copy, true);
 
     command_lists.emplace_back(EQueueType::Copy);
-    command_lists.back().ImportResourcesFromQueue(
-        EQueueType::Compute,
-        {},
-        Array<ImportBuffer>{{compute_stage->GetView(), EBufferState::TRANSFER}}
-    );
-    command_lists.back().CopyFrom(
+    RecordTestTransferHandoff(command_lists.back(), compute_stage->GetView(), EQueueType::Compute, EQueueType::Copy, false);
+    CopyTestTransfer(command_lists.back(),
         compute_stage->GetView(), copy_stage->GetView(), "TopologyCrossQueueCopy"
     );
-    command_lists.back().ExportResourcesToQueue(
-        EQueueType::Graphics,
-        {},
-        Array<ExportBuffer>{{copy_stage->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(command_lists.back(), copy_stage->GetView(), EQueueType::Copy, EQueueType::Graphics, true);
 
     command_lists.emplace_back(EQueueType::Graphics);
-    command_lists.back().ImportResourcesFromQueue(
-        EQueueType::Copy,
-        {},
-        Array<ImportBuffer>{{copy_stage->GetView(), EBufferState::TRANSFER}}
-    );
-    command_lists.back().CopyFrom(
+    RecordTestTransferHandoff(command_lists.back(), copy_stage->GetView(), EQueueType::Copy, EQueueType::Graphics, false);
+    CopyTestTransfer(command_lists.back(),
         copy_stage->GetView(), WritableBytes(readback), "TopologyCrossQueueReadback"
     );
 
@@ -4177,7 +5282,7 @@ void RunCrossQueueTopologyBatch() {
             event.thread_role != ERHIThreadRole::Submission ||
             event.thread_id != submission_thread_id ||
             event.thread_id == main_thread_id ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "Graphics/Compute/Copy native submit escaped the sole "
                 "Submission owner or changed source order"
@@ -4323,9 +5428,7 @@ void RunAsyncQueueParallelTranslateSmoke() {
 
     try {
         CommandList graphics_front(EQueueType::Graphics);
-        graphics_front.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        graphics_front.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics_front.AddCustomCommand(
             MakeUnique<BlockingTranslateProbeCommand>(
                 EQueueType::Graphics,
@@ -4345,14 +5448,13 @@ void RunAsyncQueueParallelTranslateSmoke() {
             ERHITranslateExecutionClass::Parallel
         );
         graphics_front_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         graphics_front_submit.async_queue_scope = async_queue_scope;
 
         CommandList graphics_tail(EQueueType::Graphics);
-        graphics_tail.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+
+        graphics_tail.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics_tail.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &graphics_tail_entered
@@ -4370,14 +5472,13 @@ void RunAsyncQueueParallelTranslateSmoke() {
             ERHITranslateExecutionClass::Parallel
         );
         graphics_tail_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         graphics_tail_submit.async_queue_scope = async_queue_scope;
 
         CommandList compute_later(EQueueType::Compute);
-        compute_later.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+
+        compute_later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         compute_later.AddCustomCommand(
             MakeUnique<BlockingTranslateProbeCommand>(
                 EQueueType::Compute,
@@ -4397,20 +5498,19 @@ void RunAsyncQueueParallelTranslateSmoke() {
             ERHITranslateExecutionClass::Parallel
         );
         compute_later_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         compute_later_submit.async_queue_scope = async_queue_scope;
 
         CommandList copy(EQueueType::Copy);
-        copy.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        copy.CopyFrom(
+
+        copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(copy,
             OwnedBytes(copy_expected),
             copy_buffer->GetView(),
             "Phase15ECopyReadyUpload"
         );
-        copy.CopyFrom(
+        CopyTestTransfer(copy,
             copy_buffer->GetView(),
             WritableBytes(copy_readback),
             "Phase15ECopyReadyReadback"
@@ -4430,12 +5530,12 @@ void RunAsyncQueueParallelTranslateSmoke() {
             ERHITranslateExecutionClass::Parallel
         );
         copy_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         copy_submit.async_queue_scope = async_queue_scope;
         copy_submit.Signal(copy_done.Get(), 1);
 
-        Array<RHIBackendSubmissionBatchEntry> submits{};
+        Array<RHISubmissionRequest> submits{};
         submits.emplace_back(
             EQueueType::Graphics,
             std::move(graphics_front_submit)
@@ -4503,7 +5603,7 @@ void RunAsyncQueueParallelTranslateSmoke() {
             );
         }
         auto* vk_copy_done = ResourceCast(copy_done.Get());
-        if (vk_copy_done->HostWait(1) != VK_SUCCESS ||
+        if (!vk_copy_done->Wait(1) ||
             vk_copy_done->IsRejected(1) ||
             vk_copy_done->IsFailed()) {
             throw std::runtime_error(
@@ -4616,7 +5716,7 @@ void RunAsyncQueueParallelTranslateSmoke() {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "native G/G/C/Copy submit lost stable order or the "
                     "sole Submission owner"
@@ -4752,7 +5852,7 @@ void RunMultiSegmentSourceExecution() {
 
     try {
         CommandList source(EQueueType::Graphics);
-        source.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        source.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         source.AddCustomCommand(
             MakeUnique<BlockingTranslateProbeCommand>(
                 EQueueType::Graphics, &graphics_entered, &release_graphics, &graphics_translate_finished
@@ -4779,7 +5879,7 @@ void RunMultiSegmentSourceExecution() {
 
         CmdSubmit submit = source.Submit();
         submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-        submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+        submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         submit.async_queue_scope = async_queue_scope;
         submit.segments          = {
             RHISubmitSegment{EQueueType::Graphics, 0, 1},
@@ -4787,7 +5887,7 @@ void RunMultiSegmentSourceExecution() {
         };
         submit.Signal(source_done.Get(), 1);
 
-        Array<RHIBackendSubmissionBatchEntry> batch{};
+        Array<RHISubmissionRequest> batch{};
         batch.emplace_back(EQueueType::Graphics, std::move(submit));
         RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
 
@@ -4816,7 +5916,7 @@ void RunMultiSegmentSourceExecution() {
         release_compute_guard.Release();
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
-        if (ResourceCast(source_done.Get())->HostWait(1) != VK_SUCCESS ||
+        if (!ResourceCast(source_done.Get())->Wait(1) ||
             ResourceCast(source_done.Get())->IsRejected(1) || ResourceCast(source_done.Get())->IsFailed()) {
             throw std::runtime_error("multi-segment source signal did not complete successfully");
         }
@@ -4858,7 +5958,7 @@ void RunMultiSegmentSourceExecution() {
             const VulkanNativeSubmissionEvent& event = native_capture.Event(index);
             if (event.queue != expected_queues[index] || event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id || event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error("multi-segment native submission escaped stable "
                                          "Graphics-to-Compute Submission ownership");
             }
@@ -4935,25 +6035,19 @@ void RunMultiSegmentCopyRoundTrip() {
     const uint32                   main_thread_id = Platform::GetCurrentThreadID();
 
     CommandList source_commands(EQueueType::Graphics);
+
+    source_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     source_commands.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    source_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    source_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
 
     source_commands.CopyFrom(OwnedBytes(expected), source->GetView(), "MultiSegmentCopyUpload");
-    source_commands.ExportResourcesToQueue(
-        EQueueType::Copy, {}, Array<ExportBuffer>{{source->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(source_commands, source->GetView(), EQueueType::Graphics, EQueueType::Copy, true);
 
-    source_commands.ImportResourcesFromQueue(
-        EQueueType::Graphics, {}, Array<ImportBuffer>{{source->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(source_commands, source->GetView(), EQueueType::Graphics, EQueueType::Copy, false);
     source_commands.CopyFrom(source->GetView(), copy_stage->GetView(), "MultiSegmentCopyNativeCopy");
-    source_commands.ExportResourcesToQueue(
-        EQueueType::Graphics, {}, Array<ExportBuffer>{{copy_stage->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(source_commands, copy_stage->GetView(), EQueueType::Copy, EQueueType::Graphics, true);
 
-    source_commands.ImportResourcesFromQueue(
-        EQueueType::Copy, {}, Array<ImportBuffer>{{copy_stage->GetView(), EBufferState::TRANSFER}}
-    );
+    RecordTestTransferHandoff(source_commands, copy_stage->GetView(), EQueueType::Copy, EQueueType::Graphics, false);
     source_commands.CopyFrom(copy_stage->GetView(), WritableBytes(readback), "MultiSegmentCopyReadback");
     source_commands.AddCallback([&] {
         ordinary_callbacks.fetch_add(1, std::memory_order_relaxed);
@@ -4964,7 +6058,7 @@ void RunMultiSegmentCopyRoundTrip() {
 
     CmdSubmit submit = source_commands.Submit();
     submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     submit.async_queue_scope = async_queue_scope;
     submit.segments          = {
         RHISubmitSegment{EQueueType::Graphics, 0, 2},
@@ -4973,14 +6067,14 @@ void RunMultiSegmentCopyRoundTrip() {
     };
     submit.Signal(source_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(EQueueType::Graphics, std::move(submit));
     RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
     if (readback != expected) {
         throw std::runtime_error("multi-segment Copy source GPU readback mismatch");
     }
-    if (ResourceCast(source_done.Get())->HostWait(1) != VK_SUCCESS ||
+    if (!ResourceCast(source_done.Get())->Wait(1) ||
         ResourceCast(source_done.Get())->IsRejected(1) || ResourceCast(source_done.Get())->IsFailed()) {
         throw std::runtime_error("multi-segment Copy source signal did not complete successfully");
     }
@@ -5023,7 +6117,7 @@ void RunMultiSegmentCopyRoundTrip() {
         const VulkanNativeSubmissionEvent& event = native_capture.Event(index);
         if (event.queue != expected_queues[index] || event.thread_role != ERHIThreadRole::Submission ||
             event.thread_id != submission_thread_id || event.thread_id == main_thread_id ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "multi-segment Copy native submits lost stable Submission order or ownership"
             );
@@ -5086,7 +6180,8 @@ void RunMultiSegmentRecoverableRejection() {
     const uint32                   main_thread_id = Platform::GetCurrentThreadID();
 
     CommandList rejected(EQueueType::Graphics);
-    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     rejected.AddCustomCommand(
         MakeUnique<TranslateProbeCommand>(&graphics_translated, EQueueType::Graphics),
         "MultiSegmentRejectedGraphicsTranslateProbe"
@@ -5104,7 +6199,7 @@ void RunMultiSegmentRecoverableRejection() {
 
     CmdSubmit rejected_submit = rejected.Submit();
     rejected_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    rejected_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    rejected_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     rejected_submit.async_queue_scope = async_queue_scope;
     rejected_submit.segments          = {
         RHISubmitSegment{EQueueType::Graphics, 0, 1},
@@ -5113,10 +6208,10 @@ void RunMultiSegmentRecoverableRejection() {
     rejected_submit.Wait(rejected_dependency.Get(), 1);
     rejected_submit.Signal(rejected_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> rejected_batch{};
+    Array<RHISubmissionRequest> rejected_batch{};
     rejected_batch.emplace_back(EQueueType::Graphics, std::move(rejected_submit));
     RHIExecutor::Get().Submit(std::move(rejected_batch), ERHIExecSubmitFlags::FlushGPU);
-    if (ResourceCast(rejected_done.Get())->HostWait(1) != VK_ERROR_UNKNOWN ||
+    if (ResourceCast(rejected_done.Get())->Wait(1) ||
         !ResourceCast(rejected_done.Get())->IsRejected(1) || ResourceCast(rejected_done.Get())->IsFailed()) {
         throw std::runtime_error("multi-segment rejected dependency did not reject the source signal");
     }
@@ -5129,7 +6224,8 @@ void RunMultiSegmentRecoverableRejection() {
     }
 
     CommandList recovered(EQueueType::Graphics);
-    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     recovered.AddCustomCommand(
         MakeUnique<TranslateProbeCommand>(&recovered_translated, EQueueType::Graphics),
         "MultiSegmentRejectionRecoveryProbe"
@@ -5142,7 +6238,7 @@ void RunMultiSegmentRecoverableRejection() {
     });
     CmdSubmit recovered_submit = recovered.Submit();
     recovered_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    recovered_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    recovered_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     recovered_submit.async_queue_scope = async_queue_scope;
     recovered_submit.Signal(recovered_done.Get(), 1);
     RHIExecutor::Get().Submit(
@@ -5151,7 +6247,7 @@ void RunMultiSegmentRecoverableRejection() {
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
     if (!recovered_translated.try_acquire() ||
-        ResourceCast(recovered_done.Get())->HostWait(1) != VK_SUCCESS ||
+        !ResourceCast(recovered_done.Get())->Wait(1) ||
         ResourceCast(recovered_done.Get())->IsRejected(1) || ResourceCast(recovered_done.Get())->IsFailed()) {
         throw std::runtime_error("multi-segment dependency rejection latched the runtime");
     }
@@ -5168,7 +6264,7 @@ void RunMultiSegmentRecoverableRejection() {
     const VulkanNativeSubmissionEvent& recovered_event = native_capture.Event(0);
     if (recovered_event.queue != EQueueType::Graphics ||
         recovered_event.thread_role != ERHIThreadRole::Submission ||
-        recovered_event.thread_id == main_thread_id || !recovered_event.outcome.WasSubmitted()) {
+        recovered_event.thread_id == main_thread_id || !recovered_event.outcome.Succeeded()) {
         throw std::runtime_error("multi-segment rejection recovery escaped Submission ownership");
     }
 
@@ -5213,7 +6309,8 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
     const uint32                   main_thread_id = Platform::GetCurrentThreadID();
 
     CommandList source(EQueueType::Graphics);
-    source.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    source.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture source_completion =
         source.TrackGpuCompletion(
             "Phase19AMultiSegmentTailCompletion"
@@ -5257,7 +6354,7 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
 
     CmdSubmit submit = source.Submit();
     submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     submit.async_queue_scope = async_queue_scope;
     submit.segments          = {
         RHISubmitSegment{EQueueType::Graphics, 0, 1},
@@ -5265,7 +6362,7 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
     };
     submit.Signal(source_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(EQueueType::Graphics, std::move(submit));
     RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -5308,11 +6405,13 @@ void RunMultiSegmentPrefixSubmitSuffixTranslateFailure() {
     const VulkanNativeSubmissionEvent& native_event = native_capture.Event(0);
     if (native_event.queue != EQueueType::Graphics ||
         native_event.thread_role != ERHIThreadRole::Submission || native_event.thread_id == main_thread_id ||
-        !native_event.outcome.WasSubmitted()) {
+        !native_event.outcome.Succeeded()) {
         throw std::runtime_error("multi-segment hard-failure prefix escaped native Submission ownership");
     }
 
     CommandList later(EQueueType::Graphics);
+
+    later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture later_completion =
         later.TrackGpuCompletion(
             "Phase19AHardLatchCompletion"
@@ -5424,7 +6523,8 @@ void RunParallelTranslateFailureRetirement() {
     );
 
     CommandList graphics(EQueueType::Graphics);
-    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics.AddCustomCommand(
         MakeUnique<ThrowingTranslateProbeCommand>(true), "InjectedOuterTranslateFailure"
     );
@@ -5436,15 +6536,14 @@ void RunParallelTranslateFailureRetirement() {
     });
     CmdSubmit graphics_submit = graphics.Submit();
     graphics_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    graphics_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    graphics_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics_submit.async_queue_scope = async_queue_scope;
     graphics_submit.Signal(graphics_done.Get(), 1);
 
     CommandList copy(EQueueType::Copy);
-    copy.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    copy.CopyFrom(
+
+    copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(copy,
         OwnedBytes(copy_values),
         copy_destination->GetView(),
         "ParallelTranslateRecordedCopySuffix"
@@ -5460,12 +6559,12 @@ void RunParallelTranslateFailureRetirement() {
         ERHITranslateExecutionClass::Parallel
     );
     copy_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     copy_submit.async_queue_scope = async_queue_scope;
     copy_submit.Signal(copy_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> failing_batch{};
+    Array<RHISubmissionRequest> failing_batch{};
     failing_batch.emplace_back(EQueueType::Graphics, std::move(graphics_submit));
     failing_batch.emplace_back(EQueueType::Copy, std::move(copy_submit));
     RHIExecutor::Get().Submit(std::move(failing_batch), ERHIExecSubmitFlags::FlushGPU);
@@ -5507,6 +6606,7 @@ void RunParallelTranslateFailureRetirement() {
     // source must be terminalized without entering Translate or replaying any
     // earlier packet ownership.
     CommandList later(EQueueType::Graphics);
+    later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     later.AddCallback([&] {
         ordinary_callbacks[2].fetch_add(1, std::memory_order_relaxed);
     });
@@ -5564,6 +6664,7 @@ void RunParallelTranslateRecoverableRejection() {
     FenceRef                           recovered_done      = device.CreateFence();
     std::array<std::atomic<uint32>, 3> ordinary_callbacks{};
     std::array<std::atomic<uint32>, 3> success_callbacks{};
+    std::atomic_bool                   failure_callback_observed_suffix{false};
     std::binary_semaphore              graphics_translated{0};
     std::binary_semaphore              compute_translated{0};
     std::binary_semaphore              recovered_translated{0};
@@ -5571,11 +6672,20 @@ void RunParallelTranslateRecoverableRejection() {
     rejected_dependency->Reject(1);
 
     CommandList graphics(EQueueType::Graphics);
-    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics.AddCustomCommand(
         MakeUnique<TranslateProbeCommand>(&graphics_translated), "RecoverableGraphicsTranslateProbe"
     );
     graphics.AddCallback([&] {
+        // Executor must publish the rejected suffix before handing the first
+        // failed packet to Completion, even if the sibling is still recorded.
+        failure_callback_observed_suffix.store(
+            ResourceCast(graphics_done.Get())->IsRejected(1) &&
+                ResourceCast(compute_done.Get())->IsRejected(1) &&
+                GetCurrentRHIThreadRole() == ERHIThreadRole::Completion,
+            std::memory_order_release
+        );
         ordinary_callbacks[0].fetch_add(1, std::memory_order_relaxed);
     });
     graphics.AddSuccessCallback([&] {
@@ -5583,15 +6693,16 @@ void RunParallelTranslateRecoverableRejection() {
     });
     CmdSubmit graphics_submit = graphics.Submit();
     graphics_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    graphics_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    graphics_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics_submit.async_queue_scope = async_queue_scope;
     graphics_submit.Wait(rejected_dependency.Get(), 1);
     graphics_submit.Signal(graphics_done.Get(), 1);
 
     CommandList compute(EQueueType::Compute);
-    compute.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+
+    compute.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     compute.AddCustomCommand(
-        MakeUnique<TranslateProbeCommand>(&compute_translated), "RecoverableComputeRecordedSuffixProbe"
+        MakeUnique<TranslateProbeCommand>(&compute_translated, EQueueType::Compute), "RecoverableComputeRecordedSuffixProbe"
     );
     compute.AddCallback([&] {
         ordinary_callbacks[1].fetch_add(1, std::memory_order_relaxed);
@@ -5601,11 +6712,11 @@ void RunParallelTranslateRecoverableRejection() {
     });
     CmdSubmit compute_submit = compute.Submit();
     compute_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    compute_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    compute_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     compute_submit.async_queue_scope = async_queue_scope;
     compute_submit.Signal(compute_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> rejected_batch{};
+    Array<RHISubmissionRequest> rejected_batch{};
     rejected_batch.emplace_back(EQueueType::Graphics, std::move(graphics_submit));
     rejected_batch.emplace_back(EQueueType::Compute, std::move(compute_submit));
     RHIExecutor::Get().Submit(std::move(rejected_batch), ERHIExecSubmitFlags::FlushGPU);
@@ -5613,8 +6724,8 @@ void RunParallelTranslateRecoverableRejection() {
     // Wait for exact Submission-side publication without calling Sync:
     // ProcessSync itself clears async-scope admission state and would hide a
     // stale seen-lane bug between two backend batches reusing this scope.
-    if (ResourceCast(graphics_done.Get())->HostWait(1) != VK_ERROR_UNKNOWN ||
-        ResourceCast(compute_done.Get())->HostWait(1) != VK_ERROR_UNKNOWN) {
+    if (ResourceCast(graphics_done.Get())->Wait(1) ||
+        ResourceCast(compute_done.Get())->Wait(1)) {
         throw std::runtime_error("recoverable parallel Translate signals were not published");
     }
 
@@ -5633,9 +6744,9 @@ void RunParallelTranslateRecoverableRejection() {
     // The rejected dependency is packet-local. A later independent source
     // must still enter Translate, submit, and complete successfully.
     CommandList recovered(EQueueType::Compute);
-    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     recovered.AddCustomCommand(
-        MakeUnique<TranslateProbeCommand>(&recovered_translated), "ParallelTranslateRecoveryProbe"
+        MakeUnique<TranslateProbeCommand>(&recovered_translated, EQueueType::Compute), "ParallelTranslateRecoveryProbe"
     );
     recovered.AddCallback([&] {
         ordinary_callbacks[2].fetch_add(1, std::memory_order_relaxed);
@@ -5645,7 +6756,7 @@ void RunParallelTranslateRecoverableRejection() {
     });
     CmdSubmit recovered_submit = recovered.Submit();
     recovered_submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
-    recovered_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    recovered_submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     recovered_submit.async_queue_scope = async_queue_scope;
     recovered_submit.Signal(recovered_done.Get(), 1);
     RHIExecutor::Get().Submit(
@@ -5653,8 +6764,11 @@ void RunParallelTranslateRecoverableRejection() {
     );
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
 
+    if (!failure_callback_observed_suffix.load(std::memory_order_acquire)) {
+        throw std::runtime_error("recoverable rejection notified Completion before publishing the suffix");
+    }
     if (!recovered_translated.try_acquire() ||
-        ResourceCast(recovered_done.Get())->HostWait(1) != VK_SUCCESS ||
+        !ResourceCast(recovered_done.Get())->Wait(1) ||
         ResourceCast(recovered_done.Get())->IsRejected(1) || ResourceCast(recovered_done.Get())->IsFailed()) {
         throw std::runtime_error("recoverable parallel Translate rejection latched the runtime");
     }
@@ -5822,6 +6936,7 @@ void RunRaytracingExportAcceptanceRejection() {
     // identities still have callback-owned strong references after Submission
     // has published terminal rejection.
     CommandList blocker(EQueueType::Graphics);
+    blocker.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     blocker.AddCallback([&] {
         blocker_callbacks.fetch_add(1, std::memory_order_relaxed);
         blocker_entered.release();
@@ -5843,7 +6958,8 @@ void RunRaytracingExportAcceptanceRejection() {
 
     try {
         CommandList attempt1_source(EQueueType::Graphics);
-        attempt1_source.CopyFrom(
+        attempt1_source.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(attempt1_source,
             OwnedBytes(std::array<uint32, 4>{11, 13, 17, 19}),
             attempt1_source_buffer->GetView(),
             "RaytracingExportAttempt1Source"
@@ -5874,7 +6990,9 @@ void RunRaytracingExportAcceptanceRejection() {
         );
 
         CommandList attempt1_tail(EQueueType::Graphics);
-        attempt1_tail.CopyFrom(
+
+        attempt1_tail.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(attempt1_tail,
             OwnedBytes(std::array<uint32, 4>{23, 29, 31, 37}),
             attempt1_tail_target->GetView(),
             "RaytracingExportAttempt1DependentTail"
@@ -5962,7 +7080,9 @@ void RunRaytracingExportAcceptanceRejection() {
         }
 
         CommandList readback_retry_prefix(EQueueType::Graphics);
-        readback_retry_prefix.CopyFrom(
+
+        readback_retry_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(readback_retry_prefix,
             OwnedBytes(readback_retry_expected),
             readback_retry_source->GetView(),
             "RaytracingExportReadbackRetryPrefix"
@@ -5996,8 +7116,9 @@ void RunRaytracingExportAcceptanceRejection() {
 
         readback_retry_submission.BeginReadback(device.CreateFence());
         CommandList rejected_readback_commands(EQueueType::Graphics);
+        rejected_readback_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         ReadbackFuture rejected_readback =
-            rejected_readback_commands.Readback(
+            ReadbackTestTransfer(rejected_readback_commands,
             readback_retry_source->GetView(),
             "RaytracingExportRejectedReadback"
         );
@@ -6042,7 +7163,9 @@ void RunRaytracingExportAcceptanceRejection() {
         }
 
         CommandList readback_retry_tail(EQueueType::Graphics);
-        readback_retry_tail.CopyFrom(
+
+        readback_retry_tail.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(readback_retry_tail,
             OwnedBytes(std::array<uint32, 4>{73, 79, 83, 89}),
             readback_retry_tail_target->GetView(),
             "RaytracingExportReadbackRetryTail"
@@ -6113,8 +7236,8 @@ void RunRaytracingExportAcceptanceRejection() {
             readback_retry_submission.GetReadbackReceiptFence()->GetRefCount() !=
                 1 ||
             native_capture.Overflowed() || native_capture.Count() != 2 ||
-            !native_capture.Event(0).outcome.WasSubmitted() ||
-            !native_capture.Event(1).outcome.WasSubmitted()) {
+            !native_capture.Event(0).outcome.Succeeded() ||
+            !native_capture.Event(1).outcome.Succeeded()) {
             throw std::runtime_error(
                 "raytracing readback rejection reached native submit or "
                 "retained a terminal receipt"
@@ -6142,7 +7265,9 @@ void RunRaytracingExportAcceptanceRejection() {
         }
 
         CommandList recovery_prefix(EQueueType::Graphics);
-        recovery_prefix.CopyFrom(
+
+        recovery_prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(recovery_prefix,
             OwnedBytes(recovery_expected),
             recovery_source->GetView(),
             "RaytracingExportRecoveryPrefix"
@@ -6168,8 +7293,9 @@ void RunRaytracingExportAcceptanceRejection() {
 
         recovery_submission.BeginReadback(device.CreateFence());
         CommandList recovery_readback_commands(EQueueType::Graphics);
+        recovery_readback_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         ReadbackFuture recovered_readback =
-            recovery_readback_commands.Readback(
+            ReadbackTestTransfer(recovery_readback_commands,
             recovery_source->GetView(),
             "RaytracingExportRecoveryReadback"
         );
@@ -6218,7 +7344,9 @@ void RunRaytracingExportAcceptanceRejection() {
         }
 
         CommandList recovery_tail(EQueueType::Graphics);
-        recovery_tail.CopyFrom(
+
+        recovery_tail.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(recovery_tail,
             OwnedBytes(std::array<uint32, 4>{97, 101, 103, 107}),
             recovery_tail_target->GetView(),
             "RaytracingExportRecoveryTail"
@@ -6291,7 +7419,7 @@ void RunRaytracingExportAcceptanceRejection() {
             );
         }
         for (size_t index = 0; index < native_capture.Count(); ++index) {
-            if (!native_capture.Event(index).outcome.WasSubmitted()) {
+            if (!native_capture.Event(index).outcome.Succeeded()) {
                 throw std::runtime_error(
                     "raytracing export test observed a rejected native submit"
                 );
@@ -6344,7 +7472,9 @@ void RunRaytracingAcceptedReadbackMaterializationFailure() {
     ExportSubmissionTransaction submission(device.CreateFence());
 
     CommandList source_commands(EQueueType::Graphics);
-    source_commands.CopyFrom(
+
+    source_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(source_commands,
         OwnedBytes(std::array<uint32, 4>{109, 113, 127, 131}),
         source->GetView(),
         "RaytracingExportMaterializationFailureSource"
@@ -6364,13 +7494,14 @@ void RunRaytracingAcceptedReadbackMaterializationFailure() {
 
     submission.BeginReadback(device.CreateFence());
     CommandList readback_commands(EQueueType::Graphics);
-    ReadbackFuture readback = readback_commands.Readback(
+    readback_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    ReadbackFuture readback = ReadbackTestTransfer(readback_commands,
         source->GetView(),
         "RaytracingExportInjectedMaterializationFailure"
     );
     CmdSubmit readback_submit = readback_commands.Submit();
-    if (readback_submit.cmds.size() != 1 ||
-        readback_submit.cmds.front()->Type() !=
+    if (readback_submit.cmds.empty() ||
+        readback_submit.cmds.back()->Type() !=
             Command::EType::CopyBackBuffer) {
         throw std::runtime_error(
             "materialization-failure readback command was not recorded"
@@ -6378,7 +7509,7 @@ void RunRaytracingAcceptedReadbackMaterializationFailure() {
     }
     const ReadbackToken backend_token =
         static_cast<const CopyBackBufferCmd&>(
-            *readback_submit.cmds.front()
+            *readback_submit.cmds.back()
         ).OwningReadback();
     if (ReadbackBackendAccess::MaterializePayload(
             backend_token,
@@ -6480,6 +7611,7 @@ void RunRecoverableCopyDependencyRejection() {
 
     try {
         CommandList blocker(EQueueType::Copy);
+        blocker.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         blocker.AddCallback([&] {
             blocker_callbacks.fetch_add(1, std::memory_order_relaxed);
             blocker_entered.release();
@@ -6500,7 +7632,9 @@ void RunRecoverableCopyDependencyRejection() {
         }
 
     CommandList rejected(EQueueType::Copy);
-    rejected.CopyFrom(
+
+    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(rejected,
         OwnedBytes(std::array<uint32, 4>{1, 2, 3, 4}),
         destination->GetView(),
         "RecoverableCopyRejected"
@@ -6515,7 +7649,9 @@ void RunRecoverableCopyDependencyRejection() {
     rejected_submit.Wait(dependency.Get(), 1).Signal(shared_done.Get(), 1);
 
     CommandList recovered(EQueueType::Copy);
-    recovered.CopyFrom(
+
+    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(recovered,
         OwnedBytes(expected),
         destination->GetView(),
         "RecoverableCopyUpload"
@@ -6530,7 +7666,9 @@ void RunRecoverableCopyDependencyRejection() {
     recovered_submit.Signal(shared_done.Get(), 2);
 
     CommandList stale_wait(EQueueType::Copy);
-    stale_wait.CopyFrom(
+
+    stale_wait.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(stale_wait,
         OwnedBytes(stale_values),
         destination->GetView(),
         "RejectedStaleTimelineWait"
@@ -6547,7 +7685,9 @@ void RunRecoverableCopyDependencyRejection() {
     );
 
     CommandList dependent(EQueueType::Copy);
-    dependent.CopyFrom(
+
+    dependent.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(dependent,
         destination->GetView(),
         WritableBytes(readback),
         "RecoveredTimelineDependencyReadback"
@@ -6582,112 +7722,115 @@ void RunRecoverableCopyDependencyRejection() {
         ERHIExecSubmitFlags::FlushGPU
     );
 
-    auto* shared_vk_fence = ResourceCast(shared_done.Get());
-    auto* stale_vk_fence  = ResourceCast(stale_wait_done.Get());
-    std::atomic_bool continue_waiting{true};
-    std::jthread publication_deadline(
-        [&continue_waiting](std::stop_token _stop) {
-            const auto deadline = std::chrono::steady_clock::now() + 5s;
-            while (!_stop.stop_requested() &&
-                   std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::sleep_for(10ms);
+        auto*            shared_vk_fence = ResourceCast(shared_done.Get());
+        auto*            stale_vk_fence  = ResourceCast(stale_wait_done.Get());
+        std::atomic_bool continue_waiting{true};
+        std::jthread     publication_deadline(
+            [&continue_waiting](std::stop_token _stop) {
+                const auto deadline = std::chrono::steady_clock::now() + 5s;
+                while (!_stop.stop_requested() &&
+                       std::chrono::steady_clock::now() < deadline) {
+                    std::this_thread::sleep_for(10ms);
+                }
+                if (!_stop.stop_requested()) {
+                    continue_waiting.store(false, std::memory_order_release);
+                }
             }
-            if (!_stop.stop_requested()) {
-                continue_waiting.store(false, std::memory_order_release);
-            }
-        }
-    );
-    const bool stale_wait_submitted =
-        stale_vk_fence->WaitSubmitted(1, &continue_waiting);
-    publication_deadline.request_stop();
-    publication_deadline.join();
-    if (stale_wait_submitted || !stale_vk_fence->IsRejected(1)) {
-        throw std::runtime_error(
-            "Submission did not publish a rejected stale-value dependency "
-            "before Completion"
         );
-    }
-    if (!shared_vk_fence->IsRejected(1) ||
-        !shared_vk_fence->WaitSubmitted(2) ||
-        shared_vk_fence->HostWait(2) != VK_SUCCESS ||
-        shared_vk_fence->HostWait(1) != VK_ERROR_UNKNOWN) {
-        throw std::runtime_error(
-            "reused external fence lost its exact rejection or accepted value"
-        );
-    }
-
-    release_guard.Release();
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-
-    if (!shared_vk_fence->IsRejected(1) ||
-        shared_vk_fence->IsRejected(2) ||
-        shared_vk_fence->IsFailed() ||
-        !stale_vk_fence->IsRejected(1) ||
-        stale_vk_fence->IsFailed()) {
-        throw std::runtime_error(
-            "recoverable Copy rejection poisoned the reusable external fence"
-        );
-    }
-    if (shared_vk_fence->WaitSubmitted(1) ||
-        !shared_vk_fence->WaitSubmitted(2) ||
-        shared_done->GetValue() < 2 ||
-        readback != expected) {
-        throw std::runtime_error(
-            "reused external fence did not recover at its next timeline value"
-        );
-    }
-    if (blocker_callbacks.load(std::memory_order_acquire) != 1 ||
-        blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
-        rejected_callbacks.load(std::memory_order_acquire) != 1 ||
-        rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
-        recovered_callbacks.load(std::memory_order_acquire) != 1 ||
-        recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
-        stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
-        stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
-        dependent_callbacks.load(std::memory_order_acquire) != 1 ||
-        dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
-        throw std::runtime_error(
-            "recoverable Copy rejection callbacks retired incorrectly"
-        );
-    }
-    if (native_capture.Overflowed() || native_capture.Count() != 3) {
-        throw std::runtime_error(
-            "rejected Copy packets reached native submit or accepted packets "
-            "were lost"
-        );
-    }
-    const uint32 submission_thread_id =
-        native_capture.Event(0).thread_id;
-    for (size_t index = 0; index < native_capture.Count(); ++index) {
-        const VulkanNativeSubmissionEvent& event =
-            native_capture.Event(index);
-        if (event.queue != EQueueType::Copy ||
-            event.thread_role != ERHIThreadRole::Submission ||
-            event.thread_id != submission_thread_id ||
-            !event.outcome.WasSubmitted()) {
+        const bool stale_wait_submitted =
+            stale_vk_fence->WaitSubmitted(1, &continue_waiting);
+        publication_deadline.request_stop();
+        publication_deadline.join();
+        if (stale_wait_submitted || !stale_vk_fence->IsRejected(1)) {
             throw std::runtime_error(
-                "accepted Copy recovery packets escaped the sole native "
-                "Submission owner"
+                "Submission did not publish a rejected stale-value dependency "
+                "before Completion"
             );
         }
-    }
+        if (!shared_vk_fence->IsRejected(1) ||
+            !shared_vk_fence->WaitSubmitted(2) ||
+            !shared_vk_fence->Wait(2) ||
+            shared_done->GetValue() < 2 ||
+            shared_vk_fence->QueryGpuCompletion(2) != VK_SUCCESS ||
+            shared_vk_fence->Wait(1) ||
+            shared_vk_fence->QueryGpuCompletion(1) != VK_ERROR_UNKNOWN) {
+            throw std::runtime_error(
+                "reused external fence lost its exact rejection or accepted value"
+            );
+        }
 
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (native_capture.Count() != 3 ||
-        blocker_callbacks.load(std::memory_order_acquire) != 1 ||
-        blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
-        rejected_callbacks.load(std::memory_order_acquire) != 1 ||
-        rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
-        recovered_callbacks.load(std::memory_order_acquire) != 1 ||
-        recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
-        stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
-        stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
-        dependent_callbacks.load(std::memory_order_acquire) != 1 ||
-        dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
-        throw std::runtime_error(
-            "a second Sync replayed recoverable Copy retirement"
-        );
-    }
+        release_guard.Release();
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+        if (!shared_vk_fence->IsRejected(1) ||
+            shared_vk_fence->IsRejected(2) ||
+            shared_vk_fence->IsFailed() ||
+            !stale_vk_fence->IsRejected(1) ||
+            stale_vk_fence->IsFailed()) {
+            throw std::runtime_error(
+                "recoverable Copy rejection poisoned the reusable external fence"
+            );
+        }
+        if (shared_vk_fence->WaitSubmitted(1) ||
+            !shared_vk_fence->WaitSubmitted(2) ||
+            shared_done->GetValue() < 2 ||
+            readback != expected) {
+            throw std::runtime_error(
+                "reused external fence did not recover at its next timeline value"
+            );
+        }
+        if (blocker_callbacks.load(std::memory_order_acquire) != 1 ||
+            blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
+            rejected_callbacks.load(std::memory_order_acquire) != 1 ||
+            rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
+            recovered_callbacks.load(std::memory_order_acquire) != 1 ||
+            recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
+            stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
+            stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
+            dependent_callbacks.load(std::memory_order_acquire) != 1 ||
+            dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
+            throw std::runtime_error(
+                "recoverable Copy rejection callbacks retired incorrectly"
+            );
+        }
+        if (native_capture.Overflowed() || native_capture.Count() != 3) {
+            throw std::runtime_error(
+                "rejected Copy packets reached native submit or accepted packets "
+                "were lost"
+            );
+        }
+        const uint32 submission_thread_id =
+            native_capture.Event(0).thread_id;
+        for (size_t index = 0; index < native_capture.Count(); ++index) {
+            const VulkanNativeSubmissionEvent& event =
+                native_capture.Event(index);
+            if (event.queue != EQueueType::Copy ||
+                event.thread_role != ERHIThreadRole::Submission ||
+                event.thread_id != submission_thread_id ||
+                !event.outcome.Succeeded()) {
+                throw std::runtime_error(
+                    "accepted Copy recovery packets escaped the sole native "
+                    "Submission owner"
+                );
+            }
+        }
+
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (native_capture.Count() != 3 ||
+            blocker_callbacks.load(std::memory_order_acquire) != 1 ||
+            blocker_success_callbacks.load(std::memory_order_acquire) != 1 ||
+            rejected_callbacks.load(std::memory_order_acquire) != 1 ||
+            rejected_success_callbacks.load(std::memory_order_acquire) != 0 ||
+            recovered_callbacks.load(std::memory_order_acquire) != 1 ||
+            recovered_success_callbacks.load(std::memory_order_acquire) != 1 ||
+            stale_wait_callbacks.load(std::memory_order_acquire) != 1 ||
+            stale_wait_success_callbacks.load(std::memory_order_acquire) != 0 ||
+            dependent_callbacks.load(std::memory_order_acquire) != 1 ||
+            dependent_success_callbacks.load(std::memory_order_acquire) != 1) {
+            throw std::runtime_error(
+                "a second Sync replayed recoverable Copy retirement"
+            );
+        }
     } catch (...) {
         const std::exception_ptr failure = std::current_exception();
         release_guard.Release();
@@ -6714,6 +7857,8 @@ void RunDirectCopyExecuteRejected() {
     std::atomic<uint32> success_callbacks{0};
 
     CommandList direct(EQueueType::Copy);
+
+    direct.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     direct.AddCallback([&] {
         ordinary_callbacks.fetch_add(1, std::memory_order_relaxed);
     });
@@ -6760,124 +7905,6 @@ void RunDirectCopyExecuteRejected() {
     );
 }
 
-void RunVulkanStorageUnifiedCopySubmission() {
-    auto& device = RenderDevice::Get();
-    auto* vulkan_device =
-        static_cast<VulkanDevice*>(device.GetImpl());
-    auto& copy_queue =
-        static_cast<VkCopyQueue&>(device.GetCopyQueue());
-
-    constexpr size_t element_count = 16;
-    constexpr size_t byte_size = sizeof(uint32) * element_count;
-    std::array<uint32, element_count> first_values{};
-    std::array<uint32, element_count> expected{};
-    std::array<uint32, element_count> readback{};
-    for (uint32 index = 0; index < expected.size(); ++index) {
-        first_values[index] = 0x15A00000u + index * 19u + 3u;
-        expected[index]     = 0x15B00000u + index * 37u + 9u;
-    }
-
-    BufferRef destination = device.CreateBuffer<uint32>(
-        "phase15b_io_copy_destination",
-        element_count,
-        EBufferUsageFlags::TRANSFER_SRC |
-            EBufferUsageFlags::TRANSFER_DST
-    );
-    FenceRef done = device.CreateFence();
-    NativeSubmissionCapture native_capture{};
-    {
-        ScopedNativeSubmissionObserver native_observer(native_capture);
-        VulkanStorage storage(*vulkan_device, copy_queue);
-
-        storage.Enqueue(
-            first_values.data(),
-            0,
-            ResourceCast(destination.Get()),
-            0,
-            byte_size
-        );
-        storage.EnqueueSignal(done, 1);
-        storage.Commit();
-        if (ResourceCast(done.Get())->HostWait(1) != VK_SUCCESS) {
-            throw std::runtime_error(
-                "first Vulkan storage Copy commit did not signal completion"
-            );
-        }
-        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-
-        // The first session is now terminal. A second Enqueue must recycle it
-        // without dropping the newly staged command or signal.
-        storage.Enqueue(
-            expected.data(),
-            0,
-            ResourceCast(destination.Get()),
-            0,
-            byte_size
-        );
-        storage.EnqueueSignal(done, 2);
-        storage.Commit();
-        if (ResourceCast(done.Get())->HostWait(2) != VK_SUCCESS) {
-            throw std::runtime_error(
-                "second Vulkan storage Copy commit did not signal completion"
-            );
-        }
-        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    }
-
-    if (native_capture.Overflowed() || native_capture.Count() != 2) {
-        throw std::runtime_error(
-            "Vulkan storage commits did not issue exactly two native submits"
-        );
-    }
-    const uint32 submission_thread_id =
-        native_capture.Event(0).thread_id;
-    for (size_t index = 0; index < native_capture.Count(); ++index) {
-        const VulkanNativeSubmissionEvent& event =
-            native_capture.Event(index);
-        if (event.queue != EQueueType::Copy ||
-            event.thread_role != ERHIThreadRole::Submission ||
-            event.thread_id != submission_thread_id ||
-            event.thread_id == Platform::GetCurrentThreadID() ||
-            !event.outcome.WasSubmitted()) {
-            throw std::runtime_error(
-                "Vulkan storage Copy commit escaped the unified "
-                "Submission owner"
-            );
-        }
-    }
-    if (ResourceCast(done.Get())->IsRejected(1) ||
-        ResourceCast(done.Get())->IsRejected(2) ||
-        ResourceCast(done.Get())->IsFailed()) {
-        throw std::runtime_error(
-            "Vulkan storage Copy signals were terminalized incorrectly"
-        );
-    }
-
-    CommandList verify(EQueueType::Copy);
-    verify.CopyFrom(
-        destination->GetView(),
-        WritableBytes(readback),
-        "Phase15BIOCopyReadback"
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Copy,
-        verify.Submit(),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (readback != expected) {
-        throw std::runtime_error(
-            "Vulkan storage unified Copy submission readback mismatch"
-        );
-    }
-
-    LOG_INFO(
-        "[TESTCASE][PASS] name=VulkanStorageUnifiedCopySubmission "
-        "commits=2 signals=2 native_submit=2 native_owner=Submission "
-        "session_recycle=verified readback=verified"
-    );
-}
-
 void RunRuntimeRejectCompletionOwnership() {
     using namespace std::chrono_literals;
 
@@ -6912,7 +7939,9 @@ void RunRuntimeRejectCompletionOwnership() {
     };
 
     CommandList graphics(EQueueType::Graphics);
-    graphics.CopyFrom(
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(graphics,
         OwnedBytes(std::array<uint32, 4>{1, 2, 3, 4}),
         rejected_destination->GetView(),
         "RuntimeRejectRecordedCopy"
@@ -6935,6 +7964,8 @@ void RunRuntimeRejectCompletionOwnership() {
     graphics_submit.Wait(dependency.Get(), 1).Signal(graphics_done.Get(), 1);
 
     CommandList copy(EQueueType::Copy);
+
+    copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     copy.AddCallback([&] {
         validate_completion_owner();
         device.GetCommandQueue(EQueueType::Graphics).Sync();
@@ -6980,7 +8011,7 @@ void RunRuntimeRejectCompletionOwnership() {
         }
     });
 
-    Array<RHIBackendSubmissionBatchEntry> submits{};
+    Array<RHISubmissionRequest> submits{};
     submits.emplace_back(EQueueType::Graphics, std::move(graphics_submit));
     submits.emplace_back(EQueueType::Copy, std::move(copy_submit));
     RHIExecutor::Get().Submit(
@@ -7083,7 +8114,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
     ScopedSourceSubmissionObserver source_observer(source_capture);
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          graphics_wait_capture{EQueueType::Graphics};
+    DependencyWaitBeginCapture     graphics_wait_capture{EQueueType::Graphics};
     ScopedDependencyWaitObserver   wait_observer(graphics_wait_capture);
 
     FenceRef dependency    = device.CreateFence();
@@ -7098,22 +8129,20 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
     std::atomic<bool>                  dependency_release_started{false};
     std::atomic<bool>                  graphics_observed_release{true};
     std::atomic<bool>                  compute_observed_release{false};
-    bool                               dependency_released{false};
+    bool                               dependency_release_attempted{false};
 
     const auto release_dependency = [&] {
-        if (dependency_released) {
+        if (dependency_release_attempted) {
             return;
         }
         dependency_release_started.store(true, std::memory_order_release);
-        ResourceCast(dependency.Get())->SignalHost(1);
-        dependency_released = true;
+        dependency_release_attempted = true;
+        ReleaseTestSubmissionDependency(*dependency.Get(), 1);
     };
 
     try {
         CommandList graphics(EQueueType::Graphics);
-        graphics.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics.AddCustomCommand(
             MakeUnique<PipelineTranslateProbeCommand>(
                 EQueueType::Graphics,
@@ -7139,7 +8168,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
             ERHITranslateExecutionClass::Parallel
         );
         graphics_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         graphics_submit.async_queue_scope = async_queue_scope;
         graphics_submit.Wait(dependency.Get(), 1)
@@ -7157,8 +8186,8 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
             source_capture.Count() != 0 ||
             !graphics_translated.try_acquire()) {
             throw std::runtime_error(
-                "batch 0 did not block its translated Graphics packet on "
-                "the sole Submission owner"
+                "batch 0 did not begin dependency waiting for its translated "
+                "Graphics packet on the sole Submission owner"
             );
         }
         if (translate_counts[0].load(std::memory_order_acquire) != 1 ||
@@ -7169,9 +8198,8 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
         }
 
         CommandList compute(EQueueType::Compute);
-        compute.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+
+        compute.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         compute.AddCustomCommand(
             MakeUnique<PipelineTranslateProbeCommand>(
                 EQueueType::Compute,
@@ -7197,7 +8225,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
             ERHITranslateExecutionClass::Parallel
         );
         compute_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         compute_submit.async_queue_scope = async_queue_scope;
         compute_submit.Signal(compute_done.Get(), 1);
@@ -7316,7 +8344,7 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "native submission escaped the sole Submission owner "
                     "or changed cross-batch source order"
@@ -7331,8 +8359,8 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
             );
         }
 
-        if (ResourceCast(graphics_done.Get())->HostWait(1) != VK_SUCCESS ||
-            ResourceCast(compute_done.Get())->HostWait(1) != VK_SUCCESS ||
+        if (!ResourceCast(graphics_done.Get())->Wait(1) ||
+            !ResourceCast(compute_done.Get())->Wait(1) ||
             ResourceCast(graphics_done.Get())->IsRejected(1) ||
             ResourceCast(compute_done.Get())->IsRejected(1) ||
             ResourceCast(graphics_done.Get())->IsFailed() ||
@@ -7368,7 +8396,11 @@ void RunBoundedCrossBatchSubmissionPipeline(uint32 _batch_window) {
         }
     } catch (...) {
         const std::exception_ptr failure = std::current_exception();
-        release_dependency();
+        try {
+            release_dependency();
+        } catch (...) {
+            // A failed release rejects the dependency; still drain observed work.
+        }
         try {
             RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         } catch (...) {
@@ -7411,7 +8443,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
     ScopedSourceSubmissionObserver source_observer(source_capture);
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          wait_capture{EQueueType::Graphics};
+    DependencyWaitBeginCapture     wait_capture{EQueueType::Graphics};
     ScopedDependencyWaitObserver   wait_observer(wait_capture);
     BackendSyncWaitCapture         sync_wait_capture{};
     ScopedBackendSyncWaitObserver  sync_wait_observer(sync_wait_capture);
@@ -7433,14 +8465,14 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
     std::vector<uint32>                callback_order{};
     std::atomic<bool>                  sync_returned{false};
     std::jthread                       sync_waiter{};
-    bool                               dependency_released{false};
+    bool                               dependency_release_attempted{false};
 
     const auto release_dependency = [&] {
-        if (dependency_released) {
+        if (dependency_release_attempted) {
             return;
         }
-        ResourceCast(dependency.Get())->SignalHost(1);
-        dependency_released = true;
+        dependency_release_attempted = true;
+        ReleaseTestSubmissionDependency(*dependency.Get(), 1);
     };
     const auto record_callback = [&](size_t _index) {
         {
@@ -7457,9 +8489,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
 
     try {
         CommandList prefix(EQueueType::Graphics);
-        prefix.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         prefix.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &prefix_translated, EQueueType::Graphics
@@ -7477,7 +8507,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             ERHITranslateExecutionClass::Parallel
         );
         prefix_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         prefix_submit.async_queue_scope = async_queue_scope;
         prefix_submit.Wait(dependency.Get(), 1)
@@ -7495,15 +8525,14 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             source_capture.Count() != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "malformed-ordering prefix did not block on the sole "
+                "malformed-ordering prefix did not begin dependency waiting on the sole "
                 "Submission owner"
             );
         }
 
         CommandList malformed(EQueueType::Graphics);
-        malformed.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+
+        malformed.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         malformed.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &malformed_translated, EQueueType::Graphics
@@ -7521,7 +8550,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             ERHITranslateExecutionClass::Parallel
         );
         malformed_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         malformed_submit.async_queue_scope = async_queue_scope;
         malformed_submit.Signal(malformed_done.Get(), 1);
@@ -7591,15 +8620,14 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             );
         }
 
-        if (ResourceCast(prefix_done.Get())->HostWait(1) != VK_SUCCESS ||
+        if (!ResourceCast(prefix_done.Get())->Wait(1) ||
             ResourceCast(prefix_done.Get())->IsRejected(1) ||
             ResourceCast(prefix_done.Get())->IsFailed()) {
             throw std::runtime_error(
                 "malformed-ordering prefix did not complete successfully"
             );
         }
-        if (ResourceCast(malformed_done.Get())->HostWait(1) !=
-                VK_ERROR_UNKNOWN ||
+        if (ResourceCast(malformed_done.Get())->Wait(1) ||
             !ResourceCast(malformed_done.Get())->IsRejected(1) ||
             ResourceCast(malformed_done.Get())->IsFailed()) {
             throw std::runtime_error(
@@ -7637,7 +8665,7 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
             native_capture.Event(0).thread_role !=
                 ERHIThreadRole::Submission ||
             native_capture.Event(0).thread_id == main_thread_id ||
-            !native_capture.Event(0).outcome.WasSubmitted()) {
+            !native_capture.Event(0).outcome.Succeeded()) {
             throw std::runtime_error(
                 "malformed-ordering prefix escaped stable Submission "
                 "ownership"
@@ -7657,7 +8685,11 @@ void RunBoundedCrossBatchMalformedPreflightOrdering() {
         }
     } catch (...) {
         const std::exception_ptr failure = std::current_exception();
-        release_dependency();
+        try {
+            release_dependency();
+        } catch (...) {
+            // A failed release rejects the dependency; still drain observed work.
+        }
         try {
             if (sync_waiter.joinable()) {
                 sync_waiter.join();
@@ -7723,7 +8755,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
     );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture graphics_wait_capture{
+    DependencyWaitBeginCapture graphics_wait_capture{
         EQueueType::Graphics
     };
     ScopedDependencyWaitObserver wait_observer(
@@ -7762,9 +8794,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
 
     try {
         CommandList graphics(EQueueType::Graphics);
-        graphics.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &graphics_translated, EQueueType::Graphics
@@ -7786,7 +8816,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
             ERHITranslateExecutionClass::Parallel
         );
         graphics_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         graphics_submit.async_queue_scope = async_queue_scope;
         graphics_submit.Wait(dependency.Get(), 1)
@@ -7804,21 +8834,20 @@ void RunBoundedCrossBatchRecoverableRejection() {
             source_capture.Count() != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "recoverable batch 0 did not block its translated Graphics "
-                "packet on the sole Submission owner"
+                "recoverable batch 0 did not begin dependency waiting for its "
+                "translated Graphics packet on the sole Submission owner"
             );
         }
 
         CommandList copy(EQueueType::Copy);
-        copy.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        copy.CopyFrom(
+
+        copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(copy,
             OwnedBytes(expected),
             destination->GetView(),
             "PipelineRecoverableCopyUpload"
         );
-        copy.CopyFrom(
+        CopyTestTransfer(copy,
             destination->GetView(),
             WritableBytes(readback),
             "PipelineRecoverableCopyReadback"
@@ -7838,7 +8867,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
             ERHITranslateExecutionClass::Parallel
         );
         copy_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         copy_submit.async_queue_scope = async_queue_scope;
         copy_submit.Signal(copy_done.Get(), 1);
@@ -7908,15 +8937,14 @@ void RunBoundedCrossBatchRecoverableRejection() {
                 "Translate ownership"
             );
         }
-        if (ResourceCast(graphics_done.Get())->HostWait(1) !=
-                VK_ERROR_UNKNOWN ||
+        if (ResourceCast(graphics_done.Get())->Wait(1) ||
             !ResourceCast(graphics_done.Get())->IsRejected(1) ||
             ResourceCast(graphics_done.Get())->IsFailed()) {
             throw std::runtime_error(
                 "recoverable batch 0 did not reject its exact signal value"
             );
         }
-        if (ResourceCast(copy_done.Get())->HostWait(1) != VK_SUCCESS ||
+        if (!ResourceCast(copy_done.Get())->Wait(1) ||
             ResourceCast(copy_done.Get())->IsRejected(1) ||
             ResourceCast(copy_done.Get())->IsFailed()) {
             throw std::runtime_error(
@@ -7966,7 +8994,7 @@ void RunBoundedCrossBatchRecoverableRejection() {
         if (native_event.queue != EQueueType::Copy ||
             native_event.thread_role != ERHIThreadRole::Submission ||
             native_event.thread_id == main_thread_id ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "recovered Copy batch 1 escaped stable Submission ownership"
             );
@@ -8045,7 +9073,7 @@ void RunBoundedPipelineShutdownCancellation() {
     );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          graphics_wait_capture{EQueueType::Graphics};
+    DependencyWaitBeginCapture     graphics_wait_capture{EQueueType::Graphics};
     ScopedDependencyWaitObserver   dependency_wait_observer(
         graphics_wait_capture
     );
@@ -8086,9 +9114,7 @@ void RunBoundedPipelineShutdownCancellation() {
 
     try {
         CommandList graphics(EQueueType::Graphics);
-        graphics.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         graphics.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &graphics_translated, EQueueType::Graphics
@@ -8110,7 +9136,7 @@ void RunBoundedPipelineShutdownCancellation() {
             ERHITranslateExecutionClass::Parallel
         );
         graphics_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         graphics_submit.async_queue_scope = async_queue_scope;
         graphics_submit.Wait(dependency.Get(), 1)
@@ -8128,21 +9154,20 @@ void RunBoundedPipelineShutdownCancellation() {
             source_capture.Count() != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "shutdown batch 0 did not block its translated Graphics "
-                "packet on the sole Submission owner"
+                "shutdown batch 0 did not begin dependency waiting for its "
+                "translated Graphics packet on the sole Submission owner"
             );
         }
 
         CommandList copy(EQueueType::Copy);
-        copy.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        copy.CopyFrom(
+
+        copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(copy,
             OwnedBytes(expected),
             destination->GetView(),
             "PipelineShutdownCopyUpload"
         );
-        copy.CopyFrom(
+        CopyTestTransfer(copy,
             destination->GetView(),
             WritableBytes(readback),
             "PipelineShutdownCopyReadback"
@@ -8162,7 +9187,7 @@ void RunBoundedPipelineShutdownCancellation() {
             ERHITranslateExecutionClass::Parallel
         );
         copy_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         copy_submit.async_queue_scope = async_queue_scope;
         copy_submit.Signal(copy_done.Get(), 1);
@@ -8251,15 +9276,14 @@ void RunBoundedPipelineShutdownCancellation() {
                 "pipeline shutdown did not release the concurrent Sync"
             );
         }
-        if (ResourceCast(graphics_done.Get())->HostWait(1) !=
-                VK_ERROR_UNKNOWN ||
+        if (ResourceCast(graphics_done.Get())->Wait(1) ||
             !ResourceCast(graphics_done.Get())->IsRejected(1) ||
             ResourceCast(graphics_done.Get())->IsFailed()) {
             throw std::runtime_error(
                 "pipeline shutdown did not reject batch 0's exact signal value"
             );
         }
-        if (ResourceCast(copy_done.Get())->HostWait(1) != VK_SUCCESS ||
+        if (!ResourceCast(copy_done.Get())->Wait(1) ||
             ResourceCast(copy_done.Get())->IsRejected(1) ||
             ResourceCast(copy_done.Get())->IsFailed()) {
             throw std::runtime_error(
@@ -8309,7 +9333,7 @@ void RunBoundedPipelineShutdownCancellation() {
         if (native_event.queue != EQueueType::Copy ||
             native_event.thread_role != ERHIThreadRole::Submission ||
             native_event.thread_id == main_thread_id ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "pipeline shutdown drained batch 1 outside the Submission owner"
             );
@@ -8364,12 +9388,14 @@ void RunShutdownDependencyCancellation() {
     std::atomic<bool>   sync_returned{false};
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          copy_wait_capture{EQueueType::Copy};
+    DependencyWaitBeginCapture     copy_wait_capture{EQueueType::Copy};
     ScopedDependencyWaitObserver   wait_observer(copy_wait_capture);
     BackendSyncWaitCapture         sync_wait_capture{};
     ScopedBackendSyncWaitObserver  sync_wait_observer(sync_wait_capture);
 
     CommandList graphics(EQueueType::Graphics);
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     graphics.AddCallback([&] {
         callbacks.fetch_add(1, std::memory_order_relaxed);
     });
@@ -8381,6 +9407,8 @@ void RunShutdownDependencyCancellation() {
         .Signal(graphics_done.Get(), 1);
 
     CommandList copy(EQueueType::Copy);
+
+    copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     copy.AddCallback([&] {
         callbacks.fetch_add(1, std::memory_order_relaxed);
     });
@@ -8400,7 +9428,7 @@ void RunShutdownDependencyCancellation() {
         copy_wait_capture.wrong_owner.load(std::memory_order_acquire) ||
         native_capture.Count() != 0) {
         throw std::runtime_error(
-            "Copy did not enter its unpublished dependency wait on the sole "
+            "Copy did not begin dependency waiting on the sole "
             "Submission owner"
         );
     }
@@ -8480,7 +9508,7 @@ void RunSerialControlPipelineBoundary() {
     );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          wait_capture{EQueueType::Graphics};
+    DependencyWaitBeginCapture     wait_capture{EQueueType::Graphics};
     ScopedDependencyWaitObserver   wait_observer(wait_capture);
 
     constexpr size_t element_count = 16;
@@ -8529,22 +9557,20 @@ void RunSerialControlPipelineBoundary() {
     std::array<std::atomic<uint32>, 3> ordinary_callbacks{};
     std::array<std::atomic<uint32>, 3> success_callbacks{};
     std::binary_semaphore later_translated{0};
-    bool dependency_released = false;
+    bool dependency_release_attempted = false;
 
     const auto release_dependency = [&] {
-        if (dependency_released) {
+        if (dependency_release_attempted) {
             return;
         }
-        ResourceCast(dependency.Get())->SignalHost(1);
-        dependency_released = true;
+        dependency_release_attempted = true;
+        ReleaseTestSubmissionDependency(*dependency.Get(), 1);
     };
 
     try {
         CommandList prefix(EQueueType::Graphics);
-        prefix.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        prefix.CopyFrom(
+        prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(prefix,
             OwnedBytes(expected),
             source->GetView(),
             "SerialControlBoundaryBlockedPrefix"
@@ -8564,7 +9590,7 @@ void RunSerialControlPipelineBoundary() {
             ERHITranslateExecutionClass::Parallel
         );
         prefix_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         prefix_submit.async_queue_scope = async_queue_scope;
         prefix_submit.Wait(dependency.Get(), 1)
@@ -8582,19 +9608,21 @@ void RunSerialControlPipelineBoundary() {
             boundary_capture.Count() != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "SerialControl prefix did not block on the sole "
+                "SerialControl prefix did not begin dependency waiting on the sole "
                 "Submission owner"
             );
         }
 
         CommandList control(EQueueType::Graphics);
+
+        control.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         control.SetTranslateExecutionClass(
             ERHITranslateExecutionClass::SerialControl
         );
         control.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
-        control.CopyFrom(
+        CopyTestTransfer(control,
             source->GetView(),
             destination->GetView(),
             "SerialControlBoundaryCopy"
@@ -8618,10 +9646,9 @@ void RunSerialControlPipelineBoundary() {
         );
 
         CommandList later(EQueueType::Graphics);
-        later.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        later.CopyFrom(
+
+        later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(later,
             destination->GetView(),
             WritableBytes(readback),
             "SerialControlBoundaryLaterReadback"
@@ -8648,7 +9675,7 @@ void RunSerialControlPipelineBoundary() {
             ERHITranslateExecutionClass::Parallel
         );
         later_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         later_submit.async_queue_scope = async_queue_scope;
         later_submit.Signal(later_done.Get(), 1);
@@ -8690,9 +9717,9 @@ void RunSerialControlPipelineBoundary() {
                 "GPU ordering"
             );
         }
-        if (ResourceCast(prefix_done.Get())->HostWait(1) != VK_SUCCESS ||
-            ResourceCast(control_done.Get())->HostWait(1) != VK_SUCCESS ||
-            ResourceCast(later_done.Get())->HostWait(1) != VK_SUCCESS) {
+        if (!ResourceCast(prefix_done.Get())->Wait(1) ||
+            !ResourceCast(control_done.Get())->Wait(1) ||
+            !ResourceCast(later_done.Get())->Wait(1)) {
             throw std::runtime_error(
                 "SerialControl boundary signals did not succeed"
             );
@@ -8750,7 +9777,7 @@ void RunSerialControlPipelineBoundary() {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "SerialControl native submission order or owner changed"
                 );
@@ -8833,1915 +9860,181 @@ void RunSerialControlPipelineBoundary() {
             "boundary_events=2 native_submits=3 replay=0"
         );
     } catch (...) {
-        release_dependency();
+        try {
+            release_dependency();
+        } catch (...) {
+            // A failed release rejects the dependency; still drain observed work.
+        }
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         throw;
     }
 }
 
-void RunPresentSourceContractRejection() {
+void RunResourceStateValidation() {
     using namespace std::chrono_literals;
-
-    auto& device = RenderDevice::Get();
-    constexpr ETextureUsageFlags present_source_usage =
-        ETextureUsageFlags::PRESENTATION_SOURCE |
-        ETextureUsageFlags::TRANSFER_SRC |
-        ETextureUsageFlags::TRANSFER_DST;
-    TextureRef valid_source = device.CreateTexture(
-        "present_source_contract_valid",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef rejected_export_source = device.CreateTexture(
-        "present_source_contract_rejected_export",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef wrong_queue_source = device.CreateTexture(
-        "present_source_contract_wrong_queue_export",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef backend_tracked_source = device.CreateTexture(
-        "present_source_contract_backend_tracked",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef rejected_backend_tracked_source =
-        device.CreateTexture(
-            "present_source_contract_rejected_backend_tracked",
-            Extent3D(4, 4, 1),
-            PF_R8G8B8A8_UNORM,
-            present_source_usage
-        );
-    TextureRef backend_nonterminal_source =
-        device.CreateTexture(
-            "present_source_contract_backend_nonterminal",
-            Extent3D(4, 4, 1),
-            PF_R8G8B8A8_UNORM,
-            present_source_usage |
-                ETextureUsageFlags::COLOR_ATTACHMENT
-        );
-    TextureRef rejected_suffix_source = device.CreateTexture(
-        "present_source_contract_rejected_suffix",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef copy_commit_source = device.CreateTexture(
-        "present_source_contract_copy_commit",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        present_source_usage
-    );
-    TextureRef mutation_copy_source = device.CreateTexture(
-        "present_source_contract_mutation_copy_source",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC |
-            ETextureUsageFlags::TRANSFER_DST |
-            ETextureUsageFlags::COLOR_ATTACHMENT
-    );
-    TextureRef missing_usage_source = device.CreateTexture(
-        "present_source_contract_missing_usage",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC |
-            ETextureUsageFlags::TRANSFER_DST
-    );
-    TextureRef missing_transfer_source = device.CreateTexture(
-        "present_source_contract_missing_transfer_src",
-        Extent3D(4, 4, 1),
-        PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::PRESENTATION_SOURCE |
-            ETextureUsageFlags::TRANSFER_DST
-    );
-    TextureRef multisampled_source = device.CreateTexture(
-        "present_source_contract_multisampled",
-        TextureInfo{
-            ETextureDimension::TEX_2D,
-            present_source_usage,
-            PF_R8G8B8A8_UNORM,
-            EClearAttachment{},
-            Extent3D(4, 4, 1),
-            1,
-            1,
-            4
+    auto&      device  = RenderDevice::Get();
+    const auto require = [](bool condition, const char* message) {
+        if (!condition) {
+            throw std::runtime_error(message);
         }
-    );
-    TextureRef incompatible_format_source = device.CreateTexture(
-        "present_source_contract_incompatible_format",
-        Extent3D(4, 4, 1),
-        PF_R16G16B16A16_SFLOAT,
-        present_source_usage
-    );
-    TextureRef compressed_source = device.CreateTexture(
-        "present_source_contract_compressed",
-        Extent3D(4, 4, 1),
-        PF_BC1_RGBA_UNORM_BLOCK,
-        present_source_usage
-    );
-    SwapchainRef scripted_swapchain{
-        MoerNew(HeadlessScriptedSwapchain)()
     };
-    SwapchainRef compressed_stride_swapchain{
-        MoerNew(HeadlessScriptedSwapchain)()
+    const auto   usage       = ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST | ETextureUsageFlags::SAMPLED;
+    auto         source      = device.CreateTexture("state_source", Extent3D(4, 4, 1), PF_R8G8B8A8_UNORM, usage);
+    auto         destination = device.CreateTexture("state_destination", Extent3D(4, 4, 1), PF_R8G8B8A8_UNORM, usage);
+    SwapchainRef swapchain{MoerNew(HeadlessScriptedSwapchain)()};
+    const auto   transfer_read  = BarrierState::Texture(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    const auto   transfer_write = BarrierState::Texture(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_WRITE, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    const auto   sampled        = BarrierState::Texture(ERHIPipelineStageFlags::PS_ALL_COMMANDS, ERHIAccessFlags::SHADER_READ, ETextureLayout::TEXTURE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    const auto   barrier        = [](TextureView view, BarrierState before, BarrierState after, bool publish = false) {
+        auto value                   = BarrierCreateInfo::Transition(view, before, after, ETextureAspectFlags::COLOR);
+        value.publish_external_state = publish;
+        return value;
     };
-    compressed_stride_swapchain->format =
-        PF_R16G16B16A16_SFLOAT;
-    if (!valid_source.IsValid() ||
-        !rejected_export_source.IsValid() ||
-        !wrong_queue_source.IsValid() ||
-        !backend_tracked_source.IsValid() ||
-        !rejected_backend_tracked_source.IsValid() ||
-        !backend_nonterminal_source.IsValid() ||
-        !rejected_suffix_source.IsValid() ||
-        !copy_commit_source.IsValid() ||
-        !mutation_copy_source.IsValid() ||
-        !missing_usage_source.IsValid() ||
-        !missing_transfer_source.IsValid() ||
-        !multisampled_source.IsValid() ||
-        !incompatible_format_source.IsValid() ||
-        !compressed_source.IsValid() ||
-        !scripted_swapchain.IsValid() ||
-        !compressed_stride_swapchain.IsValid()) {
-        throw std::runtime_error(
-            "Present source-contract resources were not created"
-        );
-    }
-
-    ScriptedPresentCapture scripted_capture(
-        VulkanScriptedPresentResult{
-            .outcome = {
-                EVulkanOperationStatus::Recreate,
-                VK_ERROR_OUT_OF_DATE_KHR,
-            },
-        }
-    );
-    ScopedScriptedPresentOverride scripted_override(
-        scripted_capture,
-        true
-    );
-
-    uint32 rejected_count       = 0;
-    bool   copy_commit_verified = false;
-    const auto expect_rejected =
-        [&](
-            TextureView       _source,
-            std::string_view  _case_name,
-            const SwapchainRef& _swapchain
-        ) {
-            const uint32 scripted_before =
-                scripted_capture.count.load(
-                    std::memory_order_acquire
-                );
-            PresentReceiptRef receipt = MakeShared<PresentReceipt>();
-            RHIExecutor::Get().Present(
-                RHIPresentRequest(
-                    _swapchain,
-                    _source,
-                    receipt
-                ),
-                true
-            );
-            const PresentReceiptResult result =
-                receipt->WaitForSubmission(5s);
-            if (!result.resolved || result.submitted ||
-                result.recreate_swapchain ||
-                receipt->ResolutionAttemptCount() != 1 ||
-                scripted_capture.count.load(
-                    std::memory_order_acquire
-                ) != scripted_before) {
-                throw std::runtime_error(
-                    "Present source contract did not reject " +
-                    std::string(_case_name) +
-                    " before the scripted override"
-                );
-            }
-            ++rejected_count;
-        };
-
-    expect_rejected(
-        TextureView{},
-        "null source texture",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        missing_usage_source->GetView(),
-        "missing PRESENTATION_SOURCE usage",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        missing_transfer_source->GetView(),
-        "missing TRANSFER_SRC usage",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        multisampled_source->GetView(),
-        "multisampled source",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        incompatible_format_source->GetView(),
-        "size-incompatible format",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        compressed_source->GetView(),
-        "compressed format with matching block stride",
-        compressed_stride_swapchain
-    );
-
-    TextureView invalid_mip = valid_source->GetView();
-    invalid_mip.mip_level   = 1;
-    expect_rejected(
-        invalid_mip,
-        "nonzero mip",
-        scripted_swapchain
-    );
-
-    TextureView invalid_layer = valid_source->GetView();
-    invalid_layer.array_layer = 1;
-    expect_rejected(
-        invalid_layer,
-        "nonzero array layer",
-        scripted_swapchain
-    );
-
-    TextureView invalid_offset = valid_source->GetView();
-    invalid_offset.offset.x    = 1;
-    expect_rejected(
-        invalid_offset,
-        "nonzero offset",
-        scripted_swapchain
-    );
-
-    TextureView invalid_extent = valid_source->GetView();
-    --invalid_extent.extent.x;
-    expect_rejected(
-        invalid_extent,
-        "partial extent",
-        scripted_swapchain
-    );
-
-    expect_rejected(
-        valid_source->GetView(),
-        "fresh source without an accepted producer export",
-        scripted_swapchain
-    );
-
-    const auto make_backend_tracked_publication =
-        [&](const TextureRef& _texture,
-            const FenceRef&   _signal,
-            uint64            _signal_value) {
-            CommandList producer(EQueueType::Graphics);
-            producer.ClearResource(
-                _texture->GetView(),
-                float4(0.f, 0.f, 0.f, 1.f)
-            );
-            Array<ReadTexture> publications{
-                ReadTexture{
-                    _texture->GetView(
-                        0,
-                        static_cast<uint8>(
-                            _texture->GetNumMips()
-                        )
-                    ),
-                    ETextureState::TRANSFER,
-                    true,
-                },
-            };
-            producer.TextureBarriers(
-                EQueueType::Graphics,
-                EQueueType::Graphics,
-                EPassType::Copy,
-                std::move(publications),
-                {}
-            );
-            CmdSubmit submit = producer.Submit();
-            if (submit.HasExplicitResourceStateOwnership()) {
-                throw std::runtime_error(
-                    "linear Present publication changed to Explicit ownership"
-                );
-            }
-            submit.Signal(_signal.Get(), _signal_value);
-            return submit;
-        };
-
-    const auto create_bindless_present_source =
-        [&](std::string_view _name) {
-            return device.CreateTexture(
-                _name,
-                Extent3D(4, 4, 1),
-                PF_R8G8B8A8_UNORM,
-                present_source_usage |
-                    ETextureUsageFlags::SAMPLED
-            );
-        };
-    TextureRef bindless_access_then_add =
-        create_bindless_present_source(
-            "present_bindless_access_then_add"
-        );
-    TextureRef bindless_add_then_access =
-        create_bindless_present_source(
-            "present_bindless_add_then_access"
-        );
-    TextureRef bindless_duplicate =
-        create_bindless_present_source(
-            "present_bindless_duplicate"
-        );
-    TextureRef bindless_rejected_add =
-        create_bindless_present_source(
-            "present_bindless_rejected_add"
-        );
-    TextureRef bindless_rejected_free =
-        create_bindless_present_source(
-            "present_bindless_rejected_free"
-        );
-    TextureRef bindless_future_allocation =
-        create_bindless_present_source(
-            "present_bindless_future_allocation"
-        );
-    TextureRef bindless_segment_access_add =
-        create_bindless_present_source(
-            "present_bindless_segment_access_add"
-        );
-    TextureRef bindless_segment_add_access =
-        create_bindless_present_source(
-            "present_bindless_segment_add_access"
-        );
-    TextureRef bindless_accepted_add_prefix =
-        create_bindless_present_source(
-            "present_bindless_accepted_add_prefix"
-        );
-    TextureRef bindless_accepted_free_prefix =
-        create_bindless_present_source(
-            "present_bindless_accepted_free_prefix"
-        );
-    TextureRef bindless_cross_queue =
-        create_bindless_present_source(
-            "present_bindless_cross_queue"
-        );
-    TextureRef bindless_parallel_record =
-        create_bindless_present_source(
-            "present_bindless_parallel_record"
-        );
-    BindlessArrayRef bindless =
-        device.CreateBindlessArray(32);
-    BindlessArrayRef future_bindless =
-        device.CreateBindlessArray(8);
-    if (!bindless_access_then_add ||
-        !bindless_add_then_access ||
-        !bindless_duplicate ||
-        !bindless_rejected_add ||
-        !bindless_rejected_free ||
-        !bindless_future_allocation ||
-        !bindless_segment_access_add ||
-        !bindless_segment_add_access ||
-        !bindless_accepted_add_prefix ||
-        !bindless_accepted_free_prefix ||
-        !bindless_cross_queue ||
-        !bindless_parallel_record ||
-        !bindless ||
-        !future_bindless) {
-        throw std::runtime_error(
-            "bindless Present contract resources were not created"
-        );
-    }
-
-    const Sampler bindless_sampler(
-        SF_LINEAR, SAM_CLAMP_TO_EDGE
-    );
-    const auto add_bindless_access =
-        [&](CommandList&          _commands,
-            const BindlessArrayRef& _bindless,
-            std::string_view      _name,
-            EQueueType _queue = EQueueType::Graphics) {
-            _commands.AddCustomCommand(
-                MakeUnique<
-                    BindlessPresentationAccessProbeCommand>(
-                    _bindless, _queue
-                ),
-                _name
-            );
-        };
-    const auto submit_accepted_commands =
-        [&](CommandList& _commands, std::string_view _name) {
-            FenceRef accepted = device.CreateFence();
-            if (!accepted) {
-                throw std::runtime_error(
-                    "failed to create bindless Present acceptance fence"
-                );
-            }
-            CmdSubmit submit = _commands.Submit();
-            submit.Signal(accepted.Get(), 1);
-            RHIExecutor::Get().Submit(
-                _commands.GetQueueType(),
-                std::move(submit),
-                ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-            auto* vk_accepted = ResourceCast(accepted.Get());
-            if (!vk_accepted->WaitSubmitted(1) ||
-                vk_accepted->IsRejected(1) ||
-                vk_accepted->IsFailed()) {
-                throw std::runtime_error(
-                    std::string(_name) +
-                    " did not reach native submission"
-                );
-            }
-        };
-    const auto submit_dependency_rejected_commands =
-        [&](CommandList& _commands, std::string_view _name) {
-            FenceRef dependency = device.CreateFence();
-            FenceRef rejected   = device.CreateFence();
-            if (!dependency || !rejected) {
-                throw std::runtime_error(
-                    "failed to create bindless Present rejection fences"
-                );
-            }
-            dependency->Reject(1);
-            CmdSubmit submit = _commands.Submit();
-            submit.Wait(dependency.Get(), 1);
-            submit.Signal(rejected.Get(), 1);
-            RHIExecutor::Get().Submit(
-                _commands.GetQueueType(),
-                std::move(submit),
-                ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-            auto* vk_rejected = ResourceCast(rejected.Get());
-            if (!vk_rejected->IsRejected(1) ||
-                vk_rejected->IsFailed()) {
-                throw std::runtime_error(
-                    std::string(_name) +
-                    " was not recoverably rejected"
-                );
-            }
-        };
-    const auto publish_bindless_source =
-        [&](const TextureRef& _texture,
-            std::string_view  _name) {
-            FenceRef accepted = device.CreateFence();
-            if (!accepted) {
-                throw std::runtime_error(
-                    "failed to create bindless publication fence"
-                );
-            }
-            RHIExecutor::Get().Submit(
-                EQueueType::Graphics,
-                make_backend_tracked_publication(
-                    _texture, accepted, 1
-                ),
-                ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-            if (!ResourceCast(accepted.Get())->WaitSubmitted(1) ||
-                !ResourceCast(_texture.Get())
-                     ->IsPresentationSourceReady()) {
-                throw std::runtime_error(
-                    std::string(_name) +
-                    " failed to publish Present readiness"
-                );
-            }
-        };
-    const auto require_bindless_ready =
-        [&](const TextureRef& _texture,
-            bool              _expected,
-            std::string_view  _case_name) {
-            const bool ready =
-                ResourceCast(_texture.Get())
-                    ->IsPresentationSourceReady();
-            if (ready != _expected) {
-                throw std::runtime_error(
-                    std::string(_case_name) +
-                    (_expected ?
-                         " unexpectedly lost Present readiness" :
-                         " left stale Present readiness")
-                );
-            }
-        };
-
-    // Access -> Add: the access sees the accepted entry membership, not the
-    // frontend allocation created later in this same command source.
-    publish_bindless_source(
-        bindless_access_then_add, "bindless Access->Add"
-    );
-    CommandList access_then_add(EQueueType::Graphics);
-    add_bindless_access(
-        access_then_add,
-        bindless,
-        "BindlessPresentAccessThenAdd"
-    );
-    const uint access_then_add_slot =
-        bindless->AllocateTexture(
-            bindless_access_then_add->GetView(),
-            bindless_sampler
-        );
-    access_then_add.UpdateBindlessArray(bindless);
-    submit_accepted_commands(
-        access_then_add, "bindless Access->Add"
-    );
-    require_bindless_ready(
-        bindless_access_then_add,
-        true,
-        "bindless Access->Add"
-    );
-
-    // Access -> Free still observes the old accepted slot before the update.
-    CommandList access_then_free(EQueueType::Graphics);
-    add_bindless_access(
-        access_then_free,
-        bindless,
-        "BindlessPresentAccessThenFree"
-    );
-    bindless->UnbindTexture(access_then_add_slot);
-    access_then_free.UpdateBindlessArray(bindless);
-    submit_accepted_commands(
-        access_then_free, "bindless Access->Free"
-    );
-    require_bindless_ready(
-        bindless_access_then_add,
-        false,
-        "bindless Access->Free"
-    );
-
-    // Add -> Access sees the new descriptor membership from the preceding
-    // update command in the same source.
-    publish_bindless_source(
-        bindless_add_then_access, "bindless Add->Access"
-    );
-    const uint add_then_access_slot =
-        bindless->AllocateTexture(
-            bindless_add_then_access->GetView(),
-            bindless_sampler
-        );
-    CommandList add_then_access(EQueueType::Graphics);
-    add_then_access.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        add_then_access,
-        bindless,
-        "BindlessPresentAddThenAccess"
-    );
-    submit_accepted_commands(
-        add_then_access, "bindless Add->Access"
-    );
-    require_bindless_ready(
-        bindless_add_then_access,
-        false,
-        "bindless Add->Access"
-    );
-
-    // Free -> Access no longer sees the removed accepted slot.
-    publish_bindless_source(
-        bindless_add_then_access, "bindless Free->Access"
-    );
-    bindless->UnbindTexture(add_then_access_slot);
-    CommandList free_then_access(EQueueType::Graphics);
-    free_then_access.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        free_then_access,
-        bindless,
-        "BindlessPresentFreeThenAccess"
-    );
-    submit_accepted_commands(
-        free_then_access, "bindless Free->Access"
-    );
-    require_bindless_ready(
-        bindless_add_then_access,
-        true,
-        "bindless Free->Access"
-    );
-
-    // Two descriptor slots can reference one texture. Removing one slot must
-    // retain membership; removing the final slot must close it.
-    const uint duplicate_slot_a =
-        bindless->AllocateTexture(
-            bindless_duplicate->GetView(), bindless_sampler
-        );
-    const uint duplicate_slot_b =
-        bindless->AllocateTexture(
-            bindless_duplicate->GetView(), bindless_sampler
-        );
-    CommandList add_duplicate(EQueueType::Graphics);
-    add_duplicate.UpdateBindlessArray(bindless);
-    submit_accepted_commands(
-        add_duplicate, "bindless duplicate add"
-    );
-    publish_bindless_source(
-        bindless_duplicate, "bindless duplicate first free"
-    );
-    bindless->UnbindTexture(duplicate_slot_a);
-    CommandList free_one_duplicate(EQueueType::Graphics);
-    free_one_duplicate.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        free_one_duplicate,
-        bindless,
-        "BindlessPresentFreeOneDuplicate"
-    );
-    submit_accepted_commands(
-        free_one_duplicate, "bindless duplicate first free"
-    );
-    require_bindless_ready(
-        bindless_duplicate,
-        false,
-        "bindless duplicate first free"
-    );
-    publish_bindless_source(
-        bindless_duplicate, "bindless duplicate final free"
-    );
-    bindless->UnbindTexture(duplicate_slot_b);
-    CommandList free_last_duplicate(EQueueType::Graphics);
-    free_last_duplicate.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        free_last_duplicate,
-        bindless,
-        "BindlessPresentFreeLastDuplicate"
-    );
-    submit_accepted_commands(
-        free_last_duplicate, "bindless duplicate final free"
-    );
-    require_bindless_ready(
-        bindless_duplicate,
-        true,
-        "bindless duplicate final free"
-    );
-
-    // A rejected add never enters accepted descriptor membership.
-    publish_bindless_source(
-        bindless_rejected_add, "bindless rejected add"
-    );
-    (void)bindless->AllocateTexture(
-        bindless_rejected_add->GetView(), bindless_sampler
-    );
-    CommandList rejected_add(EQueueType::Graphics);
-    rejected_add.UpdateBindlessArray(bindless);
-    submit_dependency_rejected_commands(
-        rejected_add, "bindless rejected add"
-    );
-    CommandList access_after_rejected_add(
-        EQueueType::Graphics
-    );
-    add_bindless_access(
-        access_after_rejected_add,
-        bindless,
-        "BindlessPresentAccessAfterRejectedAdd"
-    );
-    submit_accepted_commands(
-        access_after_rejected_add,
-        "bindless access after rejected add"
-    );
-    require_bindless_ready(
-        bindless_rejected_add,
-        true,
-        "bindless access after rejected add"
-    );
-
-    // Conversely, a rejected free preserves the last accepted membership.
-    const uint rejected_free_slot =
-        bindless->AllocateTexture(
-            bindless_rejected_free->GetView(),
-            bindless_sampler
-        );
-    CommandList accepted_before_rejected_free(
-        EQueueType::Graphics
-    );
-    accepted_before_rejected_free.UpdateBindlessArray(bindless);
-    submit_accepted_commands(
-        accepted_before_rejected_free,
-        "bindless accepted add before rejected free"
-    );
-    publish_bindless_source(
-        bindless_rejected_free, "bindless rejected free"
-    );
-    bindless->UnbindTexture(rejected_free_slot);
-    CommandList rejected_free(EQueueType::Graphics);
-    rejected_free.UpdateBindlessArray(bindless);
-    submit_dependency_rejected_commands(
-        rejected_free, "bindless rejected free"
-    );
-    CommandList access_after_rejected_free(
-        EQueueType::Graphics
-    );
-    add_bindless_access(
-        access_after_rejected_free,
-        bindless,
-        "BindlessPresentAccessAfterRejectedFree"
-    );
-    submit_accepted_commands(
-        access_after_rejected_free,
-        "bindless access after rejected free"
-    );
-    require_bindless_ready(
-        bindless_rejected_free,
-        false,
-        "bindless access after rejected free"
-    );
-
-    // Seal S0 before a later frontend allocation. Even if Allocate happens
-    // before S0 reaches Translate, S0 must read accepted (empty) membership.
-    publish_bindless_source(
-        bindless_future_allocation,
-        "bindless future allocation"
-    );
-    CommandList future_access_commands(EQueueType::Graphics);
-    add_bindless_access(
-        future_access_commands,
-        future_bindless,
-        "BindlessPresentFutureAllocationAccess"
-    );
-    CmdSubmit sealed_future_access =
-        future_access_commands.Submit();
-    (void)future_bindless->AllocateTexture(
-        bindless_future_allocation->GetView(),
-        bindless_sampler
-    );
-    CommandList rejected_future_update(
-        EQueueType::Graphics
-    );
-    rejected_future_update.UpdateBindlessArray(
-        future_bindless
-    );
-    FenceRef future_access_done = device.CreateFence();
-    sealed_future_access.Signal(
-        future_access_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(sealed_future_access),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(future_access_done.Get())
-             ->WaitSubmitted(1)) {
-        throw std::runtime_error(
-            "sealed bindless access was not submitted"
-        );
-    }
-    require_bindless_ready(
-        bindless_future_allocation,
-        true,
-        "sealed bindless access with a future allocation"
-    );
-    submit_dependency_rejected_commands(
-        rejected_future_update,
-        "future bindless update"
-    );
-    CommandList access_after_rejected_future(
-        EQueueType::Graphics
-    );
-    add_bindless_access(
-        access_after_rejected_future,
-        future_bindless,
-        "BindlessPresentAccessAfterRejectedFutureUpdate"
-    );
-    submit_accepted_commands(
-        access_after_rejected_future,
-        "access after rejected future bindless update"
-    );
-    require_bindless_ready(
-        bindless_future_allocation,
-        true,
-        "access after rejected future bindless update"
-    );
-
-    constexpr uint64 bindless_segment_scope =
-        0x5042494e444c4553ull;
-    publish_bindless_source(
-        bindless_segment_access_add,
-        "segmented bindless Access->Add"
-    );
-    CommandList segmented_access_add(EQueueType::Graphics);
-    segmented_access_add.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    add_bindless_access(
-        segmented_access_add,
-        bindless,
-        "SegmentedBindlessAccess"
-    );
-    (void)bindless->AllocateTexture(
-        bindless_segment_access_add->GetView(),
-        bindless_sampler
-    );
-    segmented_access_add.UpdateBindlessArray(bindless);
-    CmdSubmit segmented_access_add_submit =
-        segmented_access_add.Submit();
-    segmented_access_add_submit.async_queue_scope =
-        bindless_segment_scope;
-    segmented_access_add_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
-    };
-    FenceRef segmented_access_add_done =
-        device.CreateFence();
-    segmented_access_add_submit.Signal(
-        segmented_access_add_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(segmented_access_add_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(segmented_access_add_done.Get())
-             ->WaitSubmitted(1)) {
-        throw std::runtime_error(
-            "segmented bindless Access->Add was not submitted"
-        );
-    }
-    require_bindless_ready(
-        bindless_segment_access_add,
-        true,
-        "segmented bindless Access->Add"
-    );
-
-    publish_bindless_source(
-        bindless_segment_add_access,
-        "segmented bindless Add->Access"
-    );
-    (void)bindless->AllocateTexture(
-        bindless_segment_add_access->GetView(),
-        bindless_sampler
-    );
-    CommandList segmented_add_access(EQueueType::Graphics);
-    segmented_add_access.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    segmented_add_access.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        segmented_add_access,
-        bindless,
-        "SegmentedBindlessAccessAfterAdd"
-    );
-    CmdSubmit segmented_add_access_submit =
-        segmented_add_access.Submit();
-    segmented_add_access_submit.async_queue_scope =
-        bindless_segment_scope + 1;
-    segmented_add_access_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
-    };
-    FenceRef segmented_add_access_done =
-        device.CreateFence();
-    segmented_add_access_submit.Signal(
-        segmented_add_access_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(segmented_add_access_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(segmented_add_access_done.Get())
-             ->WaitSubmitted(1)) {
-        throw std::runtime_error(
-            "segmented bindless Add->Access was not submitted"
-        );
-    }
-    require_bindless_ready(
-        bindless_segment_add_access,
-        false,
-        "segmented bindless Add->Access"
-    );
-
-    // A materialized accepted membership prefix survives an opaque rejected
-    // suffix and is visible to the next independently accepted source.
-    publish_bindless_source(
-        bindless_accepted_add_prefix,
-        "bindless accepted add prefix"
-    );
-    (void)bindless->AllocateTexture(
-        bindless_accepted_add_prefix->GetView(),
-        bindless_sampler
-    );
-    CommandList accepted_add_prefix(EQueueType::Graphics);
-    accepted_add_prefix.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    accepted_add_prefix.UpdateBindlessArray(bindless);
-    accepted_add_prefix.AddCustomCommand(
-        MakeUnique<OpaquePresentationStateProbeCommand>(),
-        "RejectedAfterAcceptedBindlessAdd"
-    );
-    CmdSubmit accepted_add_prefix_submit =
-        accepted_add_prefix.Submit();
-    accepted_add_prefix_submit.async_queue_scope =
-        bindless_segment_scope + 2;
-    accepted_add_prefix_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
-    };
-    FenceRef accepted_add_prefix_done =
-        device.CreateFence();
-    accepted_add_prefix_submit.Signal(
-        accepted_add_prefix_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(accepted_add_prefix_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(accepted_add_prefix_done.Get())
-             ->IsRejected(1) ||
-        ResourceCast(accepted_add_prefix_done.Get())
-            ->IsFailed()) {
-        throw std::runtime_error(
-            "bindless accepted add prefix suffix was not "
-            "recoverably rejected"
-        );
-    }
-    CommandList access_after_add_prefix(
-        EQueueType::Graphics
-    );
-    add_bindless_access(
-        access_after_add_prefix,
-        bindless,
-        "BindlessPresentAccessAfterAcceptedAddPrefix"
-    );
-    submit_accepted_commands(
-        access_after_add_prefix,
-        "access after accepted bindless add prefix"
-    );
-    require_bindless_ready(
-        bindless_accepted_add_prefix,
-        false,
-        "access after accepted bindless add prefix"
-    );
-
-    const uint accepted_free_prefix_slot =
-        bindless->AllocateTexture(
-            bindless_accepted_free_prefix->GetView(),
-            bindless_sampler
-        );
-    CommandList add_before_free_prefix(
-        EQueueType::Graphics
-    );
-    add_before_free_prefix.UpdateBindlessArray(bindless);
-    submit_accepted_commands(
-        add_before_free_prefix,
-        "add before accepted bindless free prefix"
-    );
-    publish_bindless_source(
-        bindless_accepted_free_prefix,
-        "bindless accepted free prefix"
-    );
-    bindless->UnbindTexture(accepted_free_prefix_slot);
-    CommandList accepted_free_prefix(
-        EQueueType::Graphics
-    );
-    accepted_free_prefix.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    accepted_free_prefix.UpdateBindlessArray(bindless);
-    accepted_free_prefix.AddCustomCommand(
-        MakeUnique<OpaquePresentationStateProbeCommand>(),
-        "RejectedAfterAcceptedBindlessFree"
-    );
-    CmdSubmit accepted_free_prefix_submit =
-        accepted_free_prefix.Submit();
-    accepted_free_prefix_submit.async_queue_scope =
-        bindless_segment_scope + 3;
-    accepted_free_prefix_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
-    };
-    FenceRef accepted_free_prefix_done =
-        device.CreateFence();
-    accepted_free_prefix_submit.Signal(
-        accepted_free_prefix_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(accepted_free_prefix_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(accepted_free_prefix_done.Get())
-             ->IsRejected(1) ||
-        ResourceCast(accepted_free_prefix_done.Get())
-            ->IsFailed()) {
-        throw std::runtime_error(
-            "bindless accepted free prefix suffix was not "
-            "recoverably rejected"
-        );
-    }
-    CommandList access_after_free_prefix(
-        EQueueType::Graphics
-    );
-    add_bindless_access(
-        access_after_free_prefix,
-        bindless,
-        "BindlessPresentAccessAfterAcceptedFreePrefix"
-    );
-    submit_accepted_commands(
-        access_after_free_prefix,
-        "access after accepted bindless free prefix"
-    );
-    require_bindless_ready(
-        bindless_accepted_free_prefix,
-        true,
-        "access after accepted bindless free prefix"
-    );
-
-    if (device.GetQueueTopology().compute.available) {
-        (void)bindless->AllocateTexture(
-            bindless_cross_queue->GetView(),
-            bindless_sampler
-        );
-        CommandList cross_queue_add(EQueueType::Graphics);
-        cross_queue_add.UpdateBindlessArray(bindless);
-        submit_accepted_commands(
-            cross_queue_add,
-            "Graphics bindless add before Compute access"
-        );
-        publish_bindless_source(
-            bindless_cross_queue,
-            "Graphics bindless add before Compute access"
-        );
-        CommandList compute_access(EQueueType::Compute);
-        add_bindless_access(
-            compute_access,
-            bindless,
-            "BindlessPresentComputeAccess",
-            EQueueType::Compute
-        );
-        submit_accepted_commands(
-            compute_access,
-            "Compute bindless access after Graphics add"
-        );
-        require_bindless_ready(
-            bindless_cross_queue,
-            false,
-            "Compute bindless access after Graphics add"
-        );
-    }
-
-    // Carry the source-order program through an actually parallel inner
-    // recorder, not just the serial fallback. Four independent copies form a
-    // worker-eligible layer while the bindless update/access remain ordered
-    // serial islands in the same immutable source.
-    constexpr uint64 bindless_parallel_scope =
-        bindless_segment_scope + 4;
-    constexpr size_t bindless_parallel_copy_count = 4;
-    const EBufferUsageFlags bindless_parallel_buffer_usage =
-        EBufferUsageFlags::TRANSFER_SRC |
-        EBufferUsageFlags::TRANSFER_DST;
-    std::array<BufferRef, bindless_parallel_copy_count>
-        bindless_parallel_sources{};
-    std::array<BufferRef, bindless_parallel_copy_count>
-        bindless_parallel_destinations{};
-    for (size_t index = 0;
-         index < bindless_parallel_copy_count;
-         ++index) {
-        bindless_parallel_sources[index] =
-            device.CreateBuffer<uint32>(
-                "bindless_parallel_source_" +
-                    std::to_string(index),
-                kElementCount,
-                bindless_parallel_buffer_usage
-            );
-        bindless_parallel_destinations[index] =
-            device.CreateBuffer<uint32>(
-                "bindless_parallel_destination_" +
-                    std::to_string(index),
-                kElementCount,
-                bindless_parallel_buffer_usage
-            );
-        if (!bindless_parallel_sources[index] ||
-            !bindless_parallel_destinations[index]) {
-            throw std::runtime_error(
-                "failed to create bindless parallel-record buffers"
-            );
-        }
-    }
-
-    publish_bindless_source(
-        bindless_parallel_record,
-        "parallel-record bindless Add->Access"
-    );
-    (void)bindless->AllocateTexture(
-        bindless_parallel_record->GetView(),
-        bindless_sampler
-    );
-    CommandList parallel_bindless_access(EQueueType::Graphics);
-    parallel_bindless_access.UpdateBindlessArray(bindless);
-    add_bindless_access(
-        parallel_bindless_access,
-        bindless,
-        "BindlessPresentParallelRecordAccess"
-    );
-    for (size_t index = 0;
-         index < bindless_parallel_copy_count;
-         ++index) {
-        parallel_bindless_access.CopyFrom(
-            bindless_parallel_sources[index]->GetView(),
-            bindless_parallel_destinations[index]->GetView(),
-            "BindlessParallelRecordCopy"
-        );
-    }
-    FenceRef parallel_bindless_done = device.CreateFence();
-    CmdSubmit parallel_bindless_submit =
-        parallel_bindless_access.Submit();
-    parallel_bindless_submit.SetTranslateExecutionClass(
-        ERHITranslateExecutionClass::Parallel
-    );
-    parallel_bindless_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    parallel_bindless_submit.async_queue_scope =
-        bindless_parallel_scope;
-    parallel_bindless_submit.Signal(
-        parallel_bindless_done.Get(), 1
-    );
-    SourceTranslationCapture parallel_bindless_capture(
-        bindless_parallel_scope,
-        EQueueType::Graphics
-    );
-    {
-        ScopedSourceTranslationObserver translation_observer(
-            parallel_bindless_capture
-        );
-        RHIExecutor::Get().Submit(
-            EQueueType::Graphics,
-            std::move(parallel_bindless_submit),
-            ERHIExecSubmitFlags::FlushGPU
-        );
+    const auto submit = [&](CommandList& commands, bool accepted) {
+        auto fence = device.CreateFence();
+        auto work  = commands.Submit();
+        work.Signal(fence.Get(), 1);
+        RHIExecutor::Get().Submit(commands.GetQueueType(), std::move(work), ERHIExecSubmitFlags::FlushGPU);
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    }
-    auto* vk_parallel_bindless_done =
-        ResourceCast(parallel_bindless_done.Get());
-    if (!vk_parallel_bindless_done->WaitSubmitted(1) ||
-        vk_parallel_bindless_done->IsRejected(1) ||
-        vk_parallel_bindless_done->IsFailed()) {
-        throw std::runtime_error(
-            "parallel bindless source did not reach native submission"
-        );
-    }
-    if (!parallel_bindless_capture.IsValid() ||
-        !parallel_bindless_capture.Seen(
-            0,
-            EVulkanSourceTranslationPhase::Recorded
-        )) {
-        throw std::runtime_error(
-            "parallel bindless source translation was not observed"
-        );
-    }
-    const VulkanSourceTranslationEvent&
-        parallel_bindless_translation =
-            parallel_bindless_capture.Event(
-                0,
-                EVulkanSourceTranslationPhase::Recorded
-            );
-    if (parallel_bindless_translation.async_queue_scope !=
-        bindless_parallel_scope) {
-        throw std::runtime_error(
-            "parallel bindless translation lost its async queue scope"
-        );
-    }
-    if (!parallel_bindless_translation
-             .parallel_record_requested ||
-        !parallel_bindless_translation
-             .parallel_record_planned ||
-        !parallel_bindless_translation
-             .parallel_record_effective) {
-        throw std::runtime_error(
-            "bindless source-order program did not traverse the "
-            "effective parallel recorder"
-        );
-    }
-    require_bindless_ready(
-        bindless_parallel_record,
-        false,
-        "parallel-record bindless Add->Access"
-    );
-
-    FenceRef backend_tracked_done = device.CreateFence();
-    PresentReceiptRef backend_tracked_receipt =
-        MakeShared<PresentReceipt>();
-    RHIPresentRequest backend_tracked_present(
-        scripted_swapchain,
-        backend_tracked_source->GetView(),
-        backend_tracked_receipt
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        make_backend_tracked_publication(
-            backend_tracked_source,
-            backend_tracked_done,
-            1
-        ),
-        ERHIExecSubmitFlags::FlushGPU,
-        &backend_tracked_present
-    );
-    const PresentReceiptResult backend_tracked_result =
-        backend_tracked_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!ResourceCast(backend_tracked_done.Get())
-             ->WaitSubmitted(1) ||
-        !ResourceCast(backend_tracked_source.Get())
-             ->IsPresentationSourceReady() ||
-        !backend_tracked_result.resolved ||
-        backend_tracked_result.submitted ||
-        !backend_tracked_result.recreate_swapchain ||
-        backend_tracked_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(
-            std::memory_order_acquire
-        ) != 1) {
-        throw std::runtime_error(
-            "accepted BackendTracked producer did not publish readiness "
-            "before its same-batch Present"
-        );
-    }
-
-    // An independently accepted mutation must close the publication from the
-    // previous packet even when no trailing BarrierCmd describes that touch.
-    FenceRef accepted_mutation_done = device.CreateFence();
-    CommandList accepted_mutation(EQueueType::Graphics);
-    accepted_mutation.ClearResource(
-        backend_tracked_source->GetView(),
-        float4(0.25f, 0.f, 0.f, 1.f)
-    );
-    CmdSubmit accepted_mutation_submit =
-        accepted_mutation.Submit();
-    accepted_mutation_submit.Signal(
-        accepted_mutation_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(accepted_mutation_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(accepted_mutation_done.Get())
-             ->WaitSubmitted(1) ||
-        ResourceCast(backend_tracked_source.Get())
-            ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "an accepted standalone Clear left stale Present readiness"
-        );
-    }
-    expect_rejected(
-        backend_tracked_source->GetView(),
-        "source cleared by a later accepted packet",
-        scripted_swapchain
-    );
-
-    // Re-publish, then reject a later mutation before native acceptance. The
-    // rejected packet must not speculatively clear the accepted readiness.
-    FenceRef republished_done = device.CreateFence();
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        make_backend_tracked_publication(
-            backend_tracked_source,
-            republished_done,
-            1
-        ),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(republished_done.Get())->WaitSubmitted(1) ||
-        !ResourceCast(backend_tracked_source.Get())
-             ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "accepted re-publication did not restore Present readiness"
-        );
-    }
-
-    FenceRef rejected_mutation_dependency = device.CreateFence();
-    FenceRef rejected_mutation_done       = device.CreateFence();
-    rejected_mutation_dependency->Reject(1);
-    CommandList rejected_mutation(EQueueType::Graphics);
-    rejected_mutation.ClearResource(
-        backend_tracked_source->GetView(),
-        float4(0.f, 0.25f, 0.f, 1.f)
-    );
-    CmdSubmit rejected_mutation_submit =
-        rejected_mutation.Submit();
-    rejected_mutation_submit.Wait(
-        rejected_mutation_dependency.Get(), 1
-    );
-    rejected_mutation_submit.Signal(
-        rejected_mutation_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(rejected_mutation_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(rejected_mutation_done.Get())
-             ->IsRejected(1) ||
-        ResourceCast(rejected_mutation_done.Get())->IsFailed() ||
-        !ResourceCast(backend_tracked_source.Get())
-             ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "a rejected standalone Clear polluted accepted Present readiness"
-        );
-    }
-
-    const uint32 scripted_before_rejected_mutation_present =
-        scripted_capture.count.load(std::memory_order_acquire);
-    PresentReceiptRef rejected_mutation_receipt =
-        MakeShared<PresentReceipt>();
-    RHIExecutor::Get().Present(
-        RHIPresentRequest(
-            scripted_swapchain,
-            backend_tracked_source->GetView(),
-            rejected_mutation_receipt
-        ),
-        true
-    );
-    const PresentReceiptResult rejected_mutation_result =
-        rejected_mutation_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!rejected_mutation_result.resolved ||
-        rejected_mutation_result.submitted ||
-        !rejected_mutation_result.recreate_swapchain ||
-        rejected_mutation_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(std::memory_order_acquire) !=
-            scripted_before_rejected_mutation_present + 1) {
-        throw std::runtime_error(
-            "a rejected standalone Clear hid the last accepted publication"
-        );
-    }
-
-    // Keep the fixture on Graphics: the source was published there, and this
-    // test targets state-ledger invalidation rather than queue-family transfer
-    // ownership (covered separately by the explicit multi-queue tests).
-    constexpr EQueueType mutation_queue = EQueueType::Graphics;
-    FenceRef accepted_copy_mutation_done = device.CreateFence();
-    CommandList accepted_copy_mutation(mutation_queue);
-    accepted_copy_mutation.CopyFrom(
-        mutation_copy_source->GetView(),
-        backend_tracked_source->GetView(),
-        "PresentSourceAcceptedCopyMutation"
-    );
-    CmdSubmit accepted_copy_mutation_submit =
-        accepted_copy_mutation.Submit();
-    accepted_copy_mutation_submit.Signal(
-        accepted_copy_mutation_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        mutation_queue,
-        std::move(accepted_copy_mutation_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(accepted_copy_mutation_done.Get())
-             ->WaitSubmitted(1) ||
-        ResourceCast(backend_tracked_source.Get())
-            ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "an accepted TextureToTexture copy left stale Present readiness"
-        );
-    }
-    expect_rejected(
-        backend_tracked_source->GetView(),
-        "source overwritten by an accepted texture copy",
-        scripted_swapchain
-    );
-
-    FenceRef rejected_backend_dependency = device.CreateFence();
-    FenceRef rejected_backend_done = device.CreateFence();
-    rejected_backend_dependency->Reject(1);
-    CmdSubmit rejected_backend_submit =
-        make_backend_tracked_publication(
-            rejected_backend_tracked_source,
-            rejected_backend_done,
-            1
-        );
-    rejected_backend_submit.Wait(
-        rejected_backend_dependency.Get(),
-        1
-    );
-    PresentReceiptRef rejected_backend_receipt =
-        MakeShared<PresentReceipt>();
-    RHIPresentRequest rejected_backend_present(
-        scripted_swapchain,
-        rejected_backend_tracked_source->GetView(),
-        rejected_backend_receipt
-    );
-    const uint32 scripted_before_rejected_backend =
-        scripted_capture.count.load(std::memory_order_acquire);
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(rejected_backend_submit),
-        ERHIExecSubmitFlags::FlushGPU,
-        &rejected_backend_present
-    );
-    const PresentReceiptResult rejected_backend_result =
-        rejected_backend_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!ResourceCast(rejected_backend_done.Get())
-             ->IsRejected(1) ||
-        ResourceCast(rejected_backend_done.Get())->IsFailed() ||
-        ResourceCast(rejected_backend_tracked_source.Get())
-            ->IsPresentationSourceReady() ||
-        !rejected_backend_result.resolved ||
-        rejected_backend_result.submitted ||
-        rejected_backend_result.recreate_swapchain ||
-        rejected_backend_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(
-            std::memory_order_acquire
-        ) != scripted_before_rejected_backend) {
-        throw std::runtime_error(
-            "rejected BackendTracked producer published readiness or "
-            "reached its same-batch Present"
-        );
-    }
-
-    FenceRef backend_nonterminal_done = device.CreateFence();
-    CommandList backend_nonterminal_producer(
-        EQueueType::Graphics
-    );
-    backend_nonterminal_producer.ClearResource(
-        backend_nonterminal_source->GetView(),
-        float4(0.f, 0.f, 0.f, 1.f)
-    );
-    backend_nonterminal_producer.TextureBarriers(
-        EQueueType::Graphics,
-        EQueueType::Graphics,
-        EPassType::Copy,
-        Array<ReadTexture>{
-            ReadTexture{
-                backend_nonterminal_source->GetView(),
-                ETextureState::TRANSFER,
-                true,
-            },
-        },
-        {}
-    );
-    backend_nonterminal_producer.ClearResource(
-        backend_nonterminal_source->GetView(),
-        float4(0.f, 0.f, 0.25f, 1.f)
-    );
-    CmdSubmit backend_nonterminal_submit =
-        backend_nonterminal_producer.Submit();
-    backend_nonterminal_submit.Signal(
-        backend_nonterminal_done.Get(), 1
-    );
-    PresentReceiptRef backend_nonterminal_receipt =
-        MakeShared<PresentReceipt>();
-    RHIPresentRequest backend_nonterminal_present(
-        scripted_swapchain,
-        backend_nonterminal_source->GetView(),
-        backend_nonterminal_receipt
-    );
-    const uint32 scripted_before_backend_nonterminal =
-        scripted_capture.count.load(std::memory_order_acquire);
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(backend_nonterminal_submit),
-        ERHIExecSubmitFlags::FlushGPU,
-        &backend_nonterminal_present
-    );
-    const PresentReceiptResult backend_nonterminal_result =
-        backend_nonterminal_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!ResourceCast(backend_nonterminal_done.Get())
-             ->WaitSubmitted(1) ||
-        ResourceCast(backend_nonterminal_source.Get())
-            ->IsPresentationSourceReady() ||
-        !backend_nonterminal_result.resolved ||
-        backend_nonterminal_result.submitted ||
-        backend_nonterminal_result.recreate_swapchain ||
-        backend_nonterminal_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(
-            std::memory_order_acquire
-        ) != scripted_before_backend_nonterminal) {
-        throw std::runtime_error(
-            "a BackendTracked publication followed by a terminal write "
-            "remained ready or reached Present"
-        );
-    }
-
-    const auto submit_source_state =
-        [&](const TextureRef& _texture,
-            EQueueType        _queue,
-            BarrierState      _source,
-            BarrierState _destination,
-            bool         _publish_external_state,
-            uint64       _signal_value) {
-            FenceRef accepted = device.CreateFence();
-            BarrierCreateInfo transition =
-                BarrierCreateInfo::Transition(
-                    _texture->GetView(),
-                    _source,
-                    _destination,
-                    ETextureAspectFlags::COLOR
-                );
-            transition.publish_external_state =
-                _publish_external_state;
-
-            CommandList producer(_queue);
-            producer.SetResourceStateOwnership(
-                ERHIResourceStateOwnership::Explicit
-            );
-            producer.Barriers({transition});
-            CmdSubmit submit = producer.Submit();
-            submit.SetResourceStateOwnership(
-                ERHIResourceStateOwnership::Explicit
-            );
-            submit.Signal(accepted.Get(), _signal_value);
-            RHIExecutor::Get().Submit(
-                _queue,
-                std::move(submit),
-                ERHIExecSubmitFlags::FlushGPU
-            );
-            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-            auto* vk_accepted = ResourceCast(accepted.Get());
-            if (vk_accepted->IsFailed() ||
-                vk_accepted->IsRejected(_signal_value)) {
-                throw std::runtime_error(
-                    "Present source state publication was not natively accepted"
-                );
-            }
-        };
-
-    const BarrierState undefined_state = BarrierState::Texture(
-        ERHIPipelineStageFlags::PS_NONE,
-        ERHIAccessFlags::UNDEFINED,
-        ETextureLayout::TEXTURE_LAYOUT_UNDEFINED
-    );
-    const BarrierState presentation_state = BarrierState::Texture(
-        ERHIPipelineStageFlags::PS_TRANSFER,
-        ERHIAccessFlags::TRANSFER_READ,
-        ETextureLayout::TEXTURE_LAYOUT_COMMON
-    );
-    const BarrierState transfer_write_state = BarrierState::Texture(
-        ERHIPipelineStageFlags::PS_TRANSFER,
-        ERHIAccessFlags::TRANSFER_WRITE,
-        ETextureLayout::TEXTURE_LAYOUT_COMMON
-    );
-    const RHIQueueTopology topology = device.GetQueueTopology();
-
-    // The materializer commits each accepted segment independently. Verify
-    // that a publication accepted by the first segment is closed by a later
-    // accepted mutation before the submit-level Present is resolved.
-    constexpr uint64 segmented_present_scope =
-        0x5048313850524553ull;
-    FenceRef segmented_present_done = device.CreateFence();
-    CommandList segmented_present_producer(
-        EQueueType::Graphics
-    );
-    segmented_present_producer.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    BarrierCreateInfo segmented_publication =
-        BarrierCreateInfo::Transition(
-            backend_nonterminal_source->GetView(),
-            undefined_state,
-            presentation_state,
-            ETextureAspectFlags::COLOR
-        );
-    segmented_publication.publish_external_state = true;
-    segmented_present_producer.Barriers(
-        {segmented_publication}
-    );
-    segmented_present_producer.Barriers(
-        {BarrierCreateInfo::Transition(
-            backend_nonterminal_source->GetView(),
-            presentation_state,
-            transfer_write_state,
-            ETextureAspectFlags::COLOR
-        )}
-    );
-    CmdSubmit segmented_present_submit =
-        segmented_present_producer.Submit();
-    segmented_present_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    segmented_present_submit.async_queue_scope =
-        segmented_present_scope;
-    segmented_present_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+        auto* native = ResourceCast(fence.Get());
+        require(native->WaitSubmitted(1) == accepted && native->IsRejected(1) != accepted, "resource-state contract produced an unexpected submission decision");
     };
-    segmented_present_submit.Signal(
-        segmented_present_done.Get(), 1
-    );
-    PresentReceiptRef segmented_present_receipt =
-        MakeShared<PresentReceipt>();
-    RHIPresentRequest segmented_present(
-        scripted_swapchain,
-        backend_nonterminal_source->GetView(),
-        segmented_present_receipt
-    );
-    const uint32 scripted_before_segmented_present =
-        scripted_capture.count.load(std::memory_order_acquire);
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(segmented_present_submit),
-        ERHIExecSubmitFlags::FlushGPU,
-        &segmented_present
-    );
-    const PresentReceiptResult segmented_present_result =
-        segmented_present_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!ResourceCast(segmented_present_done.Get())
-             ->WaitSubmitted(1) ||
-        ResourceCast(backend_nonterminal_source.Get())
-            ->IsPresentationSourceReady() ||
-        !segmented_present_result.resolved ||
-        segmented_present_result.submitted ||
-        segmented_present_result.recreate_swapchain ||
-        segmented_present_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(
-            std::memory_order_acquire
-        ) != scripted_before_segmented_present) {
-        throw std::runtime_error(
-            "an accepted later segment did not close an earlier "
-            "presentation-source publication"
-        );
-    }
-
-    // A later materialized segment can reject before native recording without
-    // rolling back an earlier segment that Vulkan already accepted. The
-    // accepted publication remains the externally visible final state.
-    constexpr uint64 rejected_suffix_scope =
-        0x5048313852535546ull;
-    FenceRef rejected_suffix_done = device.CreateFence();
-    CommandList rejected_suffix_producer(
-        EQueueType::Graphics
-    );
-    rejected_suffix_producer.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    BarrierCreateInfo rejected_suffix_publication =
-        BarrierCreateInfo::Transition(
-            rejected_suffix_source->GetView(),
-            undefined_state,
-            presentation_state,
-            ETextureAspectFlags::COLOR
-        );
-    rejected_suffix_publication.publish_external_state = true;
-    rejected_suffix_producer.Barriers(
-        {rejected_suffix_publication}
-    );
-    rejected_suffix_producer.AddCustomCommand(
-        MakeUnique<OpaquePresentationStateProbeCommand>(),
-        "RejectedPresentationStateSuffix"
-    );
-    CmdSubmit rejected_suffix_submit =
-        rejected_suffix_producer.Submit();
-    rejected_suffix_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    rejected_suffix_submit.async_queue_scope =
-        rejected_suffix_scope;
-    rejected_suffix_submit.segments = {
-        RHISubmitSegment{EQueueType::Graphics, 0, 1},
-        RHISubmitSegment{EQueueType::Graphics, 1, 2},
+    ScriptedPresentCapture        capture({.outcome = {EVulkanOperationStatus::Recreate, VK_ERROR_OUT_OF_DATE_KHR}});
+    ScopedScriptedPresentOverride override(capture, true);
+    const auto                    present = [&](TextureView view, bool accessible) {
+        const auto before  = capture.count.load();
+        auto       receipt = MakeShared<PresentReceipt>();
+        RHIExecutor::Get().Present(RHIPresentRequest(swapchain, view, receipt), true);
+        const auto result = receipt->WaitForSubmission(5s);
+        require(result.resolved && receipt->ResolutionAttemptCount() == 1, "resource validation did not resolve the Present receipt exactly once");
+        require(capture.count.load() == before + (accessible ? 1u : 0u), "Present did not use the ordinary external transfer-read contract");
     };
-    rejected_suffix_submit.Signal(
-        rejected_suffix_done.Get(), 1
-    );
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(rejected_suffix_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(rejected_suffix_done.Get())
-             ->IsRejected(1) ||
-        ResourceCast(rejected_suffix_done.Get())->IsFailed() ||
-        !ResourceCast(rejected_suffix_source.Get())
-             ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "a rejected materialized suffix rolled back or hid its "
-            "accepted presentation-source prefix"
-        );
-    }
 
-    const uint32 scripted_before_rejected_suffix_present =
-        scripted_capture.count.load(std::memory_order_acquire);
-    PresentReceiptRef rejected_suffix_receipt =
-        MakeShared<PresentReceipt>();
-    RHIExecutor::Get().Present(
-        RHIPresentRequest(
-            scripted_swapchain,
-            rejected_suffix_source->GetView(),
-            rejected_suffix_receipt
-        ),
-        true
-    );
-    const PresentReceiptResult rejected_suffix_result =
-        rejected_suffix_receipt->WaitForSubmission(5s);
+    // Fresh ordinary textures cannot be consumed externally. No special usage
+    // bit is required once an accepted transition exports the selected range.
+    present(source->GetView(), false);
+    present(TextureView{}, false);
+    auto no_transfer = device.CreateTexture("state_missing_transfer_src", Extent3D(4, 4, 1), PF_R8G8B8A8_UNORM, ETextureUsageFlags::TRANSFER_DST);
+    present(no_transfer->GetView(), false);
+    auto incompatible_format = device.CreateTexture("state_incompatible_format", Extent3D(4, 4, 1), PF_R16G16B16A16_SFLOAT, usage);
+    present(incompatible_format->GetView(), false);
+    auto invalid_view     = source->GetView();
+    invalid_view.offset.x = 1;
+    present(invalid_view, false);
+    invalid_view             = source->GetView();
+    invalid_view.array_layer = 1;
+    present(invalid_view, false);
+    invalid_view          = source->GetView();
+    invalid_view.extent.x = 2;
+    present(invalid_view, false);
+    CommandList initialize;
+    initialize.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    initialize.Barriers({barrier(source->GetView(), {}, transfer_write), barrier(destination->GetView(), {}, transfer_write)});
+    initialize.ClearResource(source->GetView(), 0u);
+    initialize.Barriers({barrier(source->GetView(), transfer_write, transfer_read, true)});
+    submit(initialize, true);
+    present(source->GetView(), true);
+
+    // An ordinary copy and Present consume the same state. A compatible read
+    // does not invalidate an export simply because another command used it.
+    CommandList copy;
+    copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    copy.CopyFrom(source->GetView(), destination->GetView());
+    submit(copy, true);
+    present(source->GetView(), true);
+    present(source->GetView(), true);
+
+    // Prepare state changes, then fail later in the same native packet. None
+    // of that packet's candidate states may become observable.
+    CommandList rejected;
+    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    rejected.Barriers({barrier(source->GetView(), transfer_read, sampled)});
+    // Exercise the rejected write contract without recording an invalid native
+    // clear: Translate cannot inspect Submission's accepted resource history.
+    const RHIResourceAccess invalid_write{source->GetView(), transfer_write, ETextureAspectFlags::COLOR};
+    rejected.BeginResourceAccesses(std::span<const RHIResourceAccess>(&invalid_write, 1), "MissingTransferWriteTransition");
+    rejected.EndResourceAccesses();
+    submit(rejected, false);
+    present(source->GetView(), true);
+
+    CommandList mutation;
+    mutation.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    mutation.Barriers({barrier(source->GetView(), transfer_read, sampled)});
+    submit(mutation, true);
+    present(source->GetView(), false);
+    CommandList invalid_copy;
+    invalid_copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    invalid_copy.CopyFrom(source->GetView(), destination->GetView());
+    submit(invalid_copy, false);
+
+    // Bindless access declares its candidate resources, independently of table
+    // membership. Missing declarations are a command contract error.
+    auto        table = device.CreateBindlessArray(8);
+    CommandList undeclared;
+    undeclared.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    undeclared.AddCustomCommand(MakeUnique<BindlessAccessProbeCommand>(table), "UndeclaredBindless");
+    submit(undeclared, false);
+    CommandList empty_candidates;
+    empty_candidates.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    empty_candidates.BeginResourceAccesses({}, "MissingBindlessCandidates");
+    empty_candidates.AddCustomCommand(MakeUnique<BindlessAccessProbeCommand>(table), "EmptyBindlessCandidates");
+    empty_candidates.EndResourceAccesses();
+    submit(empty_candidates, false);
+    RHIResourceAccess candidate{source->GetView(), sampled, ETextureAspectFlags::COLOR};
+    CommandList       declared;
+    declared.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    declared.BeginResourceAccesses(std::span<const RHIResourceAccess>(&candidate, 1), "DeclaredBindlessCandidates");
+    declared.AddCustomCommand(MakeUnique<BindlessAccessProbeCommand>(table), "DeclaredBindless");
+    declared.EndResourceAccesses();
+    declared.Barriers({barrier(source->GetView(), sampled, transfer_read, true)});
+    submit(declared, true);
+    present(source->GetView(), true);
+
+    // A descriptor update does not itself access the target texture.
+    table->AllocateTexture(source->GetView(), Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE));
+    CommandList update;
+    update.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    update.UpdateBindlessArray(table);
+    submit(update, true);
+    present(source->GetView(), true);
+
+    // Subresource state is not a whole-texture boolean.
+    auto mip_texture     = device.CreateTexture("state_mips", TextureInfo{ETextureDimension::TEX_2D, usage, PF_R8G8B8A8_UNORM, EClearAttachment{}, Extent3D(4, 4, 1), 2, 1, 1});
+    auto first_mip       = mip_texture->GetView();
+    auto second_mip      = first_mip;
+    second_mip.mip_level = 1;
+    second_mip.extent    = {2, 2, 1};
+    CommandList mip_initialize;
+    mip_initialize.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    mip_initialize.Barriers({barrier(first_mip, {}, transfer_read, true)});
+    submit(mip_initialize, true);
+    present(first_mip, true);
+    CommandList invalid_mip;
+    invalid_mip.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    const auto invalid_mip_readback = invalid_mip.Readback(second_mip);
+    submit(invalid_mip, false);
+
+    // Earlier accepted work survives a rejected successor.
+    CommandList prefix;
+    prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    prefix.Barriers({barrier(source->GetView(), transfer_read, transfer_write)});
+    prefix.ClearResource(source->GetView(), float4{1.0f, 0.0f, 0.0f, 1.0f});
+    prefix.Barriers({barrier(source->GetView(), transfer_write, transfer_read, true)});
+    submit(prefix, true);
+    CommandList suffix;
+    suffix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    suffix.Barriers({barrier(source->GetView(), sampled, transfer_write)}); // Stale source layout.
+    submit(suffix, false);
+    present(source->GetView(), true);
+    CommandList verify;
+    verify.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    const auto pixels = verify.Readback(source->GetView());
+    submit(verify, true);
+    const auto result = pixels.Get();
+    require(result.status == ReadbackStatus::Ready && result.ByteSize() == 64 && result.Bytes()[0] == Moer::byte{255} && result.Bytes()[1] == Moer::byte{0} && result.Bytes()[2] == Moer::byte{0} && result.Bytes()[3] == Moer::byte{255}, "ordinary resource validation changed the GPU readback result");
     RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!rejected_suffix_result.resolved ||
-        rejected_suffix_result.submitted ||
-        !rejected_suffix_result.recreate_swapchain ||
-        rejected_suffix_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(std::memory_order_acquire) !=
-            scripted_before_rejected_suffix_present + 1) {
-        throw std::runtime_error(
-            "an accepted presentation-source prefix was not visible after "
-            "its recoverably rejected suffix"
-        );
-    }
-
-    if (topology.copy.available) {
-        // White-box seed isolates the Copy SubmitRecorded commit point from
-        // queue-family transfer ownership. The accepted explicit barrier is
-        // real queue work; if Copy omits its accepted delta commit, the seed
-        // remains observable here. Cross-queue ownership is covered by the
-        // dedicated explicit multi-queue fixtures.
-        auto* vk_copy_commit_source =
-            ResourceCast(copy_commit_source.Get());
-        vk_copy_commit_source->PublishPresentationSourceReady(true);
-        submit_source_state(
-            copy_commit_source,
-            EQueueType::Copy,
-            undefined_state,
-            transfer_write_state,
-            false,
-            1
-        );
-        if (vk_copy_commit_source->IsPresentationSourceReady()) {
-            throw std::runtime_error(
-                "an accepted Copy queue packet did not commit its "
-                "presentation-source invalidation"
-            );
-        }
-        expect_rejected(
-            copy_commit_source->GetView(),
-            "source invalidated by an accepted Copy queue packet",
-            scripted_swapchain
-        );
-        copy_commit_verified = true;
-    }
-
-    submit_source_state(
-        valid_source,
-        EQueueType::Graphics,
-        undefined_state,
-        presentation_state,
-        true,
-        1
-    );
-    auto* vk_valid_source = ResourceCast(valid_source.Get());
-    if (!vk_valid_source->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "accepted producer export did not publish Present readiness"
-        );
-    }
-
-    submit_source_state(
-        valid_source,
-        EQueueType::Graphics,
-        presentation_state,
-        transfer_write_state,
-        false,
-        2
-    );
-    if (vk_valid_source->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "a later accepted non-export state left stale Present readiness"
-        );
-    }
-    expect_rejected(
-        valid_source->GetView(),
-        "source moved away from its published presentation state",
-        scripted_swapchain
-    );
-
-    submit_source_state(
-        valid_source,
-        EQueueType::Graphics,
-        transfer_write_state,
-        presentation_state,
-        true,
-        3
-    );
-    if (!vk_valid_source->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "accepted producer re-export did not restore Present readiness"
-        );
-    }
-
-    if (topology.compute.available) {
-        submit_source_state(
-            wrong_queue_source,
-            EQueueType::Compute,
-            undefined_state,
-            presentation_state,
-            true,
-            1
-        );
-        if (ResourceCast(wrong_queue_source.Get())
-                ->IsPresentationSourceReady()) {
-            throw std::runtime_error(
-                "a non-Graphics export published Present readiness"
-            );
-        }
-        expect_rejected(
-            wrong_queue_source->GetView(),
-            "source exported by a non-Graphics queue",
-            scripted_swapchain
-        );
-    }
-
-    FenceRef rejected_dependency = device.CreateFence();
-    FenceRef rejected_export_done = device.CreateFence();
-    rejected_dependency->Reject(1);
-    BarrierCreateInfo rejected_export =
-        BarrierCreateInfo::Transition(
-            rejected_export_source->GetView(),
-            undefined_state,
-            presentation_state,
-            ETextureAspectFlags::COLOR
-        );
-    rejected_export.publish_external_state = true;
-    CommandList rejected_producer(EQueueType::Graphics);
-    rejected_producer.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    rejected_producer.Barriers({rejected_export});
-    CmdSubmit rejected_submit = rejected_producer.Submit();
-    rejected_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    rejected_submit.Wait(rejected_dependency.Get(), 1);
-    rejected_submit.Signal(rejected_export_done.Get(), 1);
-    RHIExecutor::Get().Submit(
-        EQueueType::Graphics,
-        std::move(rejected_submit),
-        ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (!ResourceCast(rejected_export_done.Get())->IsRejected(1) ||
-        ResourceCast(rejected_export_done.Get())->IsFailed() ||
-        ResourceCast(rejected_export_source.Get())
-            ->IsPresentationSourceReady()) {
-        throw std::runtime_error(
-            "a rejected producer export published Present readiness"
-        );
-    }
-    expect_rejected(
-        rejected_export_source->GetView(),
-        "source whose producer export was rejected",
-        scripted_swapchain
-    );
-
-    PresentReceiptRef valid_receipt = MakeShared<PresentReceipt>();
-    RHIExecutor::Get().Present(
-        RHIPresentRequest(
-            scripted_swapchain,
-            valid_source->GetView(),
-            valid_receipt
-        ),
-        true
-    );
-    const PresentReceiptResult valid_result =
-        valid_receipt->WaitForSubmission(5s);
-    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
-    if (!valid_result.resolved || valid_result.submitted ||
-        !valid_result.recreate_swapchain ||
-        valid_receipt->ResolutionAttemptCount() != 1 ||
-        scripted_capture.count.load(
-            std::memory_order_acquire
-        ) != 4 ||
-        scripted_capture.timeline.load(
-            std::memory_order_acquire
-        ) == 0 ||
-        scripted_capture.wrong_owner.load(
-            std::memory_order_acquire
-        )) {
-        throw std::runtime_error(
-            "a valid Present source did not reach the scripted override"
-        );
-    }
-
-    LOG_INFO(
-        "[TESTCASE][PASS] name=PresentSourceContractRejection "
-        "rejected={} null=true usage=true transfer_src=true samples=true "
-        "format=true compressed=true mip=true layer=true offset=true extent=true "
-        "fresh=true accepted_export=true stale_clear=true "
-        "backend_tracked_same_batch=true backend_rejected=true "
-        "marker_then_clear=true accepted_mutation_clear=true "
-        "rejected_mutation_preserves=true accepted_copy_mutation=true "
-        "marker_then_segmented_state_change=true "
-        "accepted_prefix_rejected_suffix=true copy_commit={} "
-        "wrong_queue_clear=true rejected_export_clear=true "
-        "bindless_source_order=true bindless_refcount=true "
-        "bindless_rejected_update=true bindless_segments=true "
-        "bindless_cross_queue={} bindless_parallel_record=true "
-        "valid_override=4 owner=Submission",
-        rejected_count,
-        copy_commit_verified ? "verified" : "skipped",
-        topology.compute.available ? "verified" : "skipped"
-    );
+    LOG_INFO("[TESTCASE][PASS] name=ResourceStateValidation ordinary_copy=true compatible_reads=true "
+             "rejected_state_preserved=true bindless_candidates=true subresources=true accepted_prefix=true");
 }
 
 void RunPresentPipelineBoundary() {
@@ -10749,10 +10042,10 @@ void RunPresentPipelineBoundary() {
 
     auto&                  device   = RenderDevice::Get();
     const RHIQueueTopology topology = device.GetQueueTopology();
-    const EQueueType prefix_queue =
+    const EQueueType       prefix_queue =
         topology.copy.available ?
-            EQueueType::Copy :
-            EQueueType::Graphics;
+                  EQueueType::Copy :
+                  EQueueType::Graphics;
     const uint32 prefix_native =
         prefix_queue == EQueueType::Copy ?
             topology.copy.native_queue_id :
@@ -10769,15 +10062,15 @@ void RunPresentPipelineBoundary() {
     const uint32 main_thread_id =
         Platform::GetCurrentThreadID();
 
-    SourceSubmissionCapture source_capture(async_queue_scope);
-    ScopedSourceSubmissionObserver source_observer(source_capture);
-    SubmissionBoundaryCapture boundary_capture{};
+    SourceSubmissionCapture          source_capture(async_queue_scope);
+    ScopedSourceSubmissionObserver   source_observer(source_capture);
+    SubmissionBoundaryCapture        boundary_capture{};
     ScopedSubmissionBoundaryObserver boundary_observer(
         boundary_capture
     );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          wait_capture{prefix_queue};
+    DependencyWaitBeginCapture     wait_capture{prefix_queue};
     ScopedDependencyWaitObserver   wait_observer(wait_capture);
     ScriptedPresentCapture scripted_capture(
         VulkanScriptedPresentResult{
@@ -10795,8 +10088,7 @@ void RunPresentPipelineBoundary() {
         "phase15f_present_source",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::PRESENTATION_SOURCE |
-            ETextureUsageFlags::TRANSFER_SRC |
+        ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );
     SwapchainRef scripted_swapchain{
@@ -10822,32 +10114,38 @@ void RunPresentPipelineBoundary() {
         0x15F00004u,
     };
     std::array<uint32, expected.size()> readback{};
-    FenceRef dependency = device.CreateFence();
-    FenceRef prefix_done = device.CreateFence();
-    FenceRef later_done  = device.CreateFence();
-    std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
-    std::array<std::atomic<uint32>, 2> success_callbacks{};
-    std::binary_semaphore later_translated{0};
-    bool dependency_released = false;
+    FenceRef                            dependency  = device.CreateFence();
+    FenceRef                            prefix_done = device.CreateFence();
+    FenceRef                            later_done  = device.CreateFence();
+    std::array<std::atomic<uint32>, 2>  ordinary_callbacks{};
+    std::array<std::atomic<uint32>, 2>  success_callbacks{};
+    std::binary_semaphore               later_translated{0};
+    bool                                dependency_release_attempted = false;
+    const bool                          ownership_transfer           = topology.Resolve(prefix_queue).family_id != topology.graphics.family_id;
+    const auto                          transfer_barrier             = [&](EBarrierQueueTransferPhase phase) {
+        const auto state      = BarrierState::Buffer(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ | ERHIAccessFlags::TRANSFER_WRITE);
+        auto       result     = BarrierCreateInfo::Transition(transfer_buffer->GetView(), state, state);
+        result.queue_transfer = phase == EBarrierQueueTransferPhase::Release ?
+                                                                         BarrierQueueTransfer::Release(prefix_queue, EQueueType::Graphics) :
+                                                                         BarrierQueueTransfer::Acquire(prefix_queue, EQueueType::Graphics);
+        return result;
+    };
 
     const auto release_dependency = [&] {
-        if (dependency_released) {
+        if (dependency_release_attempted) {
             return;
         }
-        ResourceCast(dependency.Get())->SignalHost(1);
-        dependency_released = true;
+        dependency_release_attempted = true;
+        ReleaseTestSubmissionDependency(*dependency.Get(), 1);
     };
 
     try {
         CommandList prefix(prefix_queue);
-        prefix.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        prefix.CopyFrom(
-            OwnedBytes(expected),
-            transfer_buffer->GetView(),
-            "PresentBoundaryBlockedPrefix"
-        );
+        prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        CopyTestTransfer(prefix, OwnedBytes(expected), transfer_buffer->GetView(), "PresentBoundaryBlockedPrefix");
+        if (ownership_transfer) {
+            prefix.Barriers({transfer_barrier(EBarrierQueueTransferPhase::Release)});
+        }
         prefix.AddCallback([&] {
             ordinary_callbacks[0].fetch_add(
                 1, std::memory_order_relaxed
@@ -10863,7 +10161,7 @@ void RunPresentPipelineBoundary() {
             ERHITranslateExecutionClass::Parallel
         );
         prefix_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         prefix_submit.async_queue_scope = async_queue_scope;
         prefix_submit.Wait(dependency.Get(), 1)
@@ -10882,7 +10180,7 @@ void RunPresentPipelineBoundary() {
             scripted_capture.count.load(std::memory_order_acquire) != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "Present boundary prefix did not block on the sole "
+                "Present boundary prefix did not begin dependency waiting on the sole "
                 "Submission owner"
             );
         }
@@ -10898,14 +10196,12 @@ void RunPresentPipelineBoundary() {
         );
 
         CommandList later(EQueueType::Graphics);
-        later.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
-        later.CopyFrom(
-            transfer_buffer->GetView(),
-            WritableBytes(readback),
-            "PresentBoundaryLaterReadback"
-        );
+
+        later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        if (ownership_transfer) {
+            later.Barriers({transfer_barrier(EBarrierQueueTransferPhase::Acquire)});
+        }
+        CopyTestTransfer(later, transfer_buffer->GetView(), WritableBytes(readback), "PresentBoundaryLaterReadback");
         later.AddCustomCommand(
             MakeUnique<TranslateProbeCommand>(
                 &later_translated,
@@ -10928,7 +10224,7 @@ void RunPresentPipelineBoundary() {
             ERHITranslateExecutionClass::Parallel
         );
         later_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         later_submit.async_queue_scope = async_queue_scope;
         later_submit.Signal(later_done.Get(), 1);
@@ -10987,8 +10283,8 @@ void RunPresentPipelineBoundary() {
                 );
             }
         }
-        if (ResourceCast(prefix_done.Get())->HostWait(1) != VK_SUCCESS ||
-            ResourceCast(later_done.Get())->HostWait(1) != VK_SUCCESS) {
+        if (!ResourceCast(prefix_done.Get())->Wait(1) ||
+            !ResourceCast(later_done.Get())->Wait(1)) {
             throw std::runtime_error(
                 "Present boundary source signals did not succeed"
             );
@@ -11039,7 +10335,7 @@ void RunPresentPipelineBoundary() {
                 event.thread_role != ERHIThreadRole::Submission ||
                 event.thread_id != submission_thread_id ||
                 event.thread_id == main_thread_id ||
-                !event.outcome.WasSubmitted()) {
+                !event.outcome.Succeeded()) {
                 throw std::runtime_error(
                     "Present boundary native submission order or owner changed"
                 );
@@ -11310,251 +10606,300 @@ void RunPresentPipelineBoundary() {
             prefix_native
         );
     } catch (...) {
-        release_dependency();
+        try {
+            release_dependency();
+        } catch (...) {
+            // A failed release rejects the dependency; still drain observed work.
+        }
         RHIExecutor::Get().Sync(ERHISyncDepth::Present);
         throw;
     }
 }
 
-void RunLegacyDirectPresentOwnerBoundary() {
+void RunDirectQueueEntryRejection() {
     using namespace std::chrono_literals;
 
     auto& device = RenderDevice::Get();
-    auto& graphics_queue = static_cast<VkCommandQueue&>(
+    auto& graphics_queue = static_cast<VulkanCommandQueue&>(
         device.GetCommandQueue(EQueueType::Graphics)
     );
-    const uint32 caller_thread =
-        Platform::GetCurrentThreadID();
-    SwapchainRef swapchain{
-        MoerNew(HeadlessScriptedSwapchain)()
-    };
-    ScriptedPresentCapture capture(
-        VulkanScriptedPresentResult{
-            .outcome = {
-                EVulkanOperationStatus::Rejected,
-                VK_ERROR_UNKNOWN,
-            },
-        }
+    // Exercise the public boundary before any executor can own this queue.
+    // StartUp alone is insufficient for the second phase: backend creation is
+    // lazy, so an accepted submission below first establishes Runtime ownership.
+    RHIExecutor::ShutDown();
+    NativeSubmissionCapture native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    SwapchainRef swapchain{MoerNew(HeadlessScriptedSwapchain)()};
+    ScriptedPresentCapture present_capture({});
+    ScopedScriptedPresentOverride present_override(
+        present_capture, false, false, true
     );
-    ScopedScriptedPresentOverride scripted_override(
-        capture,
-        false,
-        false,
-        true
-    );
-    PresentReceiptRef receipt = MakeShared<PresentReceipt>();
 
-    graphics_queue.Present(
-        swapchain,
-        TextureView{},
-        receipt
-    );
-    const PresentReceiptResult result =
-        receipt->WaitForSubmission(5s);
-    graphics_queue.Sync();
-
-    if (!result.resolved || result.submitted ||
-        result.recreate_swapchain ||
-        receipt->ResolutionAttemptCount() != 1 ||
-        capture.source_rejection_hook_count.load(
-            std::memory_order_acquire
-        ) != 1 ||
-        capture.thread_id.load(std::memory_order_acquire) !=
-            caller_thread ||
-        capture.wrong_owner.load(std::memory_order_acquire) ||
-        capture.count.load(std::memory_order_acquire) != 0) {
-        throw std::runtime_error(
-            "legacy direct Present did not execute on the caller-side Submission owner"
+    const auto expect_direct_rejection = [&] {
+        const size_t native_before = native_capture.Count();
+        FenceRef rejected_signal = device.CreateFence();
+        std::atomic<uint32> ordinary_callbacks{0};
+        std::atomic<uint32> success_callbacks{0};
+        std::atomic<uint32> completion_callbacks{0};
+        std::atomic<uint32> query_callbacks{0};
+        std::atomic<uint32> callback_errors{0};
+        auto retained_owner = std::make_shared<uint32>(7);
+        std::weak_ptr<uint32> weak_owner = retained_owner;
+        QueryFuture query_future{};
+        CommandList commands(EQueueType::Graphics);
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        commands.KeepAlive(retained_owner);
+        GpuCompletionFuture completion = commands.TrackGpuCompletion(
+            "DirectQueueEntryRejectedCompletion"
         );
-    }
+        commands.Signal(rejected_signal, 1);
+        // Recording order must not allow an ordinary callback to observe
+        // pending query/completion results, even when rejection skips Translate.
+        commands.AddCallback([&] {
+            const auto query_result = query_future.TryGet();
+            if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
+                !rejected_signal->IsRejected(1) ||
+                completion.Status() != GpuCompletionStatus::Error ||
+                !query_result.has_value() ||
+                query_result->status != QueryStatus::Error ||
+                completion_callbacks.load(std::memory_order_acquire) != 1 ||
+                query_callbacks.load(std::memory_order_acquire) != 1 ||
+                weak_owner.expired()) {
+                callback_errors.fetch_add(1, std::memory_order_relaxed);
+            }
+            ordinary_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        QueryToken query = commands.BeginTimestampQuery(
+            "DirectQueueEntryRejectedTimestamp"
+        );
+        query_future = query.GetFuture();
+        commands.EndTimestampQuery(query);
+        completion.Then([&](const GpuCompletionResult& result) {
+            const auto query_result = query_future.TryGet();
+            if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
+                result.status != GpuCompletionStatus::Error ||
+                result.error_reason.empty() ||
+                !rejected_signal->IsRejected(1) ||
+                !query_result.has_value() ||
+                query_result->status != QueryStatus::Error ||
+                weak_owner.expired()) {
+                callback_errors.fetch_add(1, std::memory_order_relaxed);
+            }
+            completion_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        query_future.Then([&](const QueryResult& result) {
+            if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
+                result.status != QueryStatus::Error ||
+                result.error_reason.empty() ||
+                !rejected_signal->IsRejected(1) ||
+                completion.Status() != GpuCompletionStatus::Error ||
+                weak_owner.expired()) {
+                callback_errors.fetch_add(1, std::memory_order_relaxed);
+            }
+            query_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        commands.AddSuccessCallback([&] {
+            success_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        retained_owner.reset();
+        const WaitEvent completion_event = graphics_queue.Execute(commands.Submit());
+        graphics_queue.Sync();
+        if (completion_event.timeline_handle != 0 || completion_event.value != 0 ||
+            !rejected_signal->IsRejected(1) || rejected_signal->GetValue() != 0 ||
+            ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+            success_callbacks.load(std::memory_order_acquire) != 0 ||
+            completion_callbacks.load(std::memory_order_acquire) != 1 ||
+            query_callbacks.load(std::memory_order_acquire) != 1 ||
+            callback_errors.load(std::memory_order_acquire) != 0 ||
+            !weak_owner.expired()) {
+            throw std::runtime_error(
+                "direct Execute did not reject and retire every notification and owner"
+            );
+        }
+
+        PresentReceiptRef receipt = MakeShared<PresentReceipt>();
+        graphics_queue.Present(swapchain, TextureView{}, receipt);
+        const PresentReceiptResult result = receipt->WaitForSubmission(5s);
+        if (!result.resolved || result.submitted || result.recreate_swapchain ||
+            result.status != EPresentStatus::Rejected ||
+            result.stage != EPresentStage::Validation ||
+            receipt->ResolutionAttemptCount() != 1 ||
+            present_capture.count.load(std::memory_order_acquire) != 0 ||
+            present_capture.source_rejection_hook_count.load(std::memory_order_acquire) != 0) {
+            throw std::runtime_error(
+                "direct Present entered the native path or left an unresolved receipt"
+            );
+        }
+        graphics_queue.Sync();
+        if (ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+            success_callbacks.load(std::memory_order_acquire) != 0 ||
+            completion_callbacks.load(std::memory_order_acquire) != 1 ||
+            query_callbacks.load(std::memory_order_acquire) != 1 ||
+            receipt->ResolutionAttemptCount() != 1 ||
+            native_capture.Overflowed() || native_capture.Count() != native_before) {
+            throw std::runtime_error(
+                "direct queue rejection replayed notifications or submitted native work"
+            );
+        }
+    };
+
+    FenceRef accepted_signal = device.CreateFence();
+    std::atomic<uint32> accepted_callbacks{0};
+    const auto submit_through_executor = [&](uint64 value) {
+        const size_t native_before = native_capture.Count();
+        CommandList commands(EQueueType::Graphics);
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        GpuCompletionFuture completion = commands.TrackGpuCompletion(
+            "DirectQueueEntryRuntimeRecovery"
+        );
+        commands.Signal(accepted_signal, value);
+        commands.AddSuccessCallback([&] {
+            accepted_callbacks.fetch_add(1, std::memory_order_release);
+        });
+        RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit());
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        if (completion.Status() != GpuCompletionStatus::Ready ||
+            accepted_signal->IsRejected(value) || accepted_signal->GetValue() < value ||
+            accepted_callbacks.load(std::memory_order_acquire) != value ||
+            native_capture.Overflowed() || native_capture.Count() != native_before + 1) {
+            throw std::runtime_error(
+                "direct rejection poisoned a later executor-owned submission"
+            );
+        }
+    };
+
+    expect_direct_rejection();
+    RHIExecutor::StartUp();
+    submit_through_executor(1);
+    expect_direct_rejection();
+    submit_through_executor(2);
     LOG_INFO(
-        "[TESTCASE][PASS] "
-        "name=LegacyDirectPresentOwnerBoundary "
-        "rhi_thread=false owner=Submission thread=caller "
-        "receipt=exactly_once native_present=0"
+        "[TESTCASE][PASS] name=DirectQueueEntryRejection "
+        "phases=unclaimed,runtime execute=rejected present=rejected "
+        "completion_event=invalid fence=rejected query=Error gpu_completion=Error "
+        "ordinary_callback=exactly_once query_callback=exactly_once "
+        "completion_callback=exactly_once success_callback=0 owner=Completion "
+        "lifetime=retired receipt=exactly_once native_submit=0 native_present=0 "
+        "runtime=recovered replay=0"
     );
 }
 
-void RunPresentationCompletionIntegrationBoundary() {
+void RunPresentRetryRecovery() {
     using namespace std::chrono_literals;
 
-    auto& device = RenderDevice::Get();
-    auto& graphics_queue = static_cast<VkCommandQueue&>(
-        device.GetCommandQueue(EQueueType::Graphics)
+    auto&        device = RenderDevice::Get();
+    SwapchainRef swapchain{MoerNew(HeadlessScriptedSwapchain)()};
+    TextureRef   source = device.CreateTexture(
+        "present_retry_source",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC
     );
-    SwapchainRef swapchain{
-        MoerNew(HeadlessScriptedSwapchain)()
+    BufferRef buffer = device.CreateBuffer<uint32>(
+        "present_retry_recovery", 4, EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
+    );
+    FenceRef                       done = device.CreateFence();
+    std::array<uint32, 4>          readback{};
+    std::atomic<uint32>            success_callbacks{0};
+    NativeSubmissionCapture        native_capture{};
+    ScopedNativeSubmissionObserver native_observer(native_capture);
+    ScriptedPresentCapture         capture({});
+    ScopedScriptedPresentOverride  scripted_override(capture);
+    constexpr std::array           outcomes{
+        VulkanOperationResult{EVulkanOperationStatus::Retry, VK_NOT_READY},
+        VulkanOperationResult{EVulkanOperationStatus::Retry, VK_TIMEOUT},
+        VulkanOperationResult{EVulkanOperationStatus::Recreate, VK_ERROR_OUT_OF_DATE_KHR},
+        VulkanOperationResult{EVulkanOperationStatus::Recreate, VK_ERROR_SURFACE_LOST_KHR},
     };
-    const PresentationCompletionStateRef state =
-        swapchain->GetPresentationCompletionState();
-    if (!state) {
-        throw std::runtime_error(
-            "headless Presentation completion state was not created"
-        );
-    }
 
-    const auto reserve =
-        [&](uint64 _epoch, uint64 _request, uint32 _slot) {
-            return state->Reserve(
-                PresentationCompletionIdentity{
-                    .state_instance_id =
-                        state->GetStateInstanceId(),
-                    .presentation_epoch = _epoch,
-                    .drawable_generation = 1,
-                    .request_serial = _request,
-                },
-                _slot,
-                1
-            );
-        };
+    try {
+        for (uint32 index = 0; index < outcomes.size(); ++index) {
+            capture.result            = VulkanScriptedPresentResult{.outcome = outcomes[index]};
+            PresentReceiptRef receipt = MakeShared<PresentReceipt>();
+            RHIExecutor::Get().Present(RHIPresentRequest(swapchain, source->GetView(), receipt), true);
+            const auto result = receipt->WaitForSubmission(5s);
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            if (!result.resolved || result.submitted ||
+                result.recreate_swapchain != (outcomes[index].status == EVulkanOperationStatus::Recreate) ||
+                receipt->ResolutionAttemptCount() != 1 || capture.count.load() != index + 1 ||
+                capture.wrong_owner.load() || native_capture.Count() != index) {
+                throw std::runtime_error("recoverable Present did not retire without native submission");
+            }
 
-    const PresentationCompletionTicket blocked =
-        reserve(401, 1, 0);
-    const PresentationCompletionTicket ready =
-        reserve(402, 2, 1);
-    if (!blocked.IsValid() || !ready.IsValid() ||
-        !state->SetWsiMode(
-            blocked,
-            EPresentationWsiCompletionMode::PresentFence
-        ) ||
-        !state->SetWsiMode(
-            ready,
-            EPresentationWsiCompletionMode::PresentFence
-        )) {
-        throw std::runtime_error(
-            "Present-fence integration setup failed"
-        );
-    }
-
-    PresentFenceStatusCapture fence_status(
-        blocked.GetIssueSequence(),
-        ready.GetIssueSequence()
-    );
-    {
-        ScopedPresentFenceStatusOverride status_override(
-            fence_status
-        );
-        if (!graphics_queue.
-                EnqueuePresentationCompletionProbeForTesting(
-                    swapchain, blocked, true
+            const uint32 expected = 0xC0010000u + index;
+            readback.fill(0);
+            CommandList recovered(EQueueType::Graphics);
+            recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+            PrepareTestBufferTransfer(recovered, buffer->GetView());
+            recovered.ClearResource(buffer->GetView(), expected);
+            CopyTestTransfer(recovered, buffer->GetView(), WritableBytes(readback), "PresentRetryRecoveryReadback");
+            recovered.AddSuccessCallback([&] {
+                success_callbacks.fetch_add(1);
+            });
+            CmdSubmit submit = recovered.Submit();
+            submit.Signal(done.Get(), index + 1);
+            RHIExecutor::Get().Submit(EQueueType::Graphics, std::move(submit), ERHIExecSubmitFlags::FlushGPU);
+            // Do not hide a broken queue wait behind device idle or a direct
+            // Wait: ordinary Sync must complete the GPU work and readback.
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+            auto* fence = ResourceCast(done.Get());
+            if (fence->IsFailed() || fence->IsRejected(index + 1) || done->GetValue() < index + 1 ||
+                !fence->WaitSubmitted(index + 1) || success_callbacks.load() != index + 1 ||
+                !std::ranges::all_of(
+                    readback,
+                    [expected](uint32 value) {
+                        return value == expected;
+                    }
                 ) ||
-            !graphics_queue.
-                EnqueuePresentationCompletionProbeForTesting(
-                    swapchain, ready, true
-                )) {
-            throw std::runtime_error(
-                "could not enqueue synthetic Present completions"
-            );
-        }
-
-        std::binary_semaphore ready_drain_finished{0};
-        std::jthread ready_drain([&] {
-            RHIExecutor::Get().DrainPresentation(
-                RHIPresentationDrainTarget{
-                    swapchain, 402, 1
-                }
-            );
-            ready_drain_finished.release();
-        });
-        if (!ready_drain_finished.try_acquire_for(5s)) {
-            fence_status.release_blocked.store(
-                true, std::memory_order_release
-            );
-            ready_drain.join();
-            throw std::runtime_error(
-                "ready Present was blocked behind an older unsignalled fence"
-            );
-        }
-        ready_drain.join();
-
-        const PresentationDrainPoint blocked_point =
-            state->Freeze(401, 1);
-        const PresentationDrainPoint ready_point =
-            state->Freeze(402, 1);
-        if (state->OutstandingCount() != 1 ||
-            state->WaitRetired(blocked_point, 1ms) ||
-            !state->WaitRetired(ready_point, 20ms) ||
-            fence_status.ready_poll_count.load(
-                std::memory_order_acquire
-            ) == 0) {
-            throw std::runtime_error(
-                "targeted Present drain retired the wrong identity"
-            );
-        }
-
-        fence_status.release_blocked.store(
-            true, std::memory_order_release
-        );
-        RHIExecutor::Get().DrainPresentation(
-            RHIPresentationDrainTarget{
-                swapchain, 401, 1
+                native_capture.Overflowed() || native_capture.Count() != index + 1 ||
+                !native_capture.Event(index).outcome.Succeeded()) {
+                throw std::runtime_error("recoverable Present poisoned later GPU completion/readback");
             }
-        );
-        if (state->HasOutstanding() ||
-            fence_status.blocked_poll_count.load(
-                std::memory_order_acquire
-            ) == 0 ||
-            fence_status.invalid.load(
-                std::memory_order_acquire
-            ) ||
-            fence_status.completion_thread.load(
-                std::memory_order_acquire
-            ) == 0) {
-            throw std::runtime_error(
-                "Present-fence polling escaped the sole Completion owner"
-            );
         }
+    } catch (...) {
+        // Keep test resources alive while draining a regressed completion path.
+        device.WaitIdle();
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+        throw;
+    }
+    LOG_INFO("[TESTCASE][PASS] name=PresentRetryRecovery outcomes=NotReady,Timeout,OutOfDate,SurfaceLost "
+             "later_gpu_submits=4 readback=verified signal=reused success_callbacks=4");
+}
+
+void RunPresentationIdleBoundary() {
+    // A normal GPU/CPU completion drain must not stall presentation. Only the
+    // explicit lifecycle boundary performs device idle, after all callbacks.
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    std::atomic_bool             completed{false};
+    DeviceIdleWaitCapture        idle{};
+    ScopedDeviceIdleWaitObserver observer(idle);
+
+    CommandList ordinary(EQueueType::Graphics);
+
+    ordinary.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    ordinary.AddCallback([&] {
+        completed.store(true, std::memory_order_release);
+    });
+    RHIExecutor::Get().Submit(EQueueType::Graphics, ordinary.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    if (!completed.load(std::memory_order_acquire) || idle.count.load() != 0) {
+        throw std::runtime_error("ordinary completion unexpectedly waited for device idle");
     }
 
-    const PresentationCompletionTicket fallback =
-        reserve(403, 3, 2);
-    if (!fallback.IsValid() ||
-        !state->SetWsiMode(
-            fallback,
-            EPresentationWsiCompletionMode::QueueIdleFallback
-        ) ||
-        !graphics_queue.
-            EnqueuePresentationCompletionProbeForTesting(
-                swapchain, fallback, false
-            )) {
-        throw std::runtime_error(
-            "queue-idle fallback integration setup failed"
-        );
+    completed.store(false, std::memory_order_release);
+    idle.required_completion = &completed;
+    CommandList before_recreate(EQueueType::Graphics);
+    before_recreate.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    before_recreate.AddCallback([&] {
+        completed.store(true, std::memory_order_release);
+    });
+    RHIExecutor::Get().Submit(EQueueType::Graphics, before_recreate.Submit());
+    RHIExecutor::Get().Sync(ERHISyncDepth::Present);
+    if (idle.count.load() != 1 || idle.invalid.load() || idle.submission_thread.load() == 0) {
+        throw std::runtime_error("Present sync did not wait idle after ordinary completion on Submission");
     }
-
-    QueueIdleWaitCapture queue_idle{};
-    {
-        ScopedQueueIdleWaitObserver queue_idle_observer(
-            queue_idle
-        );
-        RHIExecutor::Get().DrainPresentation(
-            RHIPresentationDrainTarget{
-                swapchain, 403, 1
-            }
-        );
-    }
-    if (state->HasOutstanding() ||
-        queue_idle.count.load(std::memory_order_acquire) == 0 ||
-        queue_idle.invalid.load(std::memory_order_acquire) ||
-        queue_idle.submission_thread.load(
-            std::memory_order_acquire
-        ) == 0 ||
-        queue_idle.submission_thread.load(
-            std::memory_order_acquire
-        ) == Platform::GetCurrentThreadID()) {
-        throw std::runtime_error(
-            "queue-idle fallback escaped the sole Submission owner"
-        );
-    }
-
-    LOG_INFO(
-        "[TESTCASE][PASS] "
-        "name=PresentationCompletionIntegrationBoundary "
-        "present_fence=nonblocking_targeted "
-        "fence_owner=Completion completion_threads=1 "
-        "queue_idle_fallback=targeted "
-        "queue_idle_owner=Submission outstanding=0"
-    );
+    LOG_INFO("[TESTCASE][PASS] name=PresentationIdleBoundary ordinary_idle=0 lifecycle_idle=1 "
+             "owner=Submission callbacks=completed");
 }
 
 void RunQueuedPresentShutdownBoundary() {
@@ -11574,7 +10919,7 @@ void RunQueuedPresentShutdownBoundary() {
     );
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    DependencyWaitCapture          wait_capture{EQueueType::Graphics};
+    DependencyWaitBeginCapture     wait_capture{EQueueType::Graphics};
     ScopedDependencyWaitObserver   wait_observer(wait_capture);
     ScriptedPresentCapture scripted_capture(
         VulkanScriptedPresentResult{
@@ -11592,8 +10937,7 @@ void RunQueuedPresentShutdownBoundary() {
         "phase15f_shutdown_present_source",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::PRESENTATION_SOURCE |
-            ETextureUsageFlags::TRANSFER_SRC |
+        ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     );
     SwapchainRef scripted_swapchain{
@@ -11622,9 +10966,7 @@ void RunQueuedPresentShutdownBoundary() {
 
     try {
         CommandList prefix(EQueueType::Graphics);
-        prefix.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
-        );
+        prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         prefix.AddCallback([&] {
             ordinary_callbacks.fetch_add(
                 1, std::memory_order_relaxed
@@ -11640,7 +10982,7 @@ void RunQueuedPresentShutdownBoundary() {
             ERHITranslateExecutionClass::Parallel
         );
         prefix_submit.SetResourceStateOwnership(
-            ERHIResourceStateOwnership::Explicit
+            ERHIResourceStateOwnership::Compiled
         );
         prefix_submit.async_queue_scope = async_queue_scope;
         prefix_submit.Wait(dependency.Get(), 1)
@@ -11658,7 +11000,7 @@ void RunQueuedPresentShutdownBoundary() {
             boundary_capture.Count() != 0 ||
             native_capture.Count() != 0) {
             throw std::runtime_error(
-                "shutdown Present prefix did not block on the sole "
+                "shutdown Present prefix did not begin dependency waiting on the sole "
                 "Submission owner"
             );
         }
@@ -11692,8 +11034,7 @@ void RunQueuedPresentShutdownBoundary() {
                 "shutdown Retry Present resolved the wrong receipt state"
             );
         }
-        if (ResourceCast(prefix_done.Get())->HostWait(1) !=
-                VK_ERROR_UNKNOWN ||
+        if (ResourceCast(prefix_done.Get())->Wait(1) ||
             !ResourceCast(prefix_done.Get())->IsRejected(1) ||
             ResourceCast(prefix_done.Get())->IsFailed() ||
             ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
@@ -11771,127 +11112,6 @@ void RunQueuedPresentShutdownBoundary() {
     }
 }
 
-void RunPresentationCompletionShutdownDrainBoundary() {
-    using namespace std::chrono_literals;
-
-    auto& device = RenderDevice::Get();
-    auto& graphics_queue = static_cast<VkCommandQueue&>(
-        device.GetCommandQueue(EQueueType::Graphics)
-    );
-    SwapchainRef swapchain{
-        MoerNew(HeadlessScriptedSwapchain)()
-    };
-    const PresentationCompletionStateRef state =
-        swapchain->GetPresentationCompletionState();
-    const auto reserve =
-        [&](uint64 _epoch, uint64 _request, uint32 _slot) {
-            return state->Reserve(
-                PresentationCompletionIdentity{
-                    .state_instance_id =
-                        state->GetStateInstanceId(),
-                    .presentation_epoch = _epoch,
-                    .drawable_generation = 1,
-                    .request_serial = _request,
-                },
-                _slot,
-                1
-            );
-        };
-    const PresentationCompletionTicket fence_ticket =
-        reserve(501, 1, 0);
-    const PresentationCompletionTicket fallback_ticket =
-        reserve(502, 2, 1);
-    if (!fence_ticket.IsValid() ||
-        !fallback_ticket.IsValid() ||
-        !state->SetWsiMode(
-            fence_ticket,
-            EPresentationWsiCompletionMode::PresentFence
-        ) ||
-        !state->SetWsiMode(
-            fallback_ticket,
-            EPresentationWsiCompletionMode::QueueIdleFallback
-        ) ||
-        !graphics_queue.
-            RegisterPresentationCompletionStateForShutdownProbeForTesting(
-                state
-            )) {
-        throw std::runtime_error(
-            "shutdown Presentation completion setup failed"
-        );
-    }
-
-    PresentFenceStatusCapture fence_status(
-        fence_ticket.GetIssueSequence(),
-        UINT64_MAX
-    );
-    QueueIdleWaitCapture queue_idle{};
-    ScopedPresentFenceStatusOverride fence_override(
-        fence_status
-    );
-    ScopedQueueIdleWaitObserver queue_idle_observer(
-        queue_idle
-    );
-    if (!graphics_queue.
-            EnqueuePresentationCompletionProbeForTesting(
-                swapchain, fence_ticket, true
-            ) ||
-        !graphics_queue.
-            EnqueuePresentationCompletionProbeForTesting(
-                swapchain, fallback_ticket, false
-            )) {
-        throw std::runtime_error(
-            "shutdown Presentation completion probes were not enqueued"
-        );
-    }
-
-    const auto poll_deadline =
-        std::chrono::steady_clock::now() + 2s;
-    while (fence_status.blocked_poll_count.load(
-               std::memory_order_acquire
-           ) == 0 &&
-           std::chrono::steady_clock::now() < poll_deadline) {
-        std::this_thread::sleep_for(1ms);
-    }
-    if (fence_status.blocked_poll_count.load(
-            std::memory_order_acquire
-        ) == 0) {
-        throw std::runtime_error(
-            "shutdown Present fence never reached Completion polling"
-        );
-    }
-
-    std::jthread release_fence([&] {
-        std::this_thread::sleep_for(100ms);
-        fence_status.release_blocked.store(
-            true, std::memory_order_release
-        );
-    });
-    RenderDevice::Dispose();
-    release_fence.join();
-
-    if (state->HasOutstanding() ||
-        fence_status.invalid.load(std::memory_order_acquire) ||
-        fence_status.completion_thread.load(
-            std::memory_order_acquire
-        ) == 0 ||
-        queue_idle.count.load(std::memory_order_acquire) == 0 ||
-        queue_idle.invalid.load(std::memory_order_acquire) ||
-        queue_idle.submission_thread.load(
-            std::memory_order_acquire
-        ) == 0) {
-        throw std::runtime_error(
-            "queue destruction did not perform the final owned Presentation drain"
-        );
-    }
-
-    LOG_INFO(
-        "[TESTCASE][PASS] "
-        "name=PresentationCompletionShutdownDrainBoundary "
-        "pending=fence+fallback fence_owner=Completion "
-        "queue_idle_owner=Submission outstanding=0 dispose=returned"
-    );
-}
-
 void RunPresentHardFailureBoundary() {
     using namespace std::chrono_literals;
 
@@ -11902,8 +11122,8 @@ void RunPresentHardFailureBoundary() {
         "phase15f_fault_priority_invalid_source",
         Extent3D(4, 4, 1),
         PF_R8G8B8A8_UNORM,
-        ETextureUsageFlags::TRANSFER_SRC |
-            ETextureUsageFlags::TRANSFER_DST
+        // Missing TRANSFER_SRC must reach the source-rejection fault hook.
+        ETextureUsageFlags::TRANSFER_DST
     );
     SwapchainRef scripted_swapchain{
         MoerNew(HeadlessScriptedSwapchain)()
@@ -11960,6 +11180,8 @@ void RunPresentHardFailureBoundary() {
         }
 
         CommandList later(EQueueType::Graphics);
+
+        later.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         later.AddCallback([&] {
             ordinary_callbacks.fetch_add(
                 1, std::memory_order_relaxed
@@ -12161,13 +11383,14 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
     // sibling can then consist solely of independent GPU copies, which is the
     // smallest real workload that proves it remains parallel-record eligible.
     CommandList initialize(EQueueType::Graphics);
-    initialize.CopyFrom(
+    initialize.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(initialize,
         OwnedBytes(values),
         scope_ping->GetView(),
         "GpuScopeInitializePing"
     );
     for (size_t index = 0; index < sibling_copy_count; ++index) {
-        initialize.CopyFrom(
+        CopyTestTransfer(initialize,
             OwnedBytes(values),
             sibling_sources[index]->GetView(),
             "GpuScopeInitializeParallelSource"
@@ -12204,9 +11427,8 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
     std::array<QueryFuture, 2> scope_futures{};
 
     CommandList scoped(EQueueType::Graphics);
-    scoped.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    scoped.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     scoped.SetGpuScopeRecorder(
         frame.CreateRecorder(topology.graphics, 0)
     );
@@ -12234,13 +11456,13 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         [&](CommandList& _commands, uint32 _count) {
             for (uint32 copy = 0; copy < _count; ++copy) {
                 if ((copy & 1u) == 0) {
-                    _commands.CopyFrom(
+                    CopyTestTransfer(_commands,
                         scope_ping->GetView(),
                         scope_pong->GetView(),
                         "GpuScopePingToPong"
                     );
                 } else {
-                    _commands.CopyFrom(
+                    CopyTestTransfer(_commands,
                         scope_pong->GetView(),
                         scope_ping->GetView(),
                         "GpuScopePongToPing"
@@ -12256,7 +11478,7 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
     scoped.PopScopeWithTimeScope();
     record_ping_pong(scoped, outer_copy_count);
     scoped.PopScopeWithTimeScope();
-    scoped.CopyFrom(
+    CopyTestTransfer(scoped,
         scope_ping->GetView(),
         WritableBytes(scope_readback),
         "GpuScopeFocusedReadback"
@@ -12289,9 +11511,6 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
             ordinary_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            ordinary_callbacks[1].load(
                 std::memory_order_acquire
             ) != 1) {
             callback_errors.fetch_add(
@@ -12353,17 +11572,16 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         ERHITranslateExecutionClass::Parallel
     );
     scoped_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     scoped_submit.async_queue_scope = async_queue_scope;
     scoped_submit.Signal(scoped_done.Get(), 1);
 
     CommandList sibling(EQueueType::Graphics);
-    sibling.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    sibling.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     for (size_t index = 0; index < sibling_copy_count; ++index) {
-        sibling.CopyFrom(
+        CopyTestTransfer(sibling,
             sibling_sources[index]->GetView(),
             sibling_destinations[index]->GetView(),
             "GpuScopeQueryFreeParallelCopy"
@@ -12383,9 +11601,6 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
     sibling.AddSuccessCallback([&] {
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
-            ordinary_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
             ordinary_callbacks[1].load(
                 std::memory_order_acquire
             ) != 1) {
@@ -12403,7 +11618,7 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         ERHITranslateExecutionClass::Parallel
     );
     sibling_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     sibling_submit.async_queue_scope = async_queue_scope;
     sibling_submit.Signal(sibling_done.Get(), 1);
@@ -12427,7 +11642,7 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         translation_capture
     );
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(
         EQueueType::Graphics, std::move(scoped_submit)
     );
@@ -12444,11 +11659,12 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
     // preserves the topology under test while preventing planner diagnostics
     // alone from masking dropped parallel-recorded copies.
     CommandList verify_sibling_copies(EQueueType::Graphics);
+    verify_sibling_copies.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     verify_sibling_copies.SetTranslateExecutionClass(
         ERHITranslateExecutionClass::SerialControl
     );
     for (size_t index = 0; index < sibling_copy_count; ++index) {
-        verify_sibling_copies.CopyFrom(
+        CopyTestTransfer(verify_sibling_copies,
             sibling_destinations[index]->GetView(),
             WritableBytes(sibling_readbacks[index]),
             "GpuScopeParallelSiblingReadback"
@@ -12646,10 +11862,7 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         query_source.native_queue_id !=
             topology.graphics.native_queue_id ||
         query_source.async_queue_scope !=
-            async_queue_scope ||
-        !query_source.parallel_record_requested ||
-        query_source.parallel_record_planned ||
-        query_source.parallel_record_effective) {
+            async_queue_scope) {
         throw std::runtime_error(
             "timestamp-bearing GPU scope source did not remain a query serial island"
         );
@@ -12662,10 +11875,7 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         parallel_sibling.native_queue_id !=
             topology.graphics.native_queue_id ||
         parallel_sibling.async_queue_scope !=
-            async_queue_scope ||
-        !parallel_sibling.parallel_record_requested ||
-        !parallel_sibling.parallel_record_planned ||
-        !parallel_sibling.parallel_record_effective) {
+            async_queue_scope) {
         throw std::runtime_error(
             "query-free sibling lost effective parallel recording"
         );
@@ -12739,8 +11949,8 @@ void RunGpuScopeStreamCompletionAndParallelIsolation() {
         "[TESTCASE][PASS] "
         "name=GpuScopeStreamCompletionAndParallelIsolation "
         "frame_id={} queue=Graphics scopes=2 hierarchy=nested "
-        "query_source=query-serial-island "
-        "query_free_sibling=parallel-effective "
+        "query_source=timestamp-source "
+        "query_free_sibling=independent-source "
         "raw_ticks=verified duration_ns={},{} "
         "exclusive_ns={},{} owner=Completion "
         "readback=verified sibling_readbacks=8/8 replay=0",
@@ -12778,11 +11988,13 @@ void RunTimestampQueryCompletionOwnership() {
     FenceRef            query_done = device.CreateFence();
 
     CommandList commands(EQueueType::Graphics);
+
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture gpu_completion =
         commands.TrackGpuCompletion(
             "Phase19AGraphicsCompletion"
         );
-    commands.CopyFrom(
+    CopyTestTransfer(commands,
         OwnedBytes(values),
         source->GetView(),
         "TimestampQueryInitialize"
@@ -12827,13 +12039,13 @@ void RunTimestampQueryCompletionOwnership() {
 
     for (uint32 copy = 0; copy < 64; ++copy) {
         if ((copy & 1u) == 0) {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 source->GetView(),
                 destination->GetView(),
                 "TimestampQueryForwardCopy"
             );
         } else {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 destination->GetView(),
                 source->GetView(),
                 "TimestampQueryReverseCopy"
@@ -12841,7 +12053,7 @@ void RunTimestampQueryCompletionOwnership() {
         }
     }
     commands.EndTimestampQuery(query);
-    commands.CopyFrom(
+    CopyTestTransfer(commands,
         destination->GetView(),
         WritableBytes(readback),
         "TimestampQueryReadback"
@@ -12911,6 +12123,8 @@ void RunTimestampQueryCompletionOwnership() {
     std::atomic<uint32>               reused_callback_errors{0};
 
     CommandList reused_commands(EQueueType::Graphics);
+
+    reused_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken reused_query =
         reused_commands.BeginTimestampQuery("Phase17ATimestampAllocatorReuse");
     QueryFuture reused_future = reused_query.GetFuture();
@@ -12925,13 +12139,13 @@ void RunTimestampQueryCompletionOwnership() {
     });
     for (uint32 copy = 0; copy < 8; ++copy) {
         if ((copy & 1u) == 0) {
-            reused_commands.CopyFrom(
+            CopyTestTransfer(reused_commands,
                 source->GetView(),
                 destination->GetView(),
                 "TimestampQueryReuseForwardCopy"
             );
         } else {
-            reused_commands.CopyFrom(
+            CopyTestTransfer(reused_commands,
                 destination->GetView(),
                 source->GetView(),
                 "TimestampQueryReuseReverseCopy"
@@ -12939,7 +12153,7 @@ void RunTimestampQueryCompletionOwnership() {
         }
     }
     reused_commands.EndTimestampQuery(reused_query);
-    reused_commands.CopyFrom(
+    CopyTestTransfer(reused_commands,
         destination->GetView(),
         WritableBytes(reused_readback),
         "TimestampQueryReuseReadback"
@@ -12975,6 +12189,7 @@ void RunTimestampQueryCompletionOwnership() {
     // retire Ready without latching the Vulkan runtime.
     constexpr uint32 large_query_pair_count = 501;
     CommandList      large_query_commands(EQueueType::Graphics);
+    large_query_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     Array<QueryFuture> large_query_futures{};
     large_query_futures.reserve(large_query_pair_count);
     for (uint32 index = 0; index < large_query_pair_count; ++index) {
@@ -13020,6 +12235,7 @@ void RunTimestampQueryCompletionOwnership() {
 
     FenceRef post_growth_done = device.CreateFence();
     CommandList post_growth_commands(EQueueType::Graphics);
+    post_growth_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     CmdSubmit post_growth_submit = post_growth_commands.Submit();
     post_growth_submit.Signal(post_growth_done.Get(), 1);
     RHIExecutor::Get().Submit(
@@ -13077,7 +12293,7 @@ void RunOcclusionQueryCompletionOwnership() {
         static_cast<const VulkanDevice*>(device.GetImpl());
     const bool precise_sample_count =
         vulkan_device != nullptr &&
-        vulkan_device->GetCoreFeatures().core_1_0.occlusionQueryPrecise ==
+        vulkan_device->GetCoreFeatures().GetCore10Features().occlusionQueryPrecise ==
             VK_TRUE;
     const EBufferUsageFlags usage =
         EBufferUsageFlags::TRANSFER_SRC |
@@ -13103,9 +12319,11 @@ void RunOcclusionQueryCompletionOwnership() {
     FenceRef            query_done = device.CreateFence();
 
     CommandList commands(EQueueType::Graphics);
+
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture gpu_completion =
         commands.TrackGpuCompletion("Phase20OcclusionCompletion");
-    commands.CopyFrom(
+    CopyTestTransfer(commands,
         OwnedBytes(values),
         source->GetView(),
         "OcclusionQueryInitialize"
@@ -13161,13 +12379,13 @@ void RunOcclusionQueryCompletionOwnership() {
     // zero-sample result needed by the headless gate.
     for (uint32 copy = 0; copy < 16; ++copy) {
         if ((copy & 1u) == 0) {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 source->GetView(),
                 destination->GetView(),
                 "OcclusionQueryForwardCopy"
             );
         } else {
-            commands.CopyFrom(
+            CopyTestTransfer(commands,
                 destination->GetView(),
                 source->GetView(),
                 "OcclusionQueryReverseCopy"
@@ -13175,7 +12393,7 @@ void RunOcclusionQueryCompletionOwnership() {
         }
     }
     commands.EndOcclusionQuery(query);
-    commands.CopyFrom(
+    CopyTestTransfer(commands,
         destination->GetView(),
         WritableBytes(readback),
         "OcclusionQueryReadback"
@@ -13236,6 +12454,7 @@ void RunOcclusionQueryCompletionOwnership() {
         bulk_callback_counts{};
     std::atomic<uint32> bulk_callback_errors{0};
     CommandList bulk_commands(EQueueType::Graphics);
+    bulk_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     for (size_t index = 0; index < bulk_pair_count; ++index) {
         QueryToken bulk_query =
             bulk_commands.BeginOcclusionQuery(
@@ -13302,6 +12521,7 @@ void RunOcclusionQueryCompletionOwnership() {
 
     std::atomic<uint32> reused_callback_count{0};
     CommandList reused_commands(EQueueType::Graphics);
+    reused_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken reused_query =
         reused_commands.BeginOcclusionQuery(
             "Phase20OcclusionPostGrowthReuse"
@@ -13368,690 +12588,144 @@ void RunOcclusionQueryCompletionOwnership() {
     );
 }
 
-void RunTimestampQuerySuccessfulBatchPublication() {
+void RunTimestampQueryIndependentCompletion(bool cross_queue) {
     using namespace std::chrono_literals;
-
-    auto&            device            = RenderDevice::Get();
-    constexpr uint64 async_queue_scope = 0x5048313751534241ull;
-
-    std::array<FenceRef, 2> signals{
-        device.CreateFence(),
-        device.CreateFence(),
-    };
-    std::array<QueryFuture, 2> futures{};
-    std::array<std::atomic<uint32>, 2> query_callbacks{};
-    std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
-    std::array<std::atomic<uint32>, 2> success_callbacks{};
-    std::atomic<uint32>                callback_errors{0};
-
-    CommandList first(EQueueType::Graphics);
-    first.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    QueryToken first_query =
-        first.BeginTimestampQuery("Phase17ASuccessBatchFirst");
-    futures[0] = first_query.GetFuture();
-    first.EndTimestampQuery(first_query);
-
-    CommandList second(EQueueType::Graphics);
-    second.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    QueryToken second_query =
-        second.BeginTimestampQuery("Phase17ASuccessBatchSecond");
-    futures[1] = second_query.GetFuture();
-    second.EndTimestampQuery(second_query);
-
-    auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanFence*>(
-            ResourceCast(signals[_index].Get())
-        );
-        return fence != nullptr && signals[_index]->GetValue() >= 1 &&
-               !fence->IsRejected(1) && !fence->IsFailed();
-    };
-    auto peer_ready = [&](size_t _index) {
-        if (!futures[_index].WaitFor(500ms)) {
-            return false;
-        }
-        const std::optional<QueryResult> result =
-            futures[_index].TryGet();
-        return result.has_value() &&
-               result->status == QueryStatus::Ready &&
-               result->kind == QueryKind::Timestamp;
-    };
-
-    futures[0].Then([&](const QueryResult& _result) {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            _result.status != QueryStatus::Ready ||
-            !peer_ready(1) ||
-            !signal_succeeded(0) ||
-            !signal_succeeded(1)) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        query_callbacks[0].fetch_add(1, std::memory_order_release);
-    });
-    futures[1].Then([&](const QueryResult& _result) {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            _result.status != QueryStatus::Ready ||
-            !peer_ready(0) ||
-            !signal_succeeded(0) ||
-            !signal_succeeded(1)) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        query_callbacks[1].fetch_add(1, std::memory_order_release);
-    });
-
-    first.AddCallback([&] {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            !peer_ready(1) ||
-            query_callbacks[0].load(std::memory_order_acquire) != 1 ||
-            query_callbacks[1].load(std::memory_order_acquire) != 1) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        ordinary_callbacks[0].fetch_add(1, std::memory_order_release);
-    });
-    second.AddCallback([&] {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            !peer_ready(0) ||
-            query_callbacks[0].load(std::memory_order_acquire) != 1 ||
-            query_callbacks[1].load(std::memory_order_acquire) != 1) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        ordinary_callbacks[1].fetch_add(1, std::memory_order_release);
-    });
-    first.AddSuccessCallback([&] {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            ordinary_callbacks[0].load(std::memory_order_acquire) != 1 ||
-            ordinary_callbacks[1].load(std::memory_order_acquire) != 1) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        success_callbacks[0].fetch_add(1, std::memory_order_release);
-    });
-    second.AddSuccessCallback([&] {
-        if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
-            ordinary_callbacks[0].load(std::memory_order_acquire) != 1 ||
-            ordinary_callbacks[1].load(std::memory_order_acquire) != 1) {
-            callback_errors.fetch_add(1, std::memory_order_relaxed);
-        }
-        success_callbacks[1].fetch_add(1, std::memory_order_release);
-    });
-
-    CmdSubmit first_submit = first.Submit();
-    first_submit.SetTranslateExecutionClass(
-        ERHITranslateExecutionClass::Parallel
-    );
-    first_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    first_submit.async_queue_scope = async_queue_scope;
-    first_submit.Signal(signals[0].Get(), 1);
-
-    CmdSubmit second_submit = second.Submit();
-    second_submit.SetTranslateExecutionClass(
-        ERHITranslateExecutionClass::Parallel
-    );
-    second_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    second_submit.async_queue_scope = async_queue_scope;
-    second_submit.Signal(signals[1].Get(), 1);
-
-    SourceSubmissionCapture        source_capture(async_queue_scope);
-    ScopedSourceSubmissionObserver source_observer(source_capture);
-    NativeSubmissionCapture        native_capture{};
-    ScopedNativeSubmissionObserver native_observer(native_capture);
-
-    Array<RHIBackendSubmissionBatchEntry> batch{};
-    batch.emplace_back(
-        EQueueType::Graphics, std::move(first_submit)
-    );
-    batch.emplace_back(
-        EQueueType::Graphics, std::move(second_submit)
-    );
-    RHIExecutor::Get().Submit(
-        std::move(batch), ERHIExecSubmitFlags::FlushGPU
-    );
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-
-    for (size_t index = 0; index < futures.size(); ++index) {
-        const QueryResult result = futures[index].Get();
-        if (result.status != QueryStatus::Ready ||
-            result.kind != QueryKind::Timestamp ||
-            !signal_succeeded(index) ||
-            query_callbacks[index].load(std::memory_order_acquire) != 1 ||
-            ordinary_callbacks[index].load(std::memory_order_acquire) != 1 ||
-            success_callbacks[index].load(std::memory_order_acquire) != 1) {
-            throw std::runtime_error(
-                "successful timestamp batch did not retire exactly once"
-            );
-        }
-    }
-    if (callback_errors.load(std::memory_order_acquire) != 0 ||
-        source_capture.Overflowed() || source_capture.Count() != 2 ||
-        native_capture.Overflowed() || native_capture.Count() != 2) {
-        throw std::runtime_error(
-            "successful timestamp batch exposed a partial terminal frontier"
-        );
-    }
-
-    const uint64 batch_sequence =
-        source_capture.Event(0).batch_sequence;
-    if (batch_sequence == 0) {
-        throw std::runtime_error(
-            "successful timestamp batch lost its backend sequence"
-        );
-    }
-    for (size_t index = 0; index < 2; ++index) {
-        const VulkanSourceSubmissionEvent& source_event =
-            source_capture.Event(index);
-        const VulkanNativeSubmissionEvent& native_event =
-            native_capture.Event(index);
-        if (source_event.batch_sequence != batch_sequence ||
-            source_event.source_index != index ||
-            source_event.queue != EQueueType::Graphics ||
-            source_event.async_queue_scope != async_queue_scope ||
-            native_event.queue != EQueueType::Graphics ||
-            native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.WasSubmitted()) {
-            throw std::runtime_error(
-                "successful timestamp batch escaped stable Submission ordering"
-            );
-        }
-    }
-    if (native_capture.Event(0).native_queue_handle !=
-        native_capture.Event(1).native_queue_handle) {
-        throw std::runtime_error(
-            "successful timestamp batch did not exercise one native queue"
-        );
-    }
-
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    for (size_t index = 0; index < futures.size(); ++index) {
-        if (query_callbacks[index].load(std::memory_order_acquire) != 1 ||
-            ordinary_callbacks[index].load(std::memory_order_acquire) != 1 ||
-            success_callbacks[index].load(std::memory_order_acquire) != 1) {
-            throw std::runtime_error(
-                "a second RHI Sync replayed successful batch callbacks"
-            );
-        }
-    }
-
-    LOG_INFO(
-        "[TESTCASE][PASS] "
-        "name=TimestampQuerySuccessfulBatchPublication "
-        "sources=2 queues=Graphics,Graphics batch_sequence={} "
-        "signals=terminal_before_query_callbacks "
-        "queries=batch_published_before_notify "
-        "cross_future_wait=ready owner=Completion "
-        "query_callbacks=exactly_once "
-        "ordinary_callbacks=exactly_once "
-        "success_callbacks=exactly_once "
-        "native_submit=2 native_owner=Submission replay=0",
-        batch_sequence
-    );
-}
-
-void RunTimestampQueryCrossQueueBatchPublication() {
-    using namespace std::chrono_literals;
-
-    auto& device = RenderDevice::Get();
-    const RHIQueueTopology topology = device.GetQueueTopology();
-    if (!topology.graphics.available || !topology.compute.available) {
-        LOG_INFO(
-            "[TESTCASE][SKIP] "
-            "name=TimestampQueryCrossQueueBatchPublication "
-            "reason=queue_unavailable"
-        );
-        return;
-    }
-
-    constexpr uint64 async_queue_scope = 0x504831375143524Full;
-    const bool native_alias =
-        topology.graphics.native_queue_id ==
-        topology.compute.native_queue_id;
-
-    std::array<FenceRef, 2> signals{
-        device.CreateFence(),
-        device.CreateFence(),
-    };
-    std::array<QueryFuture, 2> futures{};
+    auto&                              device     = RenderDevice::Get();
+    const EQueueType                   peer_queue = cross_queue ? EQueueType::Compute : EQueueType::Graphics;
+    FenceRef                           peer_gate  = device.CreateFence();
+    std::array<QueryFuture, 2>         queries{};
     std::array<GpuCompletionFuture, 2> completions{};
-    std::array<std::atomic<uint32>, 2> query_callbacks{};
-    std::array<std::atomic<uint32>, 2> completion_callbacks{};
-    std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
-    std::array<std::atomic<uint32>, 2> success_callbacks{};
-    std::atomic<uint32> callback_errors{0};
-    std::atomic<uint32> queue_sync_returns{0};
-    std::atomic<uint32> sync_before_callback_finished{0};
-    std::atomic<bool> blocking_callback_finished{false};
-    std::binary_semaphore blocking_callback_entered{0};
-    std::binary_semaphore release_blocking_callback{0};
-    std::counting_semaphore<2> queue_sync_returned{0};
-    QueueLocalSyncWaitCapture queue_sync_wait_capture{};
-    OneShotSemaphoreRelease release_callback_guard(
-        release_blocking_callback
-    );
+    std::array<std::atomic<uint32>, 2> phases{};
+    std::atomic<uint32>                errors{0};
+    std::binary_semaphore              first_retired{0};
 
-    auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanFence*>(
-            ResourceCast(signals[_index].Get())
-        );
-        return fence != nullptr && signals[_index]->GetValue() >= 1 &&
-               !fence->IsRejected(1) && !fence->IsFailed();
-    };
-    auto peer_ready = [&](size_t _index) {
-        if (!futures[_index].WaitFor(500ms)) {
-            return false;
-        }
-        const std::optional<QueryResult> result =
-            futures[_index].TryGet();
-        return result.has_value() &&
-               result->status == QueryStatus::Ready &&
-               result->kind == QueryKind::Timestamp;
-    };
+    CommandList                 first(EQueueType::Graphics);
+    CommandList                 second(peer_queue);
+    std::array<CommandList*, 2> lists{&first, &second};
+    for (size_t index = 0; index < lists.size(); ++index) {
+        CommandList& list = *lists[index];
+        list.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        const QueryToken query = list.BeginTimestampQuery("IndependentCompletion");
+        queries[index]         = query.GetFuture();
+        list.EndTimestampQuery(query);
+        completions[index] = list.TrackGpuCompletion("IndependentCompletion");
+    }
 
-    CommandList graphics(EQueueType::Graphics);
-    graphics.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    completions[0] = graphics.TrackGpuCompletion(
-        "Phase19ACrossQueueGraphicsCompletion"
-    );
-    QueryToken graphics_query =
-        graphics.BeginTimestampQuery("Phase17ACrossQueueGraphics");
-    futures[0] = graphics_query.GetFuture();
-    graphics.EndTimestampQuery(graphics_query);
-
-    CommandList compute(EQueueType::Compute);
-    compute.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    completions[1] = compute.TrackGpuCompletion(
-        "Phase19ACrossQueueComputeCompletion"
-    );
-    QueryToken compute_query =
-        compute.BeginTimestampQuery("Phase17ACrossQueueCompute");
-    futures[1] = compute_query.GetFuture();
-    compute.EndTimestampQuery(compute_query);
-
-    for (size_t index = 0; index < completions.size(); ++index) {
-        completions[index].Then(
-            [&, index](const GpuCompletionResult& _result) {
-                const size_t peer = 1 - index;
-                const auto peer_completion =
-                    completions[peer].TryGet();
-                const auto own_query = futures[index].TryGet();
-                const auto peer_query = futures[peer].TryGet();
-                if (GetCurrentRHIThreadRole() !=
-                        ERHIThreadRole::Completion ||
-                    _result.status !=
-                        GpuCompletionStatus::Ready ||
-                    !peer_completion.has_value() ||
-                    peer_completion->status !=
-                        GpuCompletionStatus::Ready ||
-                    !own_query.has_value() ||
-                    own_query->status != QueryStatus::Ready ||
-                    !peer_query.has_value() ||
-                    peer_query->status != QueryStatus::Ready ||
-                    !signal_succeeded(0) ||
-                    !signal_succeeded(1)) {
-                    callback_errors.fetch_add(
-                        1, std::memory_order_relaxed
-                    );
-                }
-                completion_callbacks[index].fetch_add(
-                    1, std::memory_order_release
-                );
+    for (size_t index = 0; index < lists.size(); ++index) {
+        auto advance = [&, index](uint32 expected) {
+            if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
+                phases[index].fetch_add(1, std::memory_order_acq_rel) != expected) {
+                errors.fetch_add(1, std::memory_order_relaxed);
             }
-        );
+        };
+        completions[index].Then([&, index, advance](const GpuCompletionResult& result) {
+            if (result.status != GpuCompletionStatus::Ready || queries[index].Status() != QueryStatus::Ready) {
+                errors.fetch_add(1, std::memory_order_relaxed);
+            }
+            advance(0);
+        });
+        queries[index].Then([&, index, advance](const QueryResult& result) {
+            if (result.status != QueryStatus::Ready || completions[index].Status() != GpuCompletionStatus::Ready) {
+                errors.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (index == 0) {
+                // The later submit is held at a dependency gate. Its result
+                // stays Pending, and waiting for it on Completion must fail fast.
+                if (queries[1].TryGet().has_value()) {
+                    errors.fetch_add(1, std::memory_order_relaxed);
+                }
+                bool rejected_wait = false;
+                try {
+                    (void)queries[1].WaitFor(1ms);
+                } catch (const std::logic_error&) {
+                    rejected_wait = true;
+                }
+                if (!rejected_wait) {
+                    errors.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            advance(1);
+        });
+        lists[index]->AddCallback([advance] {
+            advance(2);
+        });
+        lists[index]->AddSuccessCallback([&, index, advance] {
+            advance(3);
+            if (index == 0) {
+                first_retired.release();
+            }
+        });
     }
 
-    futures[0].Then([&](const QueryResult& _result) {
-        if (GetCurrentRHIThreadRole() !=
-                ERHIThreadRole::Completion ||
-            _result.status != QueryStatus::Ready ||
-            !peer_ready(1) ||
-            completions[0].Status() !=
-                GpuCompletionStatus::Ready ||
-            completions[1].Status() !=
-                GpuCompletionStatus::Ready ||
-            completion_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            completion_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            !signal_succeeded(0) ||
-            !signal_succeeded(1)) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        query_callbacks[0].fetch_add(
-            1, std::memory_order_release
-        );
-    });
-    futures[1].Then([&](const QueryResult& _result) {
-        if (GetCurrentRHIThreadRole() !=
-                ERHIThreadRole::Completion ||
-            _result.status != QueryStatus::Ready ||
-            !peer_ready(0) ||
-            completions[0].Status() !=
-                GpuCompletionStatus::Ready ||
-            completions[1].Status() !=
-                GpuCompletionStatus::Ready ||
-            completion_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            completion_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            !signal_succeeded(0) ||
-            !signal_succeeded(1)) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        query_callbacks[1].fetch_add(
-            1, std::memory_order_release
-        );
-    });
+    CmdSubmit first_submit  = first.Submit();
+    CmdSubmit second_submit = second.Submit();
+    second_submit.Wait(peer_gate.Get(), 1);
+    Array<RHISubmissionRequest> batch{};
+    batch.emplace_back(EQueueType::Graphics, std::move(first_submit));
+    batch.emplace_back(peer_queue, std::move(second_submit));
+    RHIExecutor::Get().Submit(std::move(batch), ERHIExecSubmitFlags::FlushGPU);
 
-    graphics.AddCallback([&] {
-        if (GetCurrentRHIThreadRole() !=
-                ERHIThreadRole::Completion ||
-            query_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            query_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        blocking_callback_entered.release();
-        release_blocking_callback.acquire();
-        ordinary_callbacks[0].fetch_add(
-            1, std::memory_order_release
-        );
-        blocking_callback_finished.store(
-            true, std::memory_order_release
-        );
-    });
-    compute.AddCallback([&] {
-        if (GetCurrentRHIThreadRole() !=
-                ERHIThreadRole::Completion ||
-            query_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            query_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        ordinary_callbacks[1].fetch_add(
-            1, std::memory_order_release
-        );
-    });
-    graphics.AddSuccessCallback([&] {
-        if (ordinary_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            ordinary_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        success_callbacks[0].fetch_add(
-            1, std::memory_order_release
-        );
-    });
-    compute.AddSuccessCallback([&] {
-        if (ordinary_callbacks[0].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            ordinary_callbacks[1].load(
-                std::memory_order_acquire
-            ) != 1) {
-            callback_errors.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        success_callbacks[1].fetch_add(
-            1, std::memory_order_release
-        );
-    });
-
-    CmdSubmit graphics_submit = graphics.Submit();
-    graphics_submit.SetTranslateExecutionClass(
-        ERHITranslateExecutionClass::Parallel
-    );
-    graphics_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    graphics_submit.async_queue_scope = async_queue_scope;
-    graphics_submit.Signal(signals[0].Get(), 1);
-
-    CmdSubmit compute_submit = compute.Submit();
-    compute_submit.SetTranslateExecutionClass(
-        ERHITranslateExecutionClass::Parallel
-    );
-    compute_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
-    compute_submit.async_queue_scope = async_queue_scope;
-    compute_submit.Signal(signals[1].Get(), 1);
-
-    SourceSubmissionCapture        source_capture(async_queue_scope);
-    ScopedSourceSubmissionObserver source_observer(source_capture);
-    NativeSubmissionCapture        native_capture{};
-    ScopedNativeSubmissionObserver native_observer(native_capture);
-
-    Array<RHIBackendSubmissionBatchEntry> batch{};
-    batch.emplace_back(
-        EQueueType::Graphics, std::move(graphics_submit)
-    );
-    batch.emplace_back(
-        EQueueType::Compute, std::move(compute_submit)
-    );
-    RHIExecutor::Get().Submit(
-        std::move(batch), ERHIExecSubmitFlags::FlushGPU
-    );
-
-    if (!blocking_callback_entered.try_acquire_for(5s)) {
-        throw std::runtime_error(
-            "cross-queue timestamp batch did not enter its grouped callback"
-        );
+    const bool            first_completed_independently = first_retired.try_acquire_for(5s);
+    const bool            peer_pending                  = queries[1].Status() == QueryStatus::Pending;
+    std::atomic_bool      sync_failed{false};
+    std::binary_semaphore queue_synced{0};
+    std::jthread          local_sync;
+    bool                  queue_completed_independently = true;
+    if (cross_queue) {
+        local_sync                    = std::jthread([&] {
+            try {
+                device.GetCommandQueue(EQueueType::Graphics).Sync();
+            } catch (...) {
+                sync_failed.store(true, std::memory_order_release);
+            }
+            queue_synced.release();
+        });
+        queue_completed_independently = queue_synced.try_acquire_for(5s);
     }
 
-    auto queue_sync = [&](EQueueType _queue) {
-        device.GetCommandQueue(_queue).Sync();
-        if (!blocking_callback_finished.load(
-                std::memory_order_acquire
-            )) {
-            sync_before_callback_finished.fetch_add(
-                1, std::memory_order_relaxed
-            );
-        }
-        queue_sync_returns.fetch_add(
-            1, std::memory_order_release
-        );
-        queue_sync_returned.release();
-    };
-
-    bool both_sync_waits_entered = false;
-    bool sync_returned_before_release = false;
-    size_t observed_sync_returns = 0;
-    {
-        ScopedQueueLocalSyncWaitObserver queue_sync_wait_observer(
-            queue_sync_wait_capture
-        );
-        std::jthread graphics_sync_thread(
-            [&] { queue_sync(EQueueType::Graphics); }
-        );
-        std::jthread compute_sync_thread(
-            [&] { queue_sync(EQueueType::Compute); }
-        );
-
-        // The observer fires only after CompleteAll has captured the target
-        // retirement serial and the associated Completion group. This closes
-        // the scheduler gap between starting the helper and actually entering
-        // the wait contract.
-        both_sync_waits_entered =
-            queue_sync_wait_capture.WaitForTwo(5s);
-        if (both_sync_waits_entered &&
-            queue_sync_returned.try_acquire_for(200ms)) {
-            sync_returned_before_release = true;
-            observed_sync_returns = 1;
-        }
-
-        release_callback_guard.Release();
-        while (observed_sync_returns < 2 &&
-               queue_sync_returned.try_acquire_for(5s)) {
-            ++observed_sync_returns;
-        }
-        graphics_sync_thread.join();
-        compute_sync_thread.join();
-    }
+    // Release the gate before reporting failures, so cleanup never inherits
+    // the intentionally blocked dependency from this test.
+    ReleaseTestSubmissionDependency(*peer_gate, 1);
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-
-    for (size_t index = 0; index < futures.size(); ++index) {
-        const QueryResult result = futures[index].Get();
-        const GpuCompletionResult completion =
-            completions[index].Get();
-        if (result.status != QueryStatus::Ready ||
-            completion.status != GpuCompletionStatus::Ready ||
-            result.kind != QueryKind::Timestamp ||
-            !signal_succeeded(index) ||
-            query_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            completion_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            ordinary_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            success_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1) {
-            throw std::runtime_error(
-                "cross-queue timestamp batch did not retire exactly once"
-            );
-        }
+    if (local_sync.joinable()) {
+        local_sync.join();
     }
-    if (!both_sync_waits_entered ||
-        !queue_sync_wait_capture.ValidGraphicsComputePair() ||
-        sync_returned_before_release ||
-        observed_sync_returns != 2 ||
-        queue_sync_returns.load(std::memory_order_acquire) != 2 ||
-        sync_before_callback_finished.load(
-            std::memory_order_acquire
-        ) != 0 ||
-        callback_errors.load(std::memory_order_acquire) != 0 ||
-        source_capture.Overflowed() ||
-        source_capture.Count() != 2 ||
-        native_capture.Overflowed() ||
-        native_capture.Count() != 2) {
-        throw std::runtime_error(
-            "queue-local Sync escaped the cross-queue completion group"
-        );
+    if (!first_completed_independently || !peer_pending || !queue_completed_independently ||
+        sync_failed.load(std::memory_order_acquire) || errors.load(std::memory_order_acquire) != 0 ||
+        phases[0].load(std::memory_order_acquire) != 4 || phases[1].load(std::memory_order_acquire) != 4 ||
+        queries[0].Get().status != QueryStatus::Ready || queries[1].Get().status != QueryStatus::Ready) {
+        throw std::runtime_error("a completed submit was coupled to its unfinished batch peer");
     }
-
-    constexpr std::array expected_queues{
-        EQueueType::Graphics,
-        EQueueType::Compute,
-    };
-    const uint64 batch_sequence =
-        source_capture.Event(0).batch_sequence;
-    for (size_t index = 0; index < expected_queues.size(); ++index) {
-        const VulkanSourceSubmissionEvent& source_event =
-            source_capture.Event(index);
-        const VulkanNativeSubmissionEvent& native_event =
-            native_capture.Event(index);
-        if (batch_sequence == 0 ||
-            source_event.batch_sequence != batch_sequence ||
-            source_event.source_index != index ||
-            source_event.queue != expected_queues[index] ||
-            source_event.async_queue_scope != async_queue_scope ||
-            native_event.queue != expected_queues[index] ||
-            native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.WasSubmitted()) {
-            throw std::runtime_error(
-                "cross-queue timestamp batch lost stable submission ownership"
-            );
-        }
-    }
-    if ((native_capture.Event(0).native_queue_handle ==
-         native_capture.Event(1).native_queue_handle) != native_alias) {
-        throw std::runtime_error(
-            "cross-queue timestamp batch disagreed with queue topology"
-        );
-    }
-
-    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    for (size_t index = 0; index < futures.size(); ++index) {
-        if (query_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            completion_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            ordinary_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1 ||
-            success_callbacks[index].load(
-                std::memory_order_acquire
-            ) != 1) {
-            throw std::runtime_error(
-                "a second Sync replayed cross-queue batch callbacks"
-            );
-        }
-    }
-
-    LOG_INFO(
-        "[TESTCASE][PASS] "
-        "name=TimestampQueryCrossQueueBatchPublication "
-        "sources=2 queues=Graphics,Compute native_alias={} "
-        "queries=batch_published_before_notify "
-        "completions=batch_published_before_notify "
-        "cross_future_wait=ready owner=Completion "
-        "queue_local_sync=blocked_until_group_settled "
-        "callbacks=exactly_once replay=0",
-        native_alias
-    );
+    LOG_INFO("[TESTCASE][PASS] name=TimestampQueryIndependentCompletion cross_queue={} "
+             "peer_pending=true local_callback_tiers=verified queue_local_sync=independent",
+             cross_queue);
 }
 
-void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
-    auto& device = RenderDevice::Get();
+void RunTimestampQueryMultiSegmentSourceRetirement() {
+    auto&            device            = RenderDevice::Get();
     constexpr uint64 async_queue_scope = 0x50483137514D4958ull;
 
     std::array<FenceRef, 2> signals{
         device.CreateFence(),
         device.CreateFence(),
     };
-    std::binary_semaphore first_translated{0};
-    std::binary_semaphore second_translated{0};
-    std::atomic<uint32> phase{0};
-    std::atomic<uint32> callback_errors{0};
-    std::atomic<uint32> query_callbacks{0};
+    std::binary_semaphore              first_translated{0};
+    std::binary_semaphore              second_translated{0};
+    std::array<std::atomic<uint32>, 2> phases{};
+    std::atomic<uint32>                callback_errors{0};
+    std::atomic<uint32>                query_callbacks{0};
     std::array<std::atomic<uint32>, 2> ordinary_callbacks{};
     std::array<std::atomic<uint32>, 2> success_callbacks{};
 
     auto signal_succeeded = [&](size_t _index) {
-        auto* fence = static_cast<VulkanFence*>(
+        auto* fence = static_cast<VulkanTimeline*>(
             ResourceCast(signals[_index].Get())
         );
         return fence != nullptr && signals[_index]->GetValue() >= 1 &&
                !fence->IsRejected(1) && !fence->IsFailed();
     };
-    auto advance_phase = [&](uint32 _expected) {
-        if (phase.fetch_add(1, std::memory_order_acq_rel) !=
+    auto advance_phase = [&](size_t _source, uint32 _expected) {
+        if (phases[_source].fetch_add(1, std::memory_order_acq_rel) !=
             _expected) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
@@ -14060,9 +12734,8 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     };
 
     CommandList multi_segment(EQueueType::Graphics);
-    multi_segment.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    multi_segment.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     multi_segment.AddCustomCommand(
         MakeUnique<TranslateProbeCommand>(
             &first_translated, EQueueType::Graphics
@@ -14082,22 +12755,21 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
                 1, std::memory_order_relaxed
             );
         }
-        advance_phase(1);
+        advance_phase(0, 0);
         ordinary_callbacks[0].fetch_add(
             1, std::memory_order_release
         );
     });
     multi_segment.AddSuccessCallback([&] {
-        advance_phase(3);
+        advance_phase(0, 1);
         success_callbacks[0].fetch_add(
             1, std::memory_order_release
         );
     });
 
     CommandList query_source(EQueueType::Graphics);
-    query_source.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    query_source.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken query =
         query_source.BeginTimestampQuery("Phase17AMixedTierQuery");
     QueryFuture future = query.GetFuture();
@@ -14106,13 +12778,12 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
             _result.status != QueryStatus::Ready ||
-            !signal_succeeded(0) ||
             !signal_succeeded(1)) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
             );
         }
-        advance_phase(0);
+        advance_phase(1, 0);
         query_callbacks.fetch_add(
             1, std::memory_order_release
         );
@@ -14127,13 +12798,13 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
                 1, std::memory_order_relaxed
             );
         }
-        advance_phase(2);
+        advance_phase(1, 1);
         ordinary_callbacks[1].fetch_add(
             1, std::memory_order_release
         );
     });
     query_source.AddSuccessCallback([&] {
-        advance_phase(4);
+        advance_phase(1, 2);
         success_callbacks[1].fetch_add(
             1, std::memory_order_release
         );
@@ -14144,7 +12815,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
         ERHITranslateExecutionClass::Parallel
     );
     multi_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     multi_submit.async_queue_scope = async_queue_scope;
     multi_submit.segments = {
@@ -14158,7 +12829,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
         ERHITranslateExecutionClass::Parallel
     );
     query_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     query_submit.async_queue_scope = async_queue_scope;
     query_submit.Signal(signals[1].Get(), 1);
@@ -14168,7 +12839,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(
         EQueueType::Graphics, std::move(multi_submit)
     );
@@ -14183,7 +12854,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     const QueryResult result = future.Get();
     if (result.status != QueryStatus::Ready ||
         result.kind != QueryKind::Timestamp ||
-        phase.load(std::memory_order_acquire) != 5 ||
+        (phases[0].load(std::memory_order_acquire) != 2 || phases[1].load(std::memory_order_acquire) != 3) ||
         callback_errors.load(std::memory_order_acquire) != 0 ||
         query_callbacks.load(std::memory_order_acquire) != 1 ||
         ordinary_callbacks[0].load(
@@ -14240,7 +12911,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
                 EQueueType::Graphics ||
             native_capture.Event(index).thread_role !=
                 ERHIThreadRole::Submission ||
-            !native_capture.Event(index).outcome.WasSubmitted()) {
+            !native_capture.Event(index).outcome.Succeeded()) {
             throw std::runtime_error(
                 "mixed timestamp batch lost materialized source identity"
             );
@@ -14248,7 +12919,7 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
     }
 
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
-    if (phase.load(std::memory_order_acquire) != 5 ||
+    if ((phases[0].load(std::memory_order_acquire) != 2 || phases[1].load(std::memory_order_acquire) != 3) ||
         query_callbacks.load(std::memory_order_acquire) != 1 ||
         ordinary_callbacks[0].load(
             std::memory_order_acquire
@@ -14269,10 +12940,10 @@ void RunTimestampQueryMixedMultiSegmentCallbackTiers() {
 
     LOG_INFO(
         "[TESTCASE][PASS] "
-        "name=TimestampQueryMixedMultiSegmentCallbackTiers "
+        "name=TimestampQueryMultiSegmentSourceRetirement "
         "original_sources=2 executable_sources=3 "
         "source0_segments=2 source1_query=true "
-        "order=Query,AllOrdinary,AllSuccess "
+        "order=per_source "
         "owner=Completion callbacks=exactly_once replay=0"
     );
 }
@@ -14290,9 +12961,8 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     FenceRef graphics_done = device.CreateFence();
 
     CommandList graphics(EQueueType::Graphics);
-    graphics.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    graphics.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken graphics_query =
         graphics.BeginTimestampQuery("Phase17ACopyOnlyPeer");
     graphics_future = graphics_query.GetFuture();
@@ -14302,6 +12972,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     // coverage below. Stripping its native commands exercises the executable
     // source contract that batch admission and rejection paths may construct.
     CommandList copy_payload_builder(EQueueType::Graphics);
+    copy_payload_builder.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     copy_completion =
         copy_payload_builder.TrackGpuCompletion(
             "Phase19ACopyPayloadCompletion"
@@ -14324,26 +12995,21 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         ERHITranslateExecutionClass::Parallel
     );
     copy_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     copy_submit.async_queue_scope = async_queue_scope;
 
     auto graphics_signal_succeeded = [&] {
-        auto* fence = static_cast<VulkanFence*>(
+        auto* fence = static_cast<VulkanTimeline*>(
             ResourceCast(graphics_done.Get())
         );
         return fence != nullptr && graphics_done->GetValue() >= 1 &&
                !fence->IsRejected(1) && !fence->IsFailed();
     };
     graphics_future.Then([&](const QueryResult& _result) {
-        const std::optional<QueryResult> copy_result =
-            copy_future.TryGet();
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
             _result.status != QueryStatus::Ready ||
-            !copy_result.has_value() ||
-            copy_result->status != QueryStatus::Error ||
-            copy_result->error_reason.empty() ||
             !graphics_signal_succeeded()) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
@@ -14354,15 +13020,10 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         );
     });
     copy_future.Then([&](const QueryResult& _result) {
-        const std::optional<QueryResult> graphics_result =
-            graphics_future.TryGet();
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
             _result.status != QueryStatus::Error ||
-            _result.error_reason.empty() ||
-            !graphics_result.has_value() ||
-            graphics_result->status != QueryStatus::Ready ||
-            !graphics_signal_succeeded()) {
+            _result.error_reason.empty()) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
             );
@@ -14372,16 +13033,12 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         );
     });
     copy_completion.Then([&](const GpuCompletionResult& _result) {
-        const auto graphics_result = graphics_future.TryGet();
         const auto copy_result = copy_future.TryGet();
         if (GetCurrentRHIThreadRole() !=
                 ERHIThreadRole::Completion ||
             _result.status != GpuCompletionStatus::Ready ||
-            !graphics_result.has_value() ||
-            graphics_result->status != QueryStatus::Ready ||
             !copy_result.has_value() ||
-            copy_result->status != QueryStatus::Error ||
-            !graphics_signal_succeeded()) {
+            copy_result->status != QueryStatus::Error) {
             callback_errors.fetch_add(
                 1, std::memory_order_relaxed
             );
@@ -14396,7 +13053,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         ERHITranslateExecutionClass::Parallel
     );
     graphics_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     graphics_submit.async_queue_scope = async_queue_scope;
     graphics_submit.Signal(graphics_done.Get(), 1);
@@ -14405,6 +13062,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     // reach Completion. This specifically guards the Copy translator's
     // has_queue_work classification.
     CommandList completion_only_copy(EQueueType::Copy);
+    completion_only_copy.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture completion_only_future =
         completion_only_copy.TrackGpuCompletion(
             "Phase19ACompletionOnlyCopy"
@@ -14445,7 +13103,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(
         EQueueType::Graphics, std::move(graphics_submit)
     );
@@ -14477,7 +13135,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         native_capture.Overflowed() ||
         native_capture.Count() != 2) {
         throw std::runtime_error(
-            "query-only Copy payload did not arrive at Completion group"
+            "query-only Copy payload did not reach its Completion owner"
         );
     }
 
@@ -14499,7 +13157,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
             source_event.async_queue_scope != async_queue_scope ||
             native_event.queue != expected_queues[index] ||
             native_event.thread_role != ERHIThreadRole::Submission ||
-            !native_event.outcome.WasSubmitted()) {
+            !native_event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "query-only Copy payload lost stable source ownership"
             );
@@ -14522,7 +13180,7 @@ void RunTimestampQueryCopyOnlyPayloadArrival() {
         "sources=2 queues=Graphics,Copy "
         "copy_payload=query_only copy_query=Error "
         "copy_completion=Ready completion_only_copy=Ready "
-        "group_arrival=verified owner=Completion "
+        "independent_retirement=verified owner=Completion "
         "callbacks=exactly_once native_submit=2 replay=0"
     );
 }
@@ -14542,7 +13200,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
     const EVulkanTimestampQueryResetMode native_reset_mode =
         vk_device->GetTimestampQueryResetMode(EQueueType::Copy);
     const bool native_supported =
-        vk_device->SupportsTimestampQueries(EQueueType::Copy);
+        native_reset_mode != EVulkanTimestampQueryResetMode::Unsupported;
     const char* native_reset_mode_name =
         native_reset_mode ==
                 EVulkanTimestampQueryResetMode::CommandBuffer ?
@@ -14581,7 +13239,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
         FenceRef            done = device.CreateFence();
 
         auto signal_succeeded = [&] {
-            auto* fence = static_cast<VulkanFence*>(
+            auto* fence = static_cast<VulkanTimeline*>(
                 ResourceCast(done.Get())
             );
             return fence != nullptr && done->GetValue() >= 1 &&
@@ -14589,33 +13247,35 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
         };
         auto query_matches_expectation =
             [&](const QueryResult& _result) {
-            const auto* timestamp =
-                std::get_if<TimestampQueryResult>(&_result.payload);
-            if (_expect_ready) {
-                return _result.status == QueryStatus::Ready &&
+                const auto* timestamp =
+                    std::get_if<TimestampQueryResult>(&_result.payload);
+                if (_expect_ready) {
+                    return _result.status == QueryStatus::Ready &&
+                           _result.kind == QueryKind::Timestamp &&
+                           _result.error_reason.empty() &&
+                           timestamp != nullptr &&
+                           timestamp->valid_bits ==
+                               std::min(native_valid_bits, uint32{64}) &&
+                           timestamp->valid_bits != 0 &&
+                           timestamp->tick_period_ns > 0.0 &&
+                           timestamp->duration_ns >= 0.0;
+                }
+                return _result.status == QueryStatus::Error &&
                        _result.kind == QueryKind::Timestamp &&
-                       _result.error_reason.empty() &&
-                       timestamp != nullptr &&
-                       timestamp->valid_bits ==
-                           std::min(native_valid_bits, uint32{64}) &&
-                       timestamp->valid_bits != 0 &&
-                       timestamp->tick_period_ns > 0.0 &&
-                       timestamp->duration_ns >= 0.0;
-            }
-            return _result.status == QueryStatus::Error &&
-                   _result.kind == QueryKind::Timestamp &&
-                   !_result.error_reason.empty() &&
-                   timestamp == nullptr;
-        };
+                       !_result.error_reason.empty() &&
+                       timestamp == nullptr;
+            };
 
         CommandList commands(EQueueType::Copy);
+
+        commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
         GpuCompletionFuture completion =
             commands.TrackGpuCompletion(
                 _expect_ready ?
                     "Phase21BCopyTimestampCompletion" :
                     "Phase21BCopyTimestampUnsupportedCompletion"
             );
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             OwnedBytes(values),
             source->GetView(),
             "CopyTimestampUpload"
@@ -14631,14 +13291,14 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
                 "Phase21BCopyTimestampUnsupported"
         );
         QueryFuture future = query.GetFuture();
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             source->GetView(),
             destination->GetView(),
             "CopyTimestampMeasuredCopy"
         );
         commands.EndTimestampQuery(query);
         commands.PopScope();
-        commands.CopyFrom(
+        CopyTestTransfer(commands,
             destination->GetView(),
             WritableBytes(readback),
             "CopyTimestampReadback"
@@ -14811,7 +13471,7 @@ void RunCopyTimestampQueryCapabilityAndIsolation() {
             native_capture.Event(index);
         if (event.queue != EQueueType::Copy ||
             event.thread_role != ERHIThreadRole::Submission ||
-            !event.outcome.WasSubmitted()) {
+            !event.outcome.Succeeded()) {
             throw std::runtime_error(
                 "Copy timestamp work did not retain native Submission ownership"
             );
@@ -14872,13 +13532,13 @@ void RunTimestampQueryPreparationRejection() {
     FenceRef rejected_done = device.CreateFence();
     FenceRef sibling_done  = device.CreateFence();
     FenceRef recovered_done = device.CreateFence();
-    auto* rejected_fence = static_cast<VulkanFence*>(
+    auto* rejected_fence = static_cast<VulkanTimeline*>(
         ResourceCast(rejected_done.Get())
     );
-    auto* sibling_fence = static_cast<VulkanFence*>(
+    auto* sibling_fence = static_cast<VulkanTimeline*>(
         ResourceCast(sibling_done.Get())
     );
-    auto* recovered_fence = static_cast<VulkanFence*>(
+    auto* recovered_fence = static_cast<VulkanTimeline*>(
         ResourceCast(recovered_done.Get())
     );
     if (rejected_fence == nullptr || sibling_fence == nullptr ||
@@ -14896,9 +13556,8 @@ void RunTimestampQueryPreparationRejection() {
     QueryFuture                        sibling_future{};
 
     CommandList rejected(EQueueType::Graphics);
-    rejected.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    rejected.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken rejected_query =
         rejected.BeginTimestampQuery("Phase17AQueryPrepareRejected");
     rejected_future = rejected_query.GetFuture();
@@ -14923,15 +13582,14 @@ void RunTimestampQueryPreparationRejection() {
         ERHITranslateExecutionClass::Parallel
     );
     rejected_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     rejected_submit.async_queue_scope = async_queue_scope;
     rejected_submit.Signal(rejected_done.Get(), 1);
 
     CommandList sibling(EQueueType::Graphics);
-    sibling.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    sibling.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken sibling_query =
         sibling.BeginTimestampQuery("Phase17AQueryPrepareSibling");
     sibling_future = sibling_query.GetFuture();
@@ -14956,7 +13614,7 @@ void RunTimestampQueryPreparationRejection() {
         ERHITranslateExecutionClass::Parallel
     );
     sibling_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     sibling_submit.async_queue_scope = async_queue_scope;
     sibling_submit.Signal(sibling_done.Get(), 1);
@@ -14989,7 +13647,7 @@ void RunTimestampQueryPreparationRejection() {
         ScopedScriptedQueryPreparationOverride scripted_override(
             scripted_capture
         );
-        Array<RHIBackendSubmissionBatchEntry> rejected_batch{};
+        Array<RHISubmissionRequest> rejected_batch{};
         rejected_batch.emplace_back(
             EQueueType::Graphics, std::move(rejected_submit)
         );
@@ -15037,9 +13695,7 @@ void RunTimestampQueryPreparationRejection() {
     std::atomic<uint32> recovered_callbacks{0};
     std::atomic<uint32> recovered_success_callbacks{0};
     CommandList recovered(EQueueType::Graphics);
-    recovered.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+    recovered.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     recovered.AddCallback([&] {
         if (GetCurrentRHIThreadRole() != ERHIThreadRole::Completion) {
             callback_errors.fetch_add(1, std::memory_order_relaxed);
@@ -15056,11 +13712,11 @@ void RunTimestampQueryPreparationRejection() {
         ERHITranslateExecutionClass::Parallel
     );
     recovered_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     recovered_submit.async_queue_scope = async_queue_scope;
     recovered_submit.Signal(recovered_done.Get(), 1);
-    Array<RHIBackendSubmissionBatchEntry> recovered_batch{};
+    Array<RHISubmissionRequest> recovered_batch{};
     recovered_batch.emplace_back(
         EQueueType::Graphics, std::move(recovered_submit)
     );
@@ -15077,7 +13733,7 @@ void RunTimestampQueryPreparationRejection() {
         callback_errors.load(std::memory_order_acquire) != 0 ||
         native_capture.Overflowed() ||
         native_capture.Count() != 1 ||
-        !native_capture.Event(0).outcome.WasSubmitted() ||
+        !native_capture.Event(0).outcome.Succeeded() ||
         native_capture.Event(0).thread_role !=
             ERHIThreadRole::Submission) {
         throw std::runtime_error(
@@ -15122,6 +13778,8 @@ void RunTimestampQueryPreflightRejection() {
     QueryFuture                         sibling_future{};
 
     CommandList commands(EQueueType::Graphics);
+
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     // This callback intentionally precedes the Query fallback in recording
     // order. Preflight rejection must terminalize every Future before any
     // ordinary callback, so observing the result here can never self-block.
@@ -15158,7 +13816,7 @@ void RunTimestampQueryPreflightRejection() {
     });
 
     CmdSubmit submit = commands.Submit();
-    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Explicit);
+    submit.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     submit.SetTranslateExecutionClass(ERHITranslateExecutionClass::Parallel);
     submit.async_queue_scope = async_queue_scope;
     submit.segments = {
@@ -15170,6 +13828,7 @@ void RunTimestampQueryPreflightRejection() {
     // source zero rejects the whole native-runtime batch, so both query states
     // must be published before either source is allowed to notify callbacks.
     CommandList sibling_commands(EQueueType::Graphics);
+    sibling_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken sibling_query = sibling_commands.BeginTimestampQuery(
         "Phase17ARejectedBatchSiblingTimestamp"
     );
@@ -15199,7 +13858,7 @@ void RunTimestampQueryPreflightRejection() {
         success_callbacks[1].fetch_add(1, std::memory_order_relaxed);
     });
 
-    Array<RHIBackendSubmissionBatchEntry> rejected_batch{};
+    Array<RHISubmissionRequest> rejected_batch{};
     rejected_batch.emplace_back(EQueueType::Graphics, std::move(submit));
     rejected_batch.emplace_back(
         EQueueType::Graphics,
@@ -15262,11 +13921,11 @@ void RunTimestampQueryMidBatchTranslateFailure() {
     auto&            device            = RenderDevice::Get();
     constexpr uint64 async_queue_scope = 0x50483137514D4944ull;
 
-    FenceRef prefix_done = device.CreateFence();
-    FenceRef suffix_done = device.CreateFence();
-    std::binary_semaphore suffix_translate_entered{0};
-    std::binary_semaphore release_suffix_translate{0};
-    std::binary_semaphore prefix_query_callback_entered{0};
+    FenceRef                prefix_done = device.CreateFence();
+    FenceRef                suffix_done = device.CreateFence();
+    std::binary_semaphore   suffix_translate_entered{0};
+    std::binary_semaphore   release_suffix_translate{0};
+    std::binary_semaphore   prefix_retired{0};
     OneShotSemaphoreRelease release_suffix_guard(
         release_suffix_translate
     );
@@ -15281,9 +13940,8 @@ void RunTimestampQueryMidBatchTranslateFailure() {
     std::atomic<uint32>   callback_errors{0};
 
     CommandList prefix(EQueueType::Graphics);
-    prefix.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    prefix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture prefix_completion =
         prefix.TrackGpuCompletion(
             "Phase19AMidBatchPrefixCompletion"
@@ -15300,21 +13958,21 @@ void RunTimestampQueryMidBatchTranslateFailure() {
     });
     prefix.AddSuccessCallback([&] {
         prefix_success_callbacks.fetch_add(1, std::memory_order_release);
+        prefix_retired.release();
     });
     CmdSubmit prefix_submit = prefix.Submit();
     prefix_submit.SetTranslateExecutionClass(
         ERHITranslateExecutionClass::Parallel
     );
     prefix_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     prefix_submit.async_queue_scope = async_queue_scope;
     prefix_submit.Signal(prefix_done.Get(), 1);
 
     CommandList suffix(EQueueType::Graphics);
-    suffix.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    suffix.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     GpuCompletionFuture suffix_completion =
         suffix.TrackGpuCompletion(
             "Phase19AMidBatchSuffixCompletion"
@@ -15349,26 +14007,20 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         ERHITranslateExecutionClass::Parallel
     );
     suffix_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     suffix_submit.async_queue_scope = async_queue_scope;
     suffix_submit.Signal(suffix_done.Get(), 1);
 
-    // A successful-batch notification barrier deliberately prevents an
-    // earlier callback from driving a later source's Translate. The test
-    // thread releases the blocked suffix only after proving that no callback
-    // escaped before every executable source reached a terminal packet.
+    // The accepted prefix retires independently while suffix translation is
+    // still blocked. The later failure must not delay or revoke its callbacks.
     prefix_completion.Then(
         [&](const GpuCompletionResult& _result) {
-            const auto suffix_result =
-                suffix_completion.TryGet();
             if (_result.status !=
                     GpuCompletionStatus::Ready ||
                 GetCurrentRHIThreadRole() !=
                     ERHIThreadRole::Completion ||
-                !suffix_result.has_value() ||
-                suffix_result->status !=
-                    GpuCompletionStatus::Error) {
+                prefix_future.Status() != QueryStatus::Ready) {
                 callback_errors.fetch_add(
                     1, std::memory_order_relaxed
                 );
@@ -15394,25 +14046,16 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         }
     );
     prefix_future.Then([&](const QueryResult& _result) {
-        prefix_query_callback_entered.release();
-        const bool suffix_terminal = suffix_future.WaitFor(500ms);
-        const std::optional<QueryResult> suffix_result =
-            suffix_future.TryGet();
         auto* prefix_fence =
-            static_cast<VulkanFence*>(ResourceCast(prefix_done.Get()));
+            static_cast<VulkanTimeline*>(ResourceCast(prefix_done.Get()));
         if (_result.status != QueryStatus::Ready ||
             GetCurrentRHIThreadRole() != ERHIThreadRole::Completion ||
             prefix_fence == nullptr ||
             prefix_done->GetValue() < 1 ||
             prefix_fence->IsRejected(1) ||
             prefix_fence->IsFailed() ||
-            !suffix_terminal ||
-            !suffix_result.has_value() ||
-            suffix_result->status != QueryStatus::Error ||
+            suffix_future.Status() != QueryStatus::Pending ||
             prefix_completion_callbacks.load(
-                std::memory_order_acquire
-            ) != 1 ||
-            suffix_completion_callbacks.load(
                 std::memory_order_acquire
             ) != 1) {
             callback_errors.fetch_add(1, std::memory_order_relaxed);
@@ -15436,7 +14079,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
 
     NativeSubmissionCapture        native_capture{};
     ScopedNativeSubmissionObserver native_observer(native_capture);
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest>    batch{};
     batch.emplace_back(EQueueType::Graphics, std::move(prefix_submit));
     batch.emplace_back(EQueueType::Graphics, std::move(suffix_submit));
     RHIExecutor::Get().Submit(
@@ -15469,24 +14112,16 @@ void RunTimestampQueryMidBatchTranslateFailure() {
             "mid-batch prefix completion did not preserve the terminal frontier"
         );
     }
-    const bool prefix_callback_entered_before_terminal =
-        prefix_query_callback_entered.try_acquire_for(100ms);
-    if (prefix_callback_entered_before_terminal) {
-        callback_errors.fetch_add(1, std::memory_order_relaxed);
-    }
-    if (prefix_query_callbacks.load(std::memory_order_acquire) != 0 ||
+    const bool prefix_retired_before_suffix = prefix_retired.try_acquire_for(5s);
+    if (!prefix_retired_before_suffix ||
+        prefix_query_callbacks.load(std::memory_order_acquire) != 1 ||
+        prefix_completion_callbacks.load(std::memory_order_acquire) != 1 ||
+        prefix_ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
+        prefix_success_callbacks.load(std::memory_order_acquire) != 1 ||
         suffix_query_callbacks.load(std::memory_order_acquire) != 0 ||
-        prefix_completion_callbacks.load(
-            std::memory_order_acquire
-        ) != 0 ||
-        suffix_completion_callbacks.load(
-            std::memory_order_acquire
-        ) != 0 ||
-        prefix_ordinary_callbacks.load(std::memory_order_acquire) != 0 ||
+        suffix_completion_callbacks.load(std::memory_order_acquire) != 0 ||
         suffix_ordinary_callbacks.load(std::memory_order_acquire) != 0) {
-        throw std::runtime_error(
-            "mid-batch timestamp callback escaped before suffix terminalization"
-        );
+        callback_errors.fetch_add(1, std::memory_order_relaxed);
     }
     release_suffix_guard.Release();
     RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
@@ -15498,7 +14133,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
     const GpuCompletionResult suffix_completion_result =
         suffix_completion.Get();
     auto* suffix_fence =
-        static_cast<VulkanFence*>(ResourceCast(suffix_done.Get()));
+        static_cast<VulkanTimeline*>(ResourceCast(suffix_done.Get()));
     if (prefix_result.status != QueryStatus::Ready ||
         suffix_result.status != QueryStatus::Error ||
         prefix_completion_result.status !=
@@ -15519,15 +14154,14 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         suffix_ordinary_callbacks.load(std::memory_order_acquire) != 1 ||
         prefix_success_callbacks.load(std::memory_order_acquire) != 1 ||
         suffix_success_callbacks.load(std::memory_order_acquire) != 0 ||
-        (!prefix_callback_entered_before_terminal &&
-         !prefix_query_callback_entered.try_acquire()) ||
+        !prefix_retired_before_suffix ||
         callback_errors.load(std::memory_order_acquire) != 0 ||
         suffix_fence == nullptr ||
         (!suffix_fence->IsRejected(1) && !suffix_fence->IsFailed()) ||
         native_capture.Overflowed() ||
         native_capture.Count() != 1) {
         throw std::runtime_error(
-            "mid-batch timestamp Query rejection was not published before same-queue Completion notification"
+            "mid-batch timestamp submissions did not retire independently"
         );
     }
 
@@ -15535,7 +14169,7 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         native_capture.Event(0);
     if (native_event.queue != EQueueType::Graphics ||
         native_event.thread_role != ERHIThreadRole::Submission ||
-        !native_event.outcome.WasSubmitted()) {
+        !native_event.outcome.Succeeded()) {
         throw std::runtime_error(
             "mid-batch timestamp Query test did not submit exactly its prefix source"
         );
@@ -15563,9 +14197,8 @@ void RunTimestampQueryMidBatchTranslateFailure() {
         "queues=Graphics,Graphics native_prefix_submit=1 "
         "suffix_translate=main-thread-released suffix_status=Error "
         "prefix_completion=Ready suffix_completion=Error "
-        "pre_terminal_callback_entry=0 "
-        "batch_terminal_before_notify=true "
-        "bounded_cross_future_wait=true "
+        "prefix_retired_before_suffix=true "
+        "independent_notification=true "
         "owner=Completion callbacks=exactly_once replay=0"
     );
 }
@@ -15593,7 +14226,7 @@ void RunTimestampQuerySerialRecordFailure() {
 
     auto fence_failed =
         [](const FenceRef& _fence) {
-            auto* fence = static_cast<VulkanFence*>(
+            auto* fence = static_cast<VulkanTimeline*>(
                 ResourceCast(_fence.Get())
             );
             return fence != nullptr && fence->IsFailed() &&
@@ -15614,9 +14247,8 @@ void RunTimestampQuerySerialRecordFailure() {
         };
 
     CommandList failing(EQueueType::Graphics);
-    failing.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    failing.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken failing_query =
         failing.BeginTimestampQuery(
             "Phase17ASerialRecordFailingTimestamp"
@@ -15675,15 +14307,14 @@ void RunTimestampQuerySerialRecordFailure() {
         ERHITranslateExecutionClass::Parallel
     );
     failing_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     failing_submit.async_queue_scope = async_queue_scope;
     failing_submit.Signal(failing_done.Get(), 1);
 
     CommandList sibling(EQueueType::Graphics);
-    sibling.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
-    );
+
+    sibling.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     QueryToken sibling_query =
         sibling.BeginTimestampQuery(
             "Phase17ASerialRecordFailureSiblingTimestamp"
@@ -15735,12 +14366,12 @@ void RunTimestampQuerySerialRecordFailure() {
         ERHITranslateExecutionClass::Parallel
     );
     sibling_submit.SetResourceStateOwnership(
-        ERHIResourceStateOwnership::Explicit
+        ERHIResourceStateOwnership::Compiled
     );
     sibling_submit.async_queue_scope = async_queue_scope;
     sibling_submit.Signal(sibling_done.Get(), 1);
 
-    Array<RHIBackendSubmissionBatchEntry> batch{};
+    Array<RHISubmissionRequest> batch{};
     batch.emplace_back(
         EQueueType::Graphics, std::move(failing_submit)
     );
@@ -15908,6 +14539,18 @@ void RunMultiviewCubeAttachmentDraw(ShaderManager& shader_manager) {
     }
 
     CommandList draw_commands(EQueueType::Graphics);
+
+    draw_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    const auto undefined = BarrierState::Texture(ERHIPipelineStageFlags::PS_NONE,
+        ERHIAccessFlags::UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_UNDEFINED);
+    const auto color = BarrierState::Texture(ERHIPipelineStageFlags::PS_COLOR_ATTACHMENT_OUTPUT,
+        ERHIAccessFlags::COLOR_ATTACHMENT_WRITE, ETextureLayout::TEXTURE_LAYOUT_COLOR_ATTACHMENT);
+    const auto depth = BarrierState::Texture(
+        ERHIPipelineStageFlags::PS_EARLY_FRAGMENT_TESTS | ERHIPipelineStageFlags::PS_LATE_FRAGMENT_TESTS,
+        ERHIAccessFlags::DEPTH_STENCIL_WRITE, ETextureLayout::TEXTURE_LAYOUT_DEPTH_STENCIL_WRITE);
+    draw_commands.Barriers({
+        BarrierCreateInfo::Transition(cube->GetView().Slice(0, view_count), undefined, color, ETextureAspectFlags::COLOR),
+        BarrierCreateInfo::Transition(depth_array->GetView().Slice(0, view_count), undefined, depth, ETextureAspectFlags::DEPTH_SLICE)});
     auto        draw = draw_commands.Gfx(pipeline);
     draw.SetViewMask(view_mask);
     draw.Draw(
@@ -15924,10 +14567,13 @@ void RunMultiviewCubeAttachmentDraw(ShaderManager& shader_manager) {
             .array_count = view_count,
         }
     );
+    draw_commands.Barriers({BarrierCreateInfo::Transition(cube->GetView().Slice(0, view_count), color,
+        BarrierState::Texture(ERHIPipelineStageFlags::PS_TRANSFER, ERHIAccessFlags::TRANSFER_READ,
+                              ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC), ETextureAspectFlags::COLOR)});
     Array<ReadbackFuture> readbacks;
     readbacks.reserve(view_count);
     for (uint32 layer = 0; layer < view_count; ++layer) {
-        readbacks.emplace_back(draw_commands.Readback(
+        readbacks.emplace_back(ReadbackTestTransfer(draw_commands,
             cube->GetView(0, 1).Slice(layer, 1),
             std::format("MultiviewCubeLayer{}", layer)
         ));
@@ -15974,6 +14620,78 @@ void RunMultiviewCubeAttachmentDraw(ShaderManager& shader_manager) {
         view_count,
         view_mask
     );
+}
+
+void RunDepthTextureCopy() {
+    auto& device = RenderDevice::Get();
+    constexpr uint32 width = 4;
+    constexpr uint32 height = 4;
+    const auto texture_usage = ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT |
+                               ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST;
+    TextureRef source = device.CreateTexture(
+        "depth_copy_source", Extent3D(width, height, 1), PF_D32_SFLOAT, texture_usage
+    );
+    TextureRef destination = device.CreateTexture(
+        "depth_copy_destination", Extent3D(width, height, 1), PF_D32_SFLOAT, texture_usage
+    );
+    BufferRef buffer = device.CreateBuffer<uint32>(
+        "depth_copy_readback", width * height,
+        EBufferUsageFlags::TRANSFER_SRC | EBufferUsageFlags::TRANSFER_DST
+    );
+    std::array<uint32, width * height> expected{};
+    for (size_t index = 0; index < expected.size(); ++index) {
+        // Distinct finite D32 values in [0, 1], compared bit-for-bit after copying.
+        expected[index] = 0x3f000000u + static_cast<uint32>(index) * 0x10000u;
+    }
+    CommandList commands(EQueueType::Graphics);
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(commands, source->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    TransitionTestTexture(commands, destination->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(commands, OwnedBytes(expected), source->GetView(), "DepthUpload");
+    TransitionTestTexture(commands, source->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    CopyTestTransfer(commands, source->GetView(), destination->GetView(), "DepthImageCopy");
+    TransitionTestTexture(commands, destination->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    CopyTestTransfer(commands, destination->GetView(), buffer->GetView(), "DepthToBuffer");
+    ReadbackFuture future = ReadbackTestTransfer(commands, buffer->GetView(), "DepthCopyReadback");
+    RHIExecutor::Get().Submit(
+        EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU
+    );
+    const auto values = future.Get().CopyAs<uint32>();
+    if (!values || values->size() != expected.size() ||
+        !std::equal(values->begin(), values->end(), expected.begin())) {
+        throw std::runtime_error("D32 buffer/image copy round trip did not preserve depth values");
+    }
+    LOG_INFO("[TESTCASE][PASS] name=DepthTextureCopy path=buffer-image-image-buffer format=D32");
+}
+
+void RunUndersizedTextureUploadRejection() {
+    TextureRef texture = RenderDevice::Get().CreateTexture(
+        "undersized_upload",
+        Extent3D(4, 4, 1),
+        PF_R8G8B8A8_UNORM,
+        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
+    );
+    // One byte short of the image, despite ample physical staging capacity.
+    // Native buffer bounds alone cannot detect the undersized upload slice.
+    Array<Moer::byte> data(4 * 4 * sizeof(uint32) - 1);
+    CommandList commands(EQueueType::Copy);
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(commands, texture->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(commands, std::move(data), texture->GetView(), "UndersizedTextureUpload");
+    TransitionTestTexture(commands, texture->GetView(),
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    ReadbackFuture future = ReadbackTestTransfer(commands, texture->GetView(), "RejectedTextureUploadReadback");
+    RHIExecutor::Get().Submit(EQueueType::Copy, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    if (future.Get().status != ReadbackStatus::Error) {
+        throw std::runtime_error("undersized texture upload was accepted");
+    }
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+    LOG_INFO("[TESTCASE][PASS] name=UndersizedTextureUploadRejection readback=error");
 }
 
 void RunOwningReadbackFuture() {
@@ -16053,26 +14771,27 @@ void RunOwningReadbackFuture() {
         texture->GetView(0, 1).Slice(0, 1);
     invalid_mip_view.mip_level = 255;
     CommandList unsupported_commands(EQueueType::Copy);
+    unsupported_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     const ReadbackFuture compressed_readback =
-        unsupported_commands.Readback(
+        ReadbackTestTransfer(unsupported_commands,
             compressed_texture->GetView(0, 1).Slice(0, 1),
             "OwningReadbackRejectCompressed"
         );
     const ReadbackFuture msaa_readback =
-        unsupported_commands.Readback(
+        ReadbackTestTransfer(unsupported_commands,
             msaa_texture->GetView(0, 1).Slice(0, 1),
             "OwningReadbackRejectMsaa"
         );
     const ReadbackFuture offset_readback =
-        unsupported_commands.Readback(
+        ReadbackTestTransfer(unsupported_commands,
             offset_view, "OwningReadbackRejectOffset"
         );
     const ReadbackFuture partial_readback =
-        unsupported_commands.Readback(
+        ReadbackTestTransfer(unsupported_commands,
             partial_view, "OwningReadbackRejectPartial"
         );
     const ReadbackFuture invalid_mip_readback =
-        unsupported_commands.Readback(
+        ReadbackTestTransfer(unsupported_commands,
             invalid_mip_view, "OwningReadbackRejectInvalidMip"
         );
     CmdSubmit unsupported_submit = unsupported_commands.Submit();
@@ -16136,12 +14855,17 @@ void RunOwningReadbackFuture() {
     // A later texture readback must not be able to repair a missing transition
     // for the copied layer and accidentally make this regression pass.
     CommandList layer_copy_commands(EQueueType::Copy);
-    layer_copy_commands.CopyFrom(
+    layer_copy_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(layer_copy_commands, layer_copy_view,
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(layer_copy_commands,
         OwnedBytes(texture_values),
         layer_copy_view,
         "OwningReadbackTextureLayerUpload"
     );
-    layer_copy_commands.CopyFrom(
+    TransitionTestTexture(layer_copy_commands, layer_copy_view,
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    CopyTestTransfer(layer_copy_commands,
         layer_copy_view,
         texture_copy_buffer->GetView(),
         "OwningReadbackTextureLayerCopy"
@@ -16153,8 +14877,10 @@ void RunOwningReadbackFuture() {
     );
 
     CommandList layer_copy_readback_commands(EQueueType::Copy);
+
+    layer_copy_readback_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     ReadbackFuture texture_copy_future =
-        layer_copy_readback_commands.Readback(
+        ReadbackTestTransfer(layer_copy_readback_commands,
             texture_copy_buffer->GetView(),
             "OwningReadbackTextureLayerCopyBuffer"
         );
@@ -16185,17 +14911,20 @@ void RunOwningReadbackFuture() {
         );
     }
 
-    // The first partial restore publishes a whole-image preferred-state
-    // promise. Exercise an untouched sibling in the next submission so that
-    // the promise is valid only if the first restore initialized its
-    // complementary subresources as well.
+    // An untouched sibling remains Undefined. Initialize only that subresource
+    // in the next submission; no whole-image restore or implicit seed exists.
     CommandList sibling_commands(EQueueType::Copy);
-    sibling_commands.CopyFrom(
+    sibling_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    TransitionTestTexture(sibling_commands, sibling_view,
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(sibling_commands,
         OwnedBytes(sibling_values),
         sibling_view,
         "OwningReadbackSiblingUpload"
     );
-    sibling_commands.CopyFrom(
+    TransitionTestTexture(sibling_commands, sibling_view,
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    CopyTestTransfer(sibling_commands,
         sibling_view,
         sibling_copy_buffer->GetView(),
         "OwningReadbackSiblingCopy"
@@ -16207,8 +14936,10 @@ void RunOwningReadbackFuture() {
     );
 
     CommandList sibling_readback_commands(EQueueType::Copy);
+
+    sibling_readback_commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
     ReadbackFuture sibling_future =
-        sibling_readback_commands.Readback(
+        ReadbackTestTransfer(sibling_readback_commands,
             sibling_copy_buffer->GetView(),
             "OwningReadbackSiblingCopyBuffer"
         );
@@ -16239,20 +14970,26 @@ void RunOwningReadbackFuture() {
     }
 
     CommandList commands(EQueueType::Copy);
-    commands.CopyFrom(
+
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    CopyTestTransfer(commands,
         OwnedBytes(buffer_values),
         buffer->GetView(),
         "OwningReadbackBufferUpload"
     );
-    commands.CopyFrom(
+    TransitionTestTexture(commands, texture_upload_view,
+                          ETextureLayout::TEXTURE_LAYOUT_UNDEFINED, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST);
+    CopyTestTransfer(commands,
         OwnedBytes(texture_values),
         texture_upload_view,
         "OwningReadbackTextureUpload"
     );
-    ReadbackFuture buffer_future = commands.Readback(
+    ReadbackFuture buffer_future = ReadbackTestTransfer(commands,
         buffer_view, "OwningReadbackBuffer"
     );
-    ReadbackFuture texture_future = commands.Readback(
+    TransitionTestTexture(commands, texture_view,
+                          ETextureLayout::TEXTURE_LAYOUT_TRANSFER_DST, ETextureLayout::TEXTURE_LAYOUT_TRANSFER_SRC);
+    ReadbackFuture texture_future = ReadbackTestTransfer(commands,
         texture_view, "OwningReadbackTexture"
     );
     if (!buffer_future.Valid() || !texture_future.Valid() ||
@@ -16350,7 +15087,7 @@ void RunOwningReadbackFuture() {
         "queue=Copy buffer=subrange texture=mip1,layer1 "
         "layer_copy=isolated_nonzero_layer "
         "sibling=next_submit_mip0_layer0 "
-        "state_restore=whole_image bytes={},{},{},{} "
+        "state_owner=caller exact_ranges=true bytes={},{},{},{} "
         "callbacks=exactly_once siblings=terminal "
         "native_staging=completion-owned host_snapshot=future-owned "
         "unsupported=compressed,msaa,partial",
@@ -16370,11 +15107,6 @@ int main(int argc, const char** argv) {
     try {
         ValidateArguments(argc, argv);
         const bool parallel = HasArgument(argc, argv, "--parallel");
-        const bool inject_worker_failure =
-            HasArgument(argc, argv, "--inject-worker-failure");
-        const bool production_heavy = HasArgument(argc, argv, "--production-heavy");
-        const bool production_gate =
-            HasArgument(argc, argv, "--production-gate") || production_heavy;
         const bool inject_translate_failure =
             HasArgument(argc, argv, "--inject-translate-failure");
         const bool inject_multi_segment_translate_failure =
@@ -16389,17 +15121,11 @@ int main(int argc, const char** argv) {
             HasArgument(argc, argv, "--present-boundary");
         const bool present_hard =
             HasArgument(argc, argv, "--present-hard");
-        const bool present_legacy_owner =
-            HasArgument(argc, argv, "--present-legacy-owner");
-        const bool present_completion_shutdown =
-            HasArgument(
-                argc, argv, "--present-completion-shutdown"
-            );
-        const uint32 focused_present_mode_count =
-            static_cast<uint32>(present_boundary) +
-            static_cast<uint32>(present_hard) +
-            static_cast<uint32>(present_legacy_owner) +
-            static_cast<uint32>(present_completion_shutdown);
+        const bool direct_queue_rejection =
+            HasArgument(argc, argv, "--direct-queue-rejection");
+        const uint32 focused_present_mode_count = static_cast<uint32>(present_boundary) +
+                                                  static_cast<uint32>(present_hard) +
+                                                  static_cast<uint32>(direct_queue_rejection);
         if (focused_present_mode_count > 1) {
             throw std::invalid_argument(
                 "focused Present modes are mutually exclusive"
@@ -16437,38 +15163,51 @@ int main(int argc, const char** argv) {
         TaskSystem::Init();
         task_system_initialized = true;
 
+        VulkanFaultInjection::Configure(0);
         RenderDevice::Init(DeviceInitInfo{
-            .rhi_type         = ERHIType::Vulkan,
-            .name             = "RHIParallelRecordVulkanTest",
-            .rhi_api_version  = "1.3",
-            .rhi_thread       =
-                !present_legacy_owner &&
-                !present_completion_shutdown,
-            .rhi_bypass       = false,
-            .parallel_recording =
-                parallel || pipeline_window_mode || present_mode ||
-                readback_future_mode ||
-                occlusion_query_mode ||
-                timestamp_query_mode ||
-                timestamp_query_success_batch_mode ||
-                timestamp_query_mid_failure_mode ||
-                timestamp_query_record_failure_mode ||
-                gpu_scope_stream_mode,
-            .parallel_record_workers = 4,
-            .parallel_record_verify =
-                parallel || pipeline_window_mode || present_mode ||
-                readback_future_mode ||
-                occlusion_query_mode ||
-                timestamp_query_mode ||
-                timestamp_query_success_batch_mode ||
-                timestamp_query_mid_failure_mode ||
-                timestamp_query_record_failure_mode ||
-                gpu_scope_stream_mode,
-            .parallel_record_min_work_units_per_job = production_gate ? 64u : 1u,
+            .rhi_type                = ERHIType::Vulkan,
+            .name                    = "RHIParallelRecordVulkanTest",
+            .rhi_api_version         = "1.3",
             .submission_batch_window = submission_batch_window,
-            .parallel_record_worker_throw_trigger = inject_worker_failure ? 1u : 0u,
         });
         render_device_initialized = true;
+
+        if (HasArgument(argc, argv, "--postprocess-regression")) {
+            ShaderManager& manager = ShaderManager::Get();
+            shader_manager_initialized = true;
+            RunTaaNeighborhoodMotionRegression(manager);
+            RunSsrTraceExitRegression(manager);
+            RunAoCompositeRgbRegression(manager);
+            ShaderManager::ShutDown();
+            shader_manager_initialized = false;
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
+
+        if (HasArgument(argc, argv, "--compiled-commands")) {
+            RunCompiledSubmissionContract();
+            RunCompiledSubrangeSubmission(EQueueType::Graphics);
+            RunCompiledSubrangeSubmission(EQueueType::Copy);
+            RunActiveRdgExplicitBarrierReadback(parallel, ERHIResourceStateOwnership::Compiled);
+            ShaderManager& manager = ShaderManager::Get();
+            shader_manager_initialized = true;
+            RunCompiledTonemapping(manager, parallel);
+            RunCompiledBloom(manager, parallel);
+            RunCompiledTonemapping(manager, parallel, true);
+            RunCompiledKnownBindlessAccess(manager, parallel);
+            RunCompiledKnownBindlessAccess(manager, parallel, true);
+            RunCompiledBindlessCandidates(manager, parallel);
+            ShaderManager::ShutDown();
+            shader_manager_initialized = false;
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
 
         if (multiview_mode) {
             if (RenderDevice::Get().SupportsMultiview(6u)) {
@@ -16490,17 +15229,9 @@ int main(int argc, const char** argv) {
             return 0;
         }
 
-        if (present_legacy_owner) {
-            RunLegacyDirectPresentOwnerBoundary();
+        if (direct_queue_rejection) {
+            RunDirectQueueEntryRejection();
             RenderDevice::Dispose();
-            render_device_initialized = false;
-            TaskSystem::ShutDown();
-            task_system_initialized = false;
-            return 0;
-        }
-
-        if (present_completion_shutdown) {
-            RunPresentationCompletionShutdownDrainBoundary();
             render_device_initialized = false;
             TaskSystem::ShutDown();
             task_system_initialized = false;
@@ -16509,6 +15240,9 @@ int main(int argc, const char** argv) {
 
         if (readback_future_mode) {
             RunOwningReadbackFuture();
+            RunDepthTextureCopy();
+            // Rejected recording latches the backend fault, so run this last.
+            RunUndersizedTextureUploadRejection();
             RenderDevice::Dispose();
             render_device_initialized = false;
             TaskSystem::ShutDown();
@@ -16535,9 +15269,9 @@ int main(int argc, const char** argv) {
         }
 
         if (timestamp_query_success_batch_mode) {
-            RunTimestampQuerySuccessfulBatchPublication();
-            RunTimestampQueryCrossQueueBatchPublication();
-            RunTimestampQueryMixedMultiSegmentCallbackTiers();
+            RunTimestampQueryIndependentCompletion(false);
+            RunTimestampQueryIndependentCompletion(true);
+            RunTimestampQueryMultiSegmentSourceRetirement();
             RunTimestampQueryCopyOnlyPayloadArrival();
             RunCopyTimestampQueryCapabilityAndIsolation();
             RenderDevice::Dispose();
@@ -16564,9 +15298,9 @@ int main(int argc, const char** argv) {
         }
         if (timestamp_query_mode) {
             RunTimestampQueryCompletionOwnership();
-            RunTimestampQuerySuccessfulBatchPublication();
-            RunTimestampQueryCrossQueueBatchPublication();
-            RunTimestampQueryMixedMultiSegmentCallbackTiers();
+            RunTimestampQueryIndependentCompletion(false);
+            RunTimestampQueryIndependentCompletion(true);
+            RunTimestampQueryMultiSegmentSourceRetirement();
             RunTimestampQueryCopyOnlyPayloadArrival();
             RunCopyTimestampQueryCapabilityAndIsolation();
             RunTimestampQueryPreparationRejection();
@@ -16582,14 +15316,16 @@ int main(int argc, const char** argv) {
 
         if (present_mode) {
             if (present_boundary) {
-                LOG_INFO("[TESTCASE][BEGIN] name=PresentSourceContractRejection");
-                RunPresentSourceContractRejection();
+                LOG_INFO("[TESTCASE][BEGIN] name=PresentRetryRecovery");
+                RunPresentRetryRecovery();
+                LOG_INFO("[TESTCASE][BEGIN] name=ResourceStateValidation");
+                RunResourceStateValidation();
                 LOG_INFO("[TESTCASE][BEGIN] name=SerialControlPipelineBoundary");
                 RunSerialControlPipelineBoundary();
                 LOG_INFO("[TESTCASE][BEGIN] name=PresentPipelineBoundary");
                 RunPresentPipelineBoundary();
-                LOG_INFO("[TESTCASE][BEGIN] name=PresentationCompletionIntegrationBoundary");
-                RunPresentationCompletionIntegrationBoundary();
+                LOG_INFO("[TESTCASE][BEGIN] name=PresentationIdleBoundary");
+                RunPresentationIdleBoundary();
                 // This is the terminal focused lifecycle test: it stops and
                 // joins the RHI runtime before returning.
                 LOG_INFO("[TESTCASE][BEGIN] name=QueuedPresentShutdownBoundary");
@@ -16632,6 +15368,7 @@ int main(int argc, const char** argv) {
             return 0;
         }
 
+        RunTimelineGpuProgressContract();
         RunMultiSegmentCompletionAggregateCpuProbe();
 
         if (inject_translate_failure) {
@@ -16651,9 +15388,7 @@ int main(int argc, const char** argv) {
             return 0;
         }
 
-        RunOrderedReadback(
-            parallel, inject_worker_failure, production_gate, production_heavy
-        );
+        RunOrderedReadback(parallel);
         RunActiveRdgExplicitBarrierReadback(parallel);
         RunActiveRdgAsyncQueueDag(parallel);
         RunActiveRdgGraphicsCopyRoundTrip(parallel);
@@ -16668,7 +15403,6 @@ int main(int argc, const char** argv) {
         RunRecoverableCopyDependencyRejection();
         RunCrossQueueTopologyBatch();
         RunDirectCopyExecuteRejected();
-        RunVulkanStorageUnifiedCopySubmission();
         RunAsyncQueueParallelTranslateSmoke();
         RunMultiSegmentSourceExecution();
         RunMultiSegmentCopyRoundTrip();

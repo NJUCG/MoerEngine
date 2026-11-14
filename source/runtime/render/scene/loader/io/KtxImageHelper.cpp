@@ -1,4 +1,5 @@
 #include "KtxImageHelper.h"
+#include "misc/Types.h"
 
 #include "math/Base.h"
 #include "misc/MMemory.h"
@@ -446,13 +447,13 @@ EPixelFormat KtxImageHelper::GetFormatFromOpenGLInternalFormat(const GLenum inte
 }
 
 struct AstcHeader {
-    uint8_t magic[4];
-    uint8_t blockdim_x;
-    uint8_t blockdim_y;
-    uint8_t blockdim_z;
-    uint8_t xsize[3]; // x-size = xsize[0] + xsize[1] + xsize[2]
-    uint8_t ysize[3]; // x-size, y-size and z-size are given in texels;
-    uint8_t zsize[3]; // block count is inferred
+    uint8 magic[4];
+    uint8 blockdim_x;
+    uint8 blockdim_y;
+    uint8 blockdim_z;
+    uint8 xsize[3]; // x-size = xsize[0] + xsize[1] + xsize[2]
+    uint8 ysize[3]; // x-size, y-size and z-size are given in texels;
+    uint8 zsize[3]; // block count is inferred
 };
 
 Vector3i toBlockDim(const EPixelFormat format) {
@@ -516,7 +517,7 @@ void KtxImageHelper::DecodeAstcImage(ImageReadDesc& desc) {
     }
 
     const auto     blockdim = toBlockDim(desc.format);
-    const uint8_t* data_ptr = static_cast<const uint8_t*>(desc.data);
+    const uint8*   data_ptr = static_cast<const uint8*>(desc.data);
 
     Decode(desc, blockdim);
 }
@@ -542,7 +543,7 @@ bool KtxImageHelper::IsAstc(EPixelFormat format) {
 void KtxImageHelper::Decode(ImageReadDesc& desc, Vector3i blockdim) {
     // Actual decoding
     astc_decode_mode decode_mode = DECODE_LDR_SRGB;
-    uint32_t         bitness     = 8;
+    uint32           bitness     = 8;
     swizzlepattern   swz_decode  = {0, 1, 2, 3};
 
     int xdim = blockdim.x;
@@ -571,12 +572,12 @@ void KtxImageHelper::Decode(ImageReadDesc& desc, Vector3i blockdim) {
     initialize_image(astc_image);
 
     imageblock pb;
-    uint8_t*   data = static_cast<uint8_t*>(desc.data);
+    uint8*     data = static_cast<uint8*>(desc.data);
     for (int z = 0; z < zblocks; z++) {
         for (int y = 0; y < yblocks; y++) {
             for (int x = 0; x < xblocks; x++) {
                 int            offset = (((z * yblocks + y) * xblocks) + x) * 16;
-                const uint8_t* bp     = data + offset;
+                const uint8*   bp     = data + offset;
 
                 physical_compressed_block pcb = *reinterpret_cast<const physical_compressed_block*>(bp);
                 symbolic_compressed_block scb;

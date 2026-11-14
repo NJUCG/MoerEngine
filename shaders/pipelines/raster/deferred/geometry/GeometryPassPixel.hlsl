@@ -12,7 +12,7 @@ BINDLESS_BINDINGS(3, 2, 4, 5)
 #include "materials/Material.hlsli"
 #include "pipelines/raster/deferred/geometry/GeometryPassCommon.hlsli"
 
-[[vk::push_constant]] ConstantBuffer<Moer::GeometryPassBindlessParam> param;
+DEFINE_SHADER_CONSTANT(Moer::GeometryPassBindlessParam, param)
 
 float SampleMaterialAlpha(Moer::GMaterial mat, float2 uv_in_map) {
     const int albedo_map_hdl = int(mat.albedo_map_hdl);
@@ -23,11 +23,11 @@ float SampleMaterialAlpha(Moer::GMaterial mat, float2 uv_in_map) {
 }
 
 void DiscardByAlphaTest(uint material_id, float2 uv_in_map) {
-    if (param.enable_alpha_test == 0) {
+    if (moer_constants.param.enable_alpha_test == 0) {
         return;
     }
     
-    ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
+    ArrayBuffer material_buf = ArrayBuffer(moer_constants.param.material_buf_hdl);
 
     Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(material_id);
 
@@ -41,7 +41,7 @@ void DiscardByAlphaTest(uint material_id, float2 uv_in_map) {
     } else if (mat.alpha_mode == Moer::EAlphaMode::Blend) {
         float alpha = SampleMaterialAlpha(mat, uv_in_map);
         // printf("BLEND: alpha: %f; albedo_map.a: %f; base_color.a: %f\n", alpha, TextureHandle(mat.albedo_map).Sample2D<float4>(uv_in_map).a, mat.base_color_factor.a);
-        if (alpha < param.alpha_test_blend_pixel_cutoff) {
+        if (alpha < moer_constants.param.alpha_test_blend_pixel_cutoff) {
             discard;
         }
     }
@@ -85,14 +85,14 @@ PsOutput main(VsOutput input) : SV_TARGET {
     DiscardByAlphaTest(input.material_id, input.texcoord0); // 此处有可能触发discard，直接终止shader
 
     // Debug 可视化模式（debug_visualization_mode: 0=off, 1=Cluster ID, 2=frac(UV), 3=顶点法线）
-    if (param.debug_visualization_mode > 0) {
+    if (moer_constants.param.debug_visualization_mode > 0) {
         PsOutput output;
         output.metal_rough_ao = float4(0.0, 0.5, 1.0, 1.0);
 
-        if (param.debug_visualization_mode == 1) {
+        if (moer_constants.param.debug_visualization_mode == 1) {
             output.base_color = float4(ClusterIdToColor(input.primitive_id), 1.0);
             output.normal = float4(Raster::PackNormal(normalize(input.normal)), 1.0);
-        } else if (param.debug_visualization_mode == 2) {
+        } else if (moer_constants.param.debug_visualization_mode == 2) {
             output.base_color = float4(frac(input.texcoord0), 0.0, 1.0);
             output.normal = float4(Raster::PackNormal(normalize(input.normal)), 1.0);
         } else {
@@ -103,7 +103,7 @@ PsOutput main(VsOutput input) : SV_TARGET {
         return output;
     }
 
-    ArrayBuffer material_buf = ArrayBuffer(param.material_buf_hdl);
+    ArrayBuffer material_buf = ArrayBuffer(moer_constants.param.material_buf_hdl);
     Moer::GMaterial mat = material_buf.Load<Moer::GMaterial>(input.material_id);
 
     float3 base_color = SampleTextureAndApplyFactor(

@@ -2,6 +2,7 @@
 
 #include "misc/BoundingBox.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "shaderheaders/shared/raster/ShaderParameters.h"
 
 #include <algorithm>
@@ -18,12 +19,12 @@ struct ProbeTrackedBounds {
 
 struct ProbeDirtyRegion {
     Box3D bounds;
-    uint  reasons = 0u;
+    uint32 reasons = 0u;
 };
 
 struct ProbeDirtyDiff {
     Array<ProbeDirtyRegion> regions;
-    uint                    changed_bounds = 0u;
+    uint32                  changed_bounds = 0u;
     bool                    collapsed      = false;
 };
 
@@ -42,8 +43,8 @@ public:
     static ProbeDirtyDiff Diff(
         std::span<const ProbeTrackedBounds> previous,
         std::span<const ProbeTrackedBounds> current,
-        uint                                reasons,
-        uint                                max_regions,
+        uint32                              reasons,
+        uint32                              max_regions,
         bool                                force_existing_dirty = false
     ) {
         ProbeDirtyDiff result;
@@ -51,7 +52,7 @@ public:
             return result;
         }
 
-        const uint region_limit = std::max(max_regions, 1u);
+        const uint32 region_limit   = std::max(max_regions, 1u);
         size_t     previous_index = 0u;
         size_t     current_index  = 0u;
         while (previous_index < previous.size() || current_index < current.size()) {
@@ -99,13 +100,13 @@ public:
                probe_bounds.min.z <= expanded_dirty.max.z && probe_bounds.max.z >= expanded_dirty.min.z;
     }
 
-    static uint ResolveReasons(
-        const Box3D&                    probe_bounds,
+    static uint32 ResolveReasons(
+        const Box3D&                      probe_bounds,
         std::span<const ProbeDirtyRegion> regions,
-        uint                            global_reasons,
-        float                           influence_distance
+        uint32                            global_reasons,
+        float                             influence_distance
     ) {
-        uint reasons = global_reasons & RASTER_PROBE_DIRTY_REASON_MASK;
+        uint32 reasons = global_reasons & RASTER_PROBE_DIRTY_REASON_MASK;
         for (const ProbeDirtyRegion& region : regions) {
             if (Affects(probe_bounds, region.bounds, influence_distance)) {
                 reasons |= region.reasons & RASTER_PROBE_DIRTY_REASON_MASK;
@@ -125,7 +126,7 @@ private:
                NearlyEqual(lhs.max.y, rhs.max.y) && NearlyEqual(lhs.max.z, rhs.max.z);
     }
 
-    static void AppendRegion(ProbeDirtyDiff& result, const Box3D& bounds, uint reasons, uint max_regions) {
+    static void AppendRegion(ProbeDirtyDiff& result, const Box3D& bounds, uint32 reasons, uint32 max_regions) {
         if (!bounds.IsValid()) {
             return;
         }
@@ -143,7 +144,7 @@ private:
         }
 
         Box3D collapsed_bounds = bounds;
-        uint  collapsed_reasons = reasons;
+        uint32 collapsed_reasons = reasons;
         for (const ProbeDirtyRegion& region : result.regions) {
             collapsed_bounds.Expand(region.bounds);
             collapsed_reasons |= region.reasons;

@@ -1,6 +1,7 @@
-#include "taskgraph/GraphTask.h"
 #include "misc/LockFree.h"
+#include "misc/Types.h"
 #include "platform/Platform.h"
+#include "taskgraph/GraphTask.h"
 
 #include "AnyThreadScheduler.h"
 
@@ -10,7 +11,7 @@ struct AnyThreadScheduler::PriorityPool::GlobalQueue {
     LockFreeQueueBase<BaseGraphTask, false> queue{};
 };
 
-AnyThreadScheduler::PriorityPool::PriorityPool(int32_t in_worker_count) :
+AnyThreadScheduler::PriorityPool::PriorityPool(Moer::int32 in_worker_count) :
     worker_count(in_worker_count),
     workers(std::make_unique<WorkerState[]>(static_cast<size_t>(in_worker_count))),
     global_queue(std::make_unique<GlobalQueue>()) {
@@ -28,7 +29,7 @@ AnyThreadScheduler::AnyThreadScheduler(
     m_wake_worker(wake_worker),
     m_wake_context(wake_context) {
     assert(m_wake_worker != nullptr);
-    for (int32_t priority = 0; priority < EThread::PriorityCount; ++priority) {
+    for (Moer::int32 priority = 0; priority < EThread::PriorityCount; ++priority) {
         assert(m_topology.counts[priority] > 0);
         m_pools[priority] = std::make_unique<PriorityPool>(m_topology.counts[priority]);
     }
@@ -39,14 +40,14 @@ AnyThreadScheduler::~AnyThreadScheduler() = default;
 bool AnyThreadScheduler::TryGetLocalWorker(
     EThread::Type  actual_current_thread,
     ThreadPriority target_priority,
-    int32_t&       local_worker_index
+    Moer::int32&   local_worker_index
 ) const noexcept {
     if (EThread::IsUnKnownThread(actual_current_thread)) {
         return false;
     }
 
-    const int32_t thread_index = EThread::GetThreadIndex(actual_current_thread);
-    const int32_t actual_priority = m_topology.PriorityForThread(thread_index);
+    const Moer::int32 thread_index    = EThread::GetThreadIndex(actual_current_thread);
+    const Moer::int32 actual_priority = m_topology.PriorityForThread(thread_index);
     if (actual_priority != target_priority ||
         EThread::GetThreadPriority(actual_current_thread) != target_priority) {
         return false;
@@ -61,19 +62,19 @@ bool AnyThreadScheduler::IsTaskGraphWorker(EThread::Type actual_current_thread) 
         return false;
     }
 
-    const int32_t thread_index = EThread::GetThreadIndex(actual_current_thread);
-    const int32_t priority     = m_topology.PriorityForThread(thread_index);
+    const Moer::int32 thread_index = EThread::GetThreadIndex(actual_current_thread);
+    const Moer::int32 priority     = m_topology.PriorityForThread(thread_index);
     return priority >= 0 && EThread::GetThreadPriority(actual_current_thread) == priority;
 }
 
 bool AnyThreadScheduler::WakeOneIdleWorker(ThreadPriority priority) noexcept {
     PriorityPool& pool = *m_pools[priority];
-    const uint32_t start = pool.wake_cursor.fetch_add(1, std::memory_order_relaxed) %
-                           static_cast<uint32_t>(pool.worker_count);
+    const Moer::uint32 start = pool.wake_cursor.fetch_add(1, std::memory_order_relaxed) %
+                               static_cast<Moer::uint32>(pool.worker_count);
 
-    for (int32_t offset = 0; offset < pool.worker_count; ++offset) {
-        const int32_t local_index = static_cast<int32_t>(
-            (start + static_cast<uint32_t>(offset)) % static_cast<uint32_t>(pool.worker_count)
+    for (Moer::int32 offset = 0; offset < pool.worker_count; ++offset) {
+        const Moer::int32 local_index = static_cast<Moer::int32>(
+            (start + static_cast<Moer::uint32>(offset)) % static_cast<Moer::uint32>(pool.worker_count)
         );
         bool expected = true;
         if (!pool.workers[local_index].idle.compare_exchange_strong(
@@ -85,7 +86,7 @@ bool AnyThreadScheduler::WakeOneIdleWorker(ThreadPriority priority) noexcept {
             continue;
         }
 
-        const int32_t thread_index = m_topology.ThreadIndex(priority, local_index);
+        const Moer::int32 thread_index = m_topology.ThreadIndex(priority, local_index);
         assert(thread_index >= 0);
         m_wake_worker(m_wake_context, thread_index);
         return true;
@@ -107,7 +108,7 @@ void AnyThreadScheduler::Enqueue(
     const auto publish = [&]() noexcept {
         m_pending_tasks.fetch_add(1, std::memory_order_relaxed);
 
-        int32_t local_worker_index = -1;
+        Moer::int32 local_worker_index = -1;
         if (TryGetLocalWorker(actual_current_thread, priority, local_worker_index)) {
             pool.workers[local_worker_index].deque.PushBottom(task);
             // Always notify an actual idle peer. A single continuation can block
@@ -146,7 +147,7 @@ void AnyThreadScheduler::Enqueue(
 
 BaseGraphTask* AnyThreadScheduler::TryFindWork(
     PriorityPool& pool,
-    int32_t       local_worker_index
+    Moer::int32   local_worker_index
 ) noexcept {
     WorkerState& self = pool.workers[local_worker_index];
 
@@ -172,11 +173,11 @@ BaseGraphTask* AnyThreadScheduler::TryFindWork(
         return nullptr;
     }
 
-    const uint32_t first_victim = ++self.steal_cursor % static_cast<uint32_t>(pool.worker_count);
-    for (int32_t offset = 0; offset < pool.worker_count; ++offset) {
-        const int32_t victim = static_cast<int32_t>(
-            (first_victim + static_cast<uint32_t>(offset)) %
-            static_cast<uint32_t>(pool.worker_count)
+    const Moer::uint32 first_victim = ++self.steal_cursor % static_cast<Moer::uint32>(pool.worker_count);
+    for (Moer::int32 offset = 0; offset < pool.worker_count; ++offset) {
+        const Moer::int32 victim = static_cast<Moer::int32>(
+            (first_victim + static_cast<Moer::uint32>(offset)) %
+            static_cast<Moer::uint32>(pool.worker_count)
         );
         if (victim == local_worker_index) {
             continue;
@@ -188,11 +189,11 @@ BaseGraphTask* AnyThreadScheduler::TryFindWork(
     return nullptr;
 }
 
-BaseGraphTask* AnyThreadScheduler::DequeueOrPrepareToPark(int32_t thread_index) noexcept {
-    const int32_t priority = m_topology.PriorityForThread(thread_index);
+BaseGraphTask* AnyThreadScheduler::DequeueOrPrepareToPark(Moer::int32 thread_index) noexcept {
+    const Moer::int32 priority = m_topology.PriorityForThread(thread_index);
     assert(priority >= 0 && priority < EThread::PriorityCount);
     PriorityPool& pool = *m_pools[priority];
-    const int32_t local_worker_index = m_topology.LocalIndex(thread_index, priority);
+    const Moer::int32 local_worker_index = m_topology.LocalIndex(thread_index, priority);
     assert(local_worker_index >= 0 && local_worker_index < pool.worker_count);
 
     WorkerState& self = pool.workers[local_worker_index];
@@ -217,7 +218,7 @@ BaseGraphTask* AnyThreadScheduler::DequeueOrPrepareToPark(int32_t thread_index) 
 }
 
 void AnyThreadScheduler::NotifyTaskCompleted() noexcept {
-    const uint64_t previous = m_pending_tasks.fetch_sub(1, std::memory_order_acq_rel);
+    const Moer::uint64 previous = m_pending_tasks.fetch_sub(1, std::memory_order_acq_rel);
     assert(previous > 0);
     if (previous != 1) {
         return;

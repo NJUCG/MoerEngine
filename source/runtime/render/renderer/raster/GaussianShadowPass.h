@@ -4,6 +4,9 @@
 #include "scene/gaussian/GaussianGpuScene.h"
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/gaussian/GaussianShadowParameters.h"
+
+#include <memory>
+
 namespace Moer::Render::Raster {
 inline RenderGraph::TextureDesc DescribeShadowTexture(const TextureRef& texture) {
     auto       aspects = RenderGraph::TextureAspect::None;
@@ -40,7 +43,7 @@ public:
         BindlessArrayRef           bindless{};
         StaticArray<TextureRef, 4> maps{};
         Array<GGaussianInstance>   draws{};
-        Array<uint>                instance_indices{};
+        Array<uint32>              instance_indices{};
     };
     explicit GaussianShadowPass(RasterContext& context);
     GaussianShadowPass(ShaderManager& manager, BindlessArrayRef bindless, EPixelFormat depth_format);
@@ -53,8 +56,10 @@ public:
         GaussianViewSettings    settings,
         bool                    editor_view
     );
-    void       Record(CommandList& commands, const RecordParameters& parameters);
-    TextureRef RecordDepthDebug(CommandList& commands, const RecordParameters& parameters);
+    void Record(CommandList& commands, const RecordParameters& parameters);
+    RenderGraph::PassHandle
+    AddToGraph(RenderGraph& graph, std::shared_ptr<const RecordParameters> parameters);
+    TextureRef AddDepthDebugToGraph(RenderGraph& graph, const RecordParameters& parameters);
     void       EnsureResources(RasterContext& context, const RasterConfig& config, bool cast);
     const StaticArray<TextureRef, 4>& GetMaps() const {
         return m_maps;
@@ -65,17 +70,26 @@ public:
     }
 
 private:
+    void RecordUpload(CommandList& commands, const RecordParameters& parameters);
+    QueryFuture RecordDraw(
+        CommandList& commands, const RecordParameters& parameters,
+        uint32 view, uint32 draw, bool collect_timing
+    );
+
+    // Pipelines and persistent resources are prepared before graph compilation.
     GaussianShadowPipeline        m_pipeline;
     GaussianShadowInspectPipeline m_inspect;
     TextureRef                    m_debug_depth;
     BindlessArrayRef              m_bindless;
     BufferRef                     m_data;
-    uint                          m_data_handle = 0;
+    uint32                        m_data_handle = 0;
     StaticArray<TextureRef, 4>    m_maps{};
-    StaticArray<uint, 4>          m_handles{};
+    StaticArray<uint32, 4>        m_handles{};
     StaticArray<TextureRef, 4>    m_mesh_maps{};
-    StaticArray<uint, 4>          m_mesh_handles{};
-    QueryFuture                   m_timing{};
+    StaticArray<uint32, 4>        m_mesh_handles{};
+
+    // Each graph draw owns its query pair; completed durations are summed.
+    Array<QueryFuture>            m_timings{};
     double                        m_gpu_ms = 0;
     bool                          m_cube   = false;
 };

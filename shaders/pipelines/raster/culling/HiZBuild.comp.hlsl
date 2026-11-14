@@ -7,7 +7,7 @@
 [[vk::push_constant]] ConstantBuffer<Moer::HiZBuildParam> param;
 
 [[vk::binding(0, 0)]] Texture2D<float> src_texture;
-[[vk::binding(1, 0)]] RWTexture2D<float> dst_texture;
+[[vk::binding(1, 0), vk::image_format("r16f")]] RWTexture2D<float> dst_texture;
 
 float reduce_depth(float4 depth) {
 #if HIZ_REVERSE_Z

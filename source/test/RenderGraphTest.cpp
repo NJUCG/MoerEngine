@@ -1,4 +1,5 @@
 #include "rendergraph/RenderGraph.h"
+#include "rendergraph/RenderGraphLowering.h"
 #include "renderer/common/UiFrameGraphPass.h"
 #include "rhi/RHIGpuScope.h"
 #include "rhi/RHIImpl.h"
@@ -7,16 +8,17 @@
 #include "taskgraph/TaskGraph.h"
 #include "taskgraph/TaskSystem.h"
 
+#include "misc/Types.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -24,6 +26,18 @@
 #include <vector>
 
 namespace Moer::Render {
+
+// Token absence, unresolved state and undefined GPU contents remain distinct.
+static_assert(RenderGraph::GetStateKind({}) == RenderGraph::ResourceKind::Token);
+static_assert(RenderGraph::IsUnspecified({}) && !RenderGraph::IsUndefined({}));
+static_assert(RenderGraph::IsUnspecified(RenderGraph::TextureAccessType::Unspecified));
+static_assert(RenderGraph::IsUnspecified(RenderGraph::BufferAccessType::Unspecified));
+static_assert(RenderGraph::IsUndefined(RenderGraph::TextureBoundary::Undefined));
+static_assert(RenderGraph::IsUndefined(RenderGraph::BufferBoundary::Undefined));
+static_assert(
+    RenderGraph::ResourceState{RenderGraph::TextureAccessType::TransferSource} !=
+    RenderGraph::ResourceState{RenderGraph::BufferAccessType::TransferSource}
+);
 
 class UiFrameGraphPassTestAccess {
 public:
@@ -60,21 +74,6 @@ public:
         );
     }
 
-    [[nodiscard]] static bool ProcessLinearWithComposeRecorder(
-        CommandList&                              cmd_list,
-        std::function<void(CommandList&)>         compose_recorder,
-        const UiFrameGraphPass::PreparedFrameRef& frame,
-        const TextureRef&                         scene_color,
-        const TextureRef&                         main_output
-    ) {
-        return UiFrameGraphPass::ProcessLinearWithComposeRecorder(
-            cmd_list,
-            std::move(compose_recorder),
-            frame,
-            scene_color,
-            main_output
-        );
-    }
 };
 
 } // namespace Moer::Render
@@ -119,7 +118,7 @@ RenderGraphGpuScopeConfig() {
 }
 
 [[nodiscard]] Moer::Render::TimestampQueryResult
-RenderGraphTimestamp(uint64_t begin_tick, uint64_t end_tick) {
+RenderGraphTimestamp(Moer::uint64 begin_tick, Moer::uint64 end_tick) {
     return Moer::Render::TimestampQueryResult{
         .begin_tick = begin_tick,
         .end_tick = end_tick,
@@ -131,8 +130,8 @@ RenderGraphTimestamp(uint64_t begin_tick, uint64_t end_tick) {
 
 [[nodiscard]] bool ResolveRenderGraphTimestamp(
     Moer::Render::CmdSubmit& submit,
-    uint64_t                 begin_tick,
-    uint64_t                 end_tick
+    Moer::uint64             begin_tick,
+    Moer::uint64             end_tick
 ) {
     return submit.query_tokens.size() == 1 &&
            Moer::Render::QueryBackendAccess::ResolveTimestamp(
@@ -157,7 +156,8 @@ void ReleaseRenderGraphSubmit(Moer::Render::CmdSubmit& submit) {
         if (edge.src != src || edge.dst != dst) {
             continue;
         }
-        for (const auto& reason : edge.reasons) {
+        for (const auto& entry : plan.GetDependencyReasons(edge.src, edge.dst)) {
+            const auto& reason = entry.reason;
             if (reason.kind == kind && (!resource.IsValid() || reason.resource == resource)) {
                 return true;
             }
@@ -219,55 +219,65 @@ void ReleaseRenderGraphSubmit(Moer::Render::CmdSubmit& submit) {
     );
 }
 
+// Logical graph tests record owned streams without submitting native GPU work.
+bool RecordGraphForTest(RenderGraph& graph) {
+    return graph.ExecuteFrontendRecordingPlan(
+        {}, false, [](Moer::Array<Moer::Render::RHIRecordingSource>&&) {}
+    );
+}
+
 void TestStableSerialCallbackOrder(TestSuite& suite) {
     constexpr std::string_view test_name = "stable serial callback order";
     RenderGraph                graph("StableSerial");
     std::vector<int>           callback_order;
 
-    graph.AddPass(
+    graph.AddRecordPass(
         "First",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             callback_order.push_back(1);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "Second",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             callback_order.push_back(2);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "Third",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             callback_order.push_back(3);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     const bool compiled = graph.Compile();
     suite.Check(compiled, test_name, graph.GetCompileError());
-    const bool executed = compiled && graph.Execute();
+    const bool executed = compiled && RecordGraphForTest(graph);
     suite.Check(executed, test_name, graph.GetCompileError());
     suite.Check(
         callback_order == std::vector<int>{1, 2, 3},
         test_name,
-        "callbacks must execute exactly once in declaration order"
+        "unconstrained serial callbacks must preserve the declaration-order tie-break"
     );
 }
 
-void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
+void TestMergedRecordingSharesStagingStreamAndPreservesSubmitOrder(
     TestSuite& suite
 ) {
     constexpr std::string_view test_name =
-        "merged recording preserves frontend sources and submit order";
+        "merged serial recording shares a staging stream and preserves submit order";
     RenderGraph                 graph("MergedRecording");
     std::vector<int>            callback_order;
     std::array<Moer::Render::CommandList*, 2> observed_command_lists{};
@@ -283,7 +293,7 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
                 [&callback_order] { callback_order.push_back(1); }
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.AddRecordPass(
         "Second",
@@ -296,7 +306,7 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
                 [&callback_order] { callback_order.push_back(2); }
             );
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     const bool compiled = graph.Compile();
@@ -310,11 +320,11 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
     suite.Check(
         observed_command_lists[0] != nullptr &&
             observed_command_lists[1] != nullptr &&
-            observed_command_lists[0] != observed_command_lists[1] &&
+            observed_command_lists[0] == observed_command_lists[1] &&
             observed_command_lists[0] != &command_list &&
             observed_command_lists[1] != &command_list,
         test_name,
-        "record callbacks must use independent frontend CommandLists"
+        "serial callbacks must share a staging CommandList distinct from the destination"
     );
     suite.Check(
         !command_list.IsEmpty(),
@@ -346,7 +356,7 @@ void TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(
     );
 }
 
-void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite) {
+void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite, bool compiled_ownership = false) {
     constexpr std::string_view test_name =
         "merged recording failure leaves destination untouched";
     RenderGraph graph("MergedRecordingFailure");
@@ -359,7 +369,7 @@ void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite) {
         [](Moer::Render::CommandList& command_list) {
             command_list.AddCallback([] {});
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "FailingPass",
@@ -369,7 +379,7 @@ void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite) {
         [](Moer::Render::CommandList&) {
             throw std::runtime_error("injected recording failure");
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     const bool compiled = graph.Compile();
@@ -377,23 +387,33 @@ void TestMergedRecordingFailureLeavesDestinationUntouched(TestSuite& suite) {
     Moer::Render::CommandList destination(
         Moer::Render::EQueueType::Graphics
     );
+    if (compiled_ownership) {
+        destination.SetResourceStateOwnership(Moer::Render::ERHIResourceStateOwnership::Compiled);
+    }
+    int preserved_callbacks = 0;
+    destination.AddCallback([&] { ++preserved_callbacks; });
     const bool executed =
-        compiled && graph.RecordAndMergeFrontendCommands(destination);
+        compiled && graph.RecordAndMergeFrontendCommands(destination, false);
     suite.Check(
         !executed,
         test_name,
         "a failed record callback must fail the whole frontend dispatch group"
     );
     suite.Check(
-        destination.IsEmpty(),
+        !destination.IsEmpty(),
         test_name,
-        "a failed graph must not merge an already-recorded prefix"
+        "a failed graph must not clear pre-existing destination commands"
     );
     suite.Check(
         graph.GetCompileError().find("FailingPass") != std::string::npos,
         test_name,
         "the failing pass name must be preserved in the diagnostic"
     );
+    auto submit = destination.Submit();
+    suite.Check(submit.callbacks.size() == 1, test_name,
+                "a failed shared stream must not append its recorded prefix");
+    for (auto& callback : submit.callbacks) { callback(); }
+    suite.Check(preserved_callbacks == 1, test_name, "destination callback was lost or duplicated");
 }
 
 void TestFrontendCommandListMergeRebasesCachedArguments(TestSuite& suite) {
@@ -440,72 +460,6 @@ void TestFrontendCommandListMergeRebasesCachedArguments(TestSuite& suite) {
     }
 }
 
-void TestPassCompletionObserverRunsAfterEachCallback(TestSuite& suite) {
-    constexpr std::string_view test_name = "pass completion observer ordering";
-    RenderGraph                graph("PassCompletionObserver");
-    std::vector<std::string>   events;
-    int                        cpu_value = 0;
-
-    graph.AddPass(
-        "Produce",
-        [](RenderGraph::PassBuilder& builder) {
-            builder.SideEffect();
-        },
-        [&] {
-            cpu_value = 41;
-            events.emplace_back("execute:Produce");
-        }
-    );
-    graph.AddPass(
-        "Consume",
-        [](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(
-                RenderGraph::QueueRole::Compute,
-                RenderGraph::PipelineType::Compute
-            );
-            builder.SideEffect();
-        },
-        [&] {
-            suite.Check(
-                cpu_value == 41,
-                test_name,
-                "later pass callbacks must observe earlier callback CPU state"
-            );
-            events.emplace_back("execute:Consume");
-        }
-    );
-
-    const bool compiled = graph.Compile();
-    suite.Check(compiled, test_name, graph.GetCompileError());
-    const bool executed = compiled && graph.Execute([&](const RenderGraph::ExecutedPassInfo& info) {
-        events.emplace_back(std::string("after:") + std::string(info.name));
-        if (info.name == "Produce") {
-            suite.Check(
-                info.domain.queue == RenderGraph::QueueRole::Graphics && info.side_effect,
-                test_name,
-                "observer must receive the compiled Graphics domain and side-effect bit"
-            );
-        } else if (info.name == "Consume") {
-            suite.Check(
-                info.domain.queue == RenderGraph::QueueRole::Compute && info.side_effect,
-                test_name,
-                "observer must receive the compiled Compute domain and side-effect bit"
-            );
-        }
-    });
-    suite.Check(executed, test_name, graph.GetCompileError());
-    suite.Check(
-        events == std::vector<std::string>{
-                      "execute:Produce",
-                      "after:Produce",
-                      "execute:Consume",
-                      "after:Consume",
-                  },
-        test_name,
-        "observer must run once after each fully returned pass callback"
-    );
-}
-
 void TestImportedAliasIdentityAndDump(TestSuite& suite) {
     constexpr std::string_view test_name = "imported resource alias";
     RenderGraph                graph("AliasIdentity");
@@ -521,12 +475,20 @@ void TestImportedAliasIdentityAndDump(TestSuite& suite) {
         texture == texture_view, test_name, "aliases of one physical identity must return one handle"
     );
 
-    graph.AddPass(
+    const auto repeated = graph.ImportTexture(
+        "SceneColor", &physical_resource, RenderGraph::TextureDesc{.mip_count = 4, .layer_count = 1}
+    );
+    suite.Check(
+        texture == repeated, test_name, "repeated imports of the same named object must be idempotent"
+    );
+
+    graph.AddRecordPass(
         "ReadSceneColor",
         [texture_view](RenderGraph::PassBuilder& builder) {
             builder.Read(texture_view);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     const bool compiled = graph.Compile();
     suite.Check(compiled, test_name, graph.GetCompileError());
@@ -539,36 +501,229 @@ void TestImportedAliasIdentityAndDump(TestSuite& suite) {
     );
 }
 
+void TestResourceNameAndIdentityNamespaces(TestSuite& suite) {
+    constexpr std::string_view test_name = "resource name and identity namespaces";
+    int physical_a = 0;
+    int physical_b = 0;
+    for (bool alias_second : {false, true}) {
+        RenderGraph graph("NameCollision");
+        const auto first = graph.Import("First", RenderGraph::ResourceKind::Texture, &physical_a);
+        const auto second = graph.Import("Second", RenderGraph::ResourceKind::Texture, &physical_b);
+        const auto* identity = alias_second ? &physical_b : &physical_a;
+        const auto alias = graph.Import("Alias", RenderGraph::ResourceKind::Texture, identity);
+        suite.Check(alias == (alias_second ? second : first), test_name,
+                    "a new alias must preserve resource identity");
+        suite.Check(!graph.Import(alias_second ? "First" : "Second",
+                                  RenderGraph::ResourceKind::Texture, identity).IsValid(),
+                    test_name, "an existing physical identity must not hide another resource's name");
+        suite.Check(!graph.CreateTransient("Alias", RenderGraph::ResourceKind::Texture).IsValid(),
+                    test_name, "an imported alias reserves its name against transient resources");
+        suite.Check(!graph.Import("Alias", RenderGraph::ResourceKind::Texture,
+                                  alias_second ? &physical_a : &physical_b).IsValid(),
+                    test_name, "aliases must reject a different physical identity");
+    }
+    RenderGraph graph("NullIdentities");
+    const auto first = graph.ImportToken("First");
+    const auto second = graph.ImportToken("Second");
+    suite.Check(first != second, test_name, "null physical identities must not alias unrelated resources");
+    suite.Check(!graph.ImportToken("First").IsValid(), test_name, "a null identity cannot justify name reuse");
+    graph.CreateTransient("Transient", RenderGraph::ResourceKind::Buffer);
+    suite.Check(!graph.Import("Transient", RenderGraph::ResourceKind::Buffer, &physical_a).IsValid(),
+                test_name, "transient names share the declaration namespace");
+}
+
 [[nodiscard]] std::string BuildHazardDump(TestSuite& suite, std::string_view test_name) {
     RenderGraph graph("Hazards");
     int         physical_buffer = 0;
     const auto  shared          = graph.Import("Shared", RenderGraph::ResourceKind::Buffer, &physical_buffer);
 
-    graph.AddPass(
+    graph.AddRecordPass(
         "Produce",
         [shared](RenderGraph::PassBuilder& builder) {
             builder.Write(shared);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "Consume",
         [shared](RenderGraph::PassBuilder& builder) {
             builder.Read(shared);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "Overwrite",
         [shared](RenderGraph::PassBuilder& builder) {
             builder.Write(shared);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    const bool compiled = graph.Compile();
+    const bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
     suite.Check(compiled, test_name, graph.GetCompileError());
     return graph.Dump();
+}
+
+void TestDependencyLevelOrdering(TestSuite& suite) {
+    constexpr std::string_view test_name = "dependency levels preserve fan-in depth and declaration order";
+    RenderGraph graph("DependencyLevels");
+    const auto add_pass = [&](std::string_view name, std::initializer_list<RenderGraph::PassHandle> dependencies) {
+        return graph.AddRecordPass(
+            name,
+            [dependencies](RenderGraph::PassBuilder& builder) {
+                for (const auto dependency : dependencies) {
+                    builder.DependsOn(dependency);
+                }
+            },
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+    };
+    const auto root = add_pass("Root", {});
+    const auto independent = add_pass("Independent", {});
+    const auto chain = add_pass("Chain", {root});
+    const auto fan_in = add_pass("FanIn", {chain, independent});
+    const auto short_branch = add_pass("ShortBranch", {root});
+    const auto join = add_pass("Join", {fan_in, short_branch});
+    const auto late_independent = add_pass("LateIndependent", {});
+    const bool compiled = graph.Compile();
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    if (!compiled) {
+        return;
+    }
+    const auto& plan = graph.GetCompiledPlan();
+    const auto dependency_levels = plan.BuildDependencyLevels();
+    const std::vector<RenderGraph::PassHandle> declaration_order{
+        root, independent, chain, fan_in, short_branch, join, late_independent
+    };
+    suite.Check(plan.execution_order == declaration_order, test_name,
+                "newly ready lower indices must precede older ready higher indices");
+    const std::vector<std::vector<RenderGraph::PassHandle>> expected_levels{
+        {root, independent, late_independent}, {chain, short_branch}, {fan_in}, {join}
+    };
+    suite.Check(dependency_levels.size() == expected_levels.size(), test_name,
+                "fan-in must wait for its deepest predecessor");
+    for (size_t index = 0; index < std::min(dependency_levels.size(), expected_levels.size()); ++index) {
+        suite.Check(dependency_levels[index].passes == expected_levels[index], test_name,
+                    "each dependency wave must preserve declaration order");
+    }
+}
+
+void TestDependencyCyclesRejectRecording(TestSuite& suite) {
+    for (const bool resource_dependency : {false, true}) {
+        const std::string_view test_name = resource_dependency ?
+            "explicit dependency conflicts with resource version" : "explicit dependency cycle rejection";
+        RenderGraph graph(test_name);
+        const auto ready = graph.CreateTransientToken("Ready");
+        std::optional<RenderGraph::PassBuilder> first_builder;
+        int callback_count = 0;
+        const auto record = [&](Moer::Render::CommandList&) { ++callback_count; };
+        const auto first = graph.AddRecordPass(
+            "First",
+            [&](RenderGraph::PassBuilder& builder) {
+                first_builder.emplace(builder);
+                if (resource_dependency) {
+                    builder.Write(ready);
+                }
+            },
+            record,
+            RenderGraph::PassRecordPolicy::Serial
+        );
+        const auto second = graph.AddRecordPass(
+            "Second",
+            [=](RenderGraph::PassBuilder& builder) {
+                if (resource_dependency) {
+                    builder.Read(ready);
+                } else {
+                    builder.DependsOn(first);
+                }
+            },
+            record,
+            RenderGraph::PassRecordPolicy::Serial
+        );
+        // A copied public builder still refers to the live graph declaration.
+        // Add the backward edge only after both real pass handles exist.
+        first_builder->DependsOn(second);
+
+        for (Moer::uint32 attempt = 0; attempt < 2; ++attempt) {
+            const bool compiled = graph.Compile();
+            suite.Check(!compiled && !graph.IsCompiled(), test_name,
+                        "a dependency cycle must not publish an executable plan");
+            suite.Check(Contains(graph.GetCompileError(), "pass dependency cycle detected"), test_name,
+                        "explicit edges must not override resource versions or another explicit dependency");
+        }
+        const bool recorded = RecordGraphForTest(graph);
+        suite.Check(!recorded && callback_count == 0, test_name,
+                    "a rejected graph must not execute recording callbacks");
+    }
+}
+
+// Compare all dumped execution metadata while ignoring the optional explanation text.
+[[nodiscard]] std::string ExecutionDump(const RenderGraph& graph) {
+    std::string dump = graph.Dump();
+    for (size_t position = dump.find(" reasons=["); position != std::string::npos;
+         position = dump.find(" reasons=[", position)) {
+        const size_t end = dump.find('\n', position);
+        dump.erase(position, end - position);
+    }
+    return dump;
+}
+
+void TestDependencyDiagnosticsLifecycle(TestSuite& suite) {
+    constexpr std::string_view test = "dependency diagnostics are optional and compile-local";
+    for (const auto topology : {RenderGraph::QueueTopology::SingleQueue(),
+                               RenderGraph::QueueTopology::DedicatedQueues()}) {
+        RenderGraph graph("DiagnosticEquivalence", topology);
+        int physical = 0;
+        const auto buffer = graph.ImportBuffer("Shared", &physical, {.byte_size = 128});
+        graph.SetInitialState(buffer, RenderGraph::BufferAccessType::ShaderRead,
+                              RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        for (Moer::uint32 index = 0; index < 4; ++index) {
+            graph.AddRecordPass(
+                "Access" + std::to_string(index),
+                [=](RenderGraph::PassBuilder& builder) {
+                    if (index == 0 || index == 3) {
+                        builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute)
+                            .Write(buffer, RenderGraph::BufferAccessType::Storage);
+                    } else {
+                        builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead,
+                                     {.offset = (index - 1) * 32, .size = 64});
+                    }
+                },
+                [](Moer::Render::CommandList&) {},
+                RenderGraph::PassRecordPolicy::ParallelAllowed
+            );
+        }
+        suite.Check(graph.Compile(), test, graph.GetCompileError());
+        suite.Check(!graph.GetCompiledPlan().dependency_reasons, test,
+                    "normal compilation must not retain diagnostic storage");
+        const auto normal_dump = ExecutionDump(graph);
+        std::string captured_dump;
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test, graph.GetCompileError());
+            const auto& reasons = graph.GetCompiledPlan().dependency_reasons;
+            suite.Check(reasons && !reasons->empty(), test, "capture must include dependency explanations");
+            suite.Check(ExecutionDump(graph) == normal_dump, test,
+                        "capturing explanations must preserve edges, ranges, versions, barriers and queue plans");
+            if (attempt == 0) { captured_dump = graph.Dump(); }
+            else { suite.Check(graph.Dump() == captured_dump, test, "recapture must be deterministic"); }
+        }
+        suite.Check(graph.Compile() && !graph.GetCompiledPlan().dependency_reasons &&
+                        ExecutionDump(graph) == normal_dump,
+                    test, "disabling capture on recompile must discard the previous explanations");
+        suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test, graph.GetCompileError());
+        const auto missing = graph.CreateTransientToken("MissingProducer");
+        suite.Check(!graph.GetCompiledPlan().dependency_reasons, test,
+                    "a declaration mutation must invalidate captured explanations");
+        graph.AddRecordPass("InvalidRead", [=](RenderGraph::PassBuilder& builder) { builder.Read(missing); },
+                            [](Moer::Render::CommandList&) {}, RenderGraph::PassRecordPolicy::Serial);
+        suite.Check(!graph.Compile(RenderGraph::DependencyDiagnostics::Enabled) &&
+                        !graph.GetCompiledPlan().dependency_reasons,
+                    test, "a failed compile must not publish partial explanations");
+    }
 }
 
 void TestHazardsAndDeterministicDump(TestSuite& suite) {
@@ -602,14 +757,15 @@ void TestTransientReadBeforeProducerFailsWithoutCallbacks(TestSuite& suite) {
     const auto transient      = graph.CreateTransient("Scratch", RenderGraph::ResourceKind::Texture);
     int        callback_count = 0;
 
-    graph.AddPass(
+    graph.AddRecordPass(
         "InvalidRead",
         [transient](RenderGraph::PassBuilder& builder) {
             builder.Read(transient);
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             ++callback_count;
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(
@@ -620,7 +776,7 @@ void TestTransientReadBeforeProducerFailsWithoutCallbacks(TestSuite& suite) {
         test_name,
         "Compile must provide a useful first-read diagnostic"
     );
-    suite.Check(!graph.Execute(), test_name, "Execute must reject an uncompiled graph");
+    suite.Check(!RecordGraphForTest(graph), test_name, "Execute must reject an uncompiled graph");
     suite.Check(callback_count == 0, test_name, "a rejected graph must execute zero callbacks");
 }
 
@@ -631,14 +787,15 @@ void TestCrossGraphHandlesAreRejected(TestSuite& suite) {
 
     RenderGraph consumer_graph("ResourceConsumer");
     int         resource_callback_count = 0;
-    consumer_graph.AddPass(
+    consumer_graph.AddRecordPass(
         "InvalidResourceUser",
         [foreign_resource](RenderGraph::PassBuilder& builder) {
             builder.Read(foreign_resource);
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             ++resource_callback_count;
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !consumer_graph.Compile(), resource_test_name, "Compile must reject a foreign resource handle"
@@ -649,7 +806,7 @@ void TestCrossGraphHandlesAreRejected(TestSuite& suite) {
         "foreign resource rejection must be diagnosed"
     );
     suite.Check(
-        !consumer_graph.Execute(), resource_test_name, "a graph with a foreign resource must not execute"
+        !RecordGraphForTest(consumer_graph), resource_test_name, "a graph with a foreign resource must not execute"
     );
     suite.Check(
         resource_callback_count == 0, resource_test_name, "foreign resource graph must run zero callbacks"
@@ -657,18 +814,19 @@ void TestCrossGraphHandlesAreRejected(TestSuite& suite) {
 
     constexpr std::string_view pass_test_name = "cross-graph pass handle rejection";
     RenderGraph                pass_owner_graph("PassOwner");
-    const auto                 foreign_pass = pass_owner_graph.AddPass("ForeignPass", {}, [] {});
+    const auto                 foreign_pass = pass_owner_graph.AddRecordPass("ForeignPass", {}, [](Moer::Render::CommandList&) {}, RenderGraph::PassRecordPolicy::Serial);
 
     RenderGraph dependent_graph("PassConsumer");
     int         pass_callback_count = 0;
-    dependent_graph.AddPass(
+    dependent_graph.AddRecordPass(
         "InvalidDependent",
         [foreign_pass](RenderGraph::PassBuilder& builder) {
             builder.DependsOn(foreign_pass);
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             ++pass_callback_count;
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(!dependent_graph.Compile(), pass_test_name, "Compile must reject a foreign pass handle");
     suite.Check(
@@ -678,27 +836,71 @@ void TestCrossGraphHandlesAreRejected(TestSuite& suite) {
         "foreign pass rejection must be diagnosed"
     );
     suite.Check(
-        !dependent_graph.Execute(), pass_test_name, "a graph with a foreign dependency must not execute"
+        !RecordGraphForTest(dependent_graph), pass_test_name, "a graph with a foreign dependency must not execute"
     );
     suite.Check(pass_callback_count == 0, pass_test_name, "foreign pass graph must run zero callbacks");
 }
 
-void TestCompileAndExecuteAreOneShot(TestSuite& suite) {
-    constexpr std::string_view test_name = "Compile and Execute one-shot";
+void TestRecompileBeforeOneShotExecution(TestSuite& suite) {
+    constexpr std::string_view test_name = "recompile before one-shot execution";
     RenderGraph                graph("OneShot");
     int                        callback_count = 0;
-    graph.AddPass("OnlyPass", {}, [&] {
-        ++callback_count;
-    });
+    const auto                 token = graph.CreateTransientToken("Ready");
+    const auto producer = graph.AddRecordPass(
+        "Producer",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Write(token);
+        },
+        [&](Moer::Render::CommandList&) {
+            ++callback_count;
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    bool compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    const std::string first_dump = graph.Dump();
+    compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    suite.Check(
+        graph.Dump() == first_dump && callback_count == 0,
+        test_name,
+        "repeated compilation must rebuild an identical plan without recording callbacks"
+    );
+
+    const auto consumer = graph.AddRecordPass(
+        "Consumer",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.Read(token);
+        },
+        [&](Moer::Render::CommandList&) {
+            ++callback_count;
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    suite.Check(
+        !graph.IsCompiled() && graph.GetCompiledPlan().execution_order.empty(),
+        test_name,
+        "adding a declaration must invalidate and clear the previous compiled plan"
+    );
+    compiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
+    suite.Check(compiled, test_name, graph.GetCompileError());
+    suite.Check(
+        graph.GetCompiledPlan().execution_order.size() == 2 &&
+            HasEdgeReason(
+                graph.GetCompiledPlan(), producer, consumer,
+                RenderGraph::EdgeReasonKind::ReadAfterWrite, token.Untyped()
+            ) && Contains(graph.Dump(), "Producer -> Consumer reasons=[RAW:Ready@"),
+        test_name,
+        "recompilation must retain declarations and publish the added dependency"
+    );
     const size_t compiled_pass_count = graph.GetCompiledPlan().execution_order.size();
-    suite.Check(graph.Execute(), test_name, graph.GetCompileError());
-    suite.Check(callback_count == 1, test_name, "the first Execute must run the callback once");
-    suite.Check(!graph.Execute(), test_name, "a second Execute must be rejected");
-    suite.Check(callback_count == 1, test_name, "a rejected second Execute must not repeat the callback");
-    suite.Check(!graph.Compile(), test_name, "Compile after execution must be rejected");
-    suite.Check(callback_count == 1, test_name, "a rejected second Compile must not repeat the callback");
+    suite.Check(RecordGraphForTest(graph), test_name, graph.GetCompileError());
+    suite.Check(callback_count == 2, test_name, "the first Execute must run each callback once");
+    suite.Check(!RecordGraphForTest(graph), test_name, "a second Execute must be rejected");
+    suite.Check(callback_count == 2, test_name, "a rejected second Execute must not repeat callbacks");
+    suite.Check(!graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, "Compile after execution must be rejected");
+    suite.Check(callback_count == 2, test_name, "a rejected post-execution Compile must not repeat callbacks");
     suite.Check(
         graph.IsCompiled() && graph.GetCompiledPlan().execution_order.size() == compiled_pass_count,
         test_name,
@@ -712,26 +914,29 @@ void TestLifetimeAndExportDump(TestSuite& suite) {
     const auto transient = graph.CreateTransient("Intermediate", RenderGraph::ResourceKind::Texture);
     graph.Export(transient);
 
-    graph.AddPass(
+    graph.AddRecordPass(
         "CreateIntermediate",
         [transient](RenderGraph::PassBuilder& builder) {
             builder.Write(transient);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "ReadIntermediate",
         [transient](RenderGraph::PassBuilder& builder) {
             builder.Read(transient);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "UnrelatedTail",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     const bool compiled = graph.Compile();
@@ -753,12 +958,13 @@ void TestUntouchedImportedResourceCanBeExported(TestSuite& suite) {
     int                        physical_output = 0;
     const auto output = graph.Import("Output", RenderGraph::ResourceKind::Texture, &physical_output);
     graph.Export(output);
-    graph.AddPass(
+    graph.AddRecordPass(
         "ExternalWindowWrite",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     const bool compiled = graph.Compile();
@@ -782,36 +988,40 @@ void TestTypedTextureSubresourceHazards(TestSuite& suite) {
     );
 
     std::vector<int> callback_order;
-    const auto       write_mip0 = graph.AddPass(
+    const auto       write_mip0 = graph.AddRecordPass(
         "WriteMip0",
         [texture](RenderGraph::PassBuilder& builder) {
             builder.Write(texture, RenderGraph::TextureRange::Mips(0, 1));
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             callback_order.push_back(0);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto write_mip1 = graph.AddPass(
+    const auto write_mip1 = graph.AddRecordPass(
         "WriteMip1",
         [texture](RenderGraph::PassBuilder& builder) {
             builder.Write(texture, RenderGraph::TextureRange::Mips(1, 1));
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             callback_order.push_back(1);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto read_mip0 = graph.AddPass(
+    const auto read_mip0 = graph.AddRecordPass(
         "ReadMip0",
         [texture](RenderGraph::PassBuilder& builder) {
             builder.Read(texture, RenderGraph::TextureRange::Mips(0, 1));
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             callback_order.push_back(2);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
+    const auto dependency_levels = plan.BuildDependencyLevels();
     suite.Check(
         !HasEdgeReason(
             plan, write_mip0, write_mip1, RenderGraph::EdgeReasonKind::WriteAfterWrite, texture.Untyped()
@@ -834,18 +1044,18 @@ void TestTypedTextureSubresourceHazards(TestSuite& suite) {
         "a read must not depend on a writer of another mip"
     );
     suite.Check(
-        plan.dependency_levels.size() == 2 &&
-            DependencyLevelContains(plan.dependency_levels[0], write_mip0) &&
-            DependencyLevelContains(plan.dependency_levels[0], write_mip1) &&
-            DependencyLevelContains(plan.dependency_levels[1], read_mip0),
+        dependency_levels.size() == 2 &&
+            DependencyLevelContains(dependency_levels[0], write_mip0) &&
+            DependencyLevelContains(dependency_levels[0], write_mip1) &&
+            DependencyLevelContains(dependency_levels[1], read_mip0),
         test_name,
         "dependency levels must expose independent mip writers without changing execution policy"
     );
-    suite.Check(graph.Execute(), test_name, graph.GetCompileError());
+    suite.Check(RecordGraphForTest(graph), test_name, graph.GetCompileError());
     suite.Check(
         callback_order == std::vector<int>{0, 1, 2},
         test_name,
-        "production callbacks must remain serial and declaration ordered"
+        "serial callbacks must follow the compiled order, including stable independent writers"
     );
 }
 
@@ -863,7 +1073,7 @@ void TestTypedTextureLayerAndAspectHazards(TestSuite& suite) {
         }
     );
 
-    auto make_range = [](RenderGraph::TextureAspect aspect, uint32_t layer) {
+    auto make_range = [](RenderGraph::TextureAspect aspect, Moer::uint32 layer) {
         auto range    = RenderGraph::TextureRange::Layers(layer, 1);
         range.aspects = aspect;
         return range;
@@ -872,36 +1082,40 @@ void TestTypedTextureLayerAndAspectHazards(TestSuite& suite) {
     const auto depth_layer1   = make_range(RenderGraph::TextureAspect::Depth, 1);
     const auto stencil_layer0 = make_range(RenderGraph::TextureAspect::Stencil, 0);
 
-    const auto write_depth_layer0 = graph.AddPass(
+    const auto write_depth_layer0 = graph.AddRecordPass(
         "WriteDepthLayer0",
         [texture, depth_layer0](RenderGraph::PassBuilder& builder) {
             builder.Write(texture, depth_layer0);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto write_depth_layer1 = graph.AddPass(
+    const auto write_depth_layer1 = graph.AddRecordPass(
         "WriteDepthLayer1",
         [texture, depth_layer1](RenderGraph::PassBuilder& builder) {
             builder.Write(texture, depth_layer1);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto write_stencil_layer0 = graph.AddPass(
+    const auto write_stencil_layer0 = graph.AddRecordPass(
         "WriteStencilLayer0",
         [texture, stencil_layer0](RenderGraph::PassBuilder& builder) {
             builder.Write(texture, stencil_layer0);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto read_depth_layer0 = graph.AddPass(
+    const auto read_depth_layer0 = graph.AddRecordPass(
         "ReadDepthLayer0",
         [texture, depth_layer0](RenderGraph::PassBuilder& builder) {
             builder.Read(texture, depth_layer0);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         !HasEdgeReason(
@@ -960,23 +1174,25 @@ void TestTransientTextureInitializationIsPerSubresource(TestSuite& suite) {
     );
     int callback_count = 0;
 
-    graph.AddPass(
+    graph.AddRecordPass(
         "WriteMip0",
         [texture](RenderGraph::PassBuilder& builder) {
             builder.Write(texture, RenderGraph::TextureRange::Mips(0, 1));
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             ++callback_count;
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "ReadUninitializedMip1",
         [texture](RenderGraph::PassBuilder& builder) {
             builder.Read(texture, RenderGraph::TextureRange::Mips(1, 1));
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             ++callback_count;
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(!graph.Compile(), test_name, "reading an unwritten mip must be rejected");
@@ -985,7 +1201,7 @@ void TestTransientTextureInitializationIsPerSubresource(TestSuite& suite) {
         test_name,
         "subresource initialization failure must be diagnosed"
     );
-    suite.Check(!graph.Execute(), test_name, "a rejected graph must not execute");
+    suite.Check(!RecordGraphForTest(graph), test_name, "a rejected graph must not execute");
     suite.Check(callback_count == 0, test_name, "a rejected graph must execute zero callbacks");
 }
 
@@ -997,14 +1213,15 @@ void TestExportedTransientRequiresWholeResourceInitialization(TestSuite& suite) 
         "PartialMipChain", RenderGraph::TextureDesc{.mip_count = 2, .layer_count = 1}
     );
     int partial_callback_count = 0;
-    partial_graph.AddPass(
+    partial_graph.AddRecordPass(
         "WriteMip0",
         [partial_texture](RenderGraph::PassBuilder& builder) {
             builder.Write(partial_texture, RenderGraph::TextureRange::Mips(0, 1));
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             ++partial_callback_count;
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
     partial_graph.Export(partial_texture);
 
@@ -1017,27 +1234,53 @@ void TestExportedTransientRequiresWholeResourceInitialization(TestSuite& suite) 
         "a partial transient export must have a precise diagnostic"
     );
     suite.Check(
-        !partial_graph.Execute(), test_name, "a graph with an invalid transient export must not execute"
+        !RecordGraphForTest(partial_graph), test_name, "a graph with an invalid transient export must not execute"
     );
     suite.Check(
         partial_callback_count == 0, test_name, "an invalid transient export must execute zero callbacks"
+    );
+
+    partial_graph.AddRecordPass(
+        "WriteMip1",
+        [partial_texture](RenderGraph::PassBuilder& builder) {
+            builder.Write(partial_texture, RenderGraph::TextureRange::Mips(1, 1));
+        },
+        [&](Moer::Render::CommandList&) {
+            ++partial_callback_count;
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+    const bool recovered = partial_graph.Compile();
+    suite.Check(recovered, test_name, partial_graph.GetCompileError());
+    suite.Check(
+        partial_graph.GetCompileError().empty() &&
+            partial_graph.GetCompiledPlan().execution_order.size() == 2,
+        test_name,
+        "repairing the missing producer must replace the failed compile's diagnostic and partial plan"
+    );
+    const bool recovered_recording = RecordGraphForTest(partial_graph);
+    suite.Check(recovered_recording, test_name, partial_graph.GetCompileError());
+    suite.Check(
+        partial_callback_count == 2, test_name,
+        "the recovered graph must record both original and newly added producers once"
     );
 
     RenderGraph complete_graph("CompleteTransientExport");
     const auto  complete_texture = complete_graph.CreateTransientTexture(
         "CompleteMipChain", RenderGraph::TextureDesc{.mip_count = 2, .layer_count = 1}
     );
-    complete_graph.AddPass(
+    complete_graph.AddRecordPass(
         "WriteWholeTexture",
         [complete_texture](RenderGraph::PassBuilder& builder) {
             builder.Write(complete_texture);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     complete_graph.Export(complete_texture);
 
     suite.Check(complete_graph.Compile(), test_name, complete_graph.GetCompileError());
-    suite.Check(complete_graph.Execute(), test_name, complete_graph.GetCompileError());
+    suite.Check(RecordGraphForTest(complete_graph), test_name, complete_graph.GetCompileError());
 }
 
 void TestTypedPartialExportRequiresOnlyDeclaredRange(TestSuite& suite) {
@@ -1047,20 +1290,21 @@ void TestTypedPartialExportRequiresOnlyDeclaredRange(TestSuite& suite) {
     const auto  valid_texture = valid_graph.CreateTransientTexture(
         "PartialMipChain", RenderGraph::TextureDesc{.mip_count = 2, .layer_count = 1}
     );
-    const auto write_mip_zero = valid_graph.AddPass(
+    const auto write_mip_zero = valid_graph.AddRecordPass(
         "WriteMip0",
         [valid_texture](RenderGraph::PassBuilder& builder) {
             builder.Write(
                 valid_texture,
-                RenderGraph::TextureState::RenderTarget,
+                RenderGraph::TextureAccessType::ColorAttachment,
                 RenderGraph::TextureRange::Mips(0, 1)
             );
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     valid_graph.Export(
         valid_texture,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureAccessType::Storage,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read,
         RenderGraph::TextureRange::Mips(0, 1)
@@ -1073,9 +1317,9 @@ void TestTypedPartialExportRequiresOnlyDeclaredRange(TestSuite& suite) {
     );
     suite.Check(
         final_barrier != nullptr && final_barrier->export_boundary &&
-            final_barrier->range.kind == RenderGraph::ResourceKind::Texture &&
-            final_barrier->range.texture.mip_first == 0 &&
-            final_barrier->range.texture.mip_count == 1 &&
+            RenderGraph::GetRangeKind(final_barrier->range) == RenderGraph::ResourceKind::Texture &&
+            std::get<RenderGraph::TextureRange>(final_barrier->range).mip_first == 0 &&
+            std::get<RenderGraph::TextureRange>(final_barrier->range).mip_count == 1 &&
             valid_plan.state_plan_complete,
         test_name,
         "a typed partial export must cover only its initialized declared range"
@@ -1085,20 +1329,21 @@ void TestTypedPartialExportRequiresOnlyDeclaredRange(TestSuite& suite) {
     const auto  invalid_texture = invalid_graph.CreateTransientTexture(
         "PartialMipChain", RenderGraph::TextureDesc{.mip_count = 2, .layer_count = 1}
     );
-    invalid_graph.AddPass(
+    invalid_graph.AddRecordPass(
         "WriteMip0",
         [invalid_texture](RenderGraph::PassBuilder& builder) {
             builder.Write(
                 invalid_texture,
-                RenderGraph::TextureState::RenderTarget,
+                RenderGraph::TextureAccessType::ColorAttachment,
                 RenderGraph::TextureRange::Mips(0, 1)
             );
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     invalid_graph.Export(
         invalid_texture,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureAccessType::Storage,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read,
         RenderGraph::TextureRange::Mips(1, 1)
@@ -1118,36 +1363,40 @@ void TestTypedBufferRangeHazards(TestSuite& suite) {
     const auto                 buffer =
         graph.ImportBuffer("RangeBuffer", &physical_buffer, RenderGraph::BufferDesc{.byte_size = 256});
 
-    const auto write_head = graph.AddPass(
+    const auto write_head = graph.AddRecordPass(
         "WriteHead",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Write(buffer, RenderGraph::BufferRange{.offset = 0, .size = 64});
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto read_adjacent = graph.AddPass(
+    const auto read_adjacent = graph.AddRecordPass(
         "ReadAdjacent",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Read(buffer, RenderGraph::BufferRange{.offset = 64, .size = 64});
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto read_overlap = graph.AddPass(
+    const auto read_overlap = graph.AddRecordPass(
         "ReadOverlap",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Read(buffer, RenderGraph::BufferRange{.offset = 32, .size = 32});
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto overwrite_overlap = graph.AddPass(
+    const auto overwrite_overlap = graph.AddRecordPass(
         "OverwriteOverlap",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Write(buffer, RenderGraph::BufferRange{.offset = 32, .size = 16});
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         !HasEdgeReason(
@@ -1192,26 +1441,29 @@ void TestLogicalResourceVersions(TestSuite& suite) {
     RenderGraph                graph("Versions");
     const auto buffer = graph.CreateTransientBuffer("Scratch", RenderGraph::BufferDesc{.byte_size = 128});
 
-    const auto produce = graph.AddPass(
+    const auto produce = graph.AddRecordPass(
         "Produce",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Write(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto consume = graph.AddPass(
+    const auto consume = graph.AddRecordPass(
         "Consume",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Read(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto overwrite = graph.AddPass(
+    const auto overwrite = graph.AddRecordPass(
         "Overwrite",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Write(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
@@ -1248,8 +1500,8 @@ void TestLogicalResourceVersions(TestSuite& suite) {
         "the next write must advance the resource version"
     );
     suite.Check(
-        buffer.Untyped().index < plan.resources.size() &&
-            plan.resources[buffer.Untyped().index].version_count == 2,
+        buffer.Untyped().resource_id < plan.resources.size() &&
+            plan.resources[buffer.Untyped().resource_id].version_count == 2,
         test_name,
         "compiled resource metadata must expose the final version count"
     );
@@ -1263,14 +1515,15 @@ void TestInvalidTypedRangeIsRejected(TestSuite& suite) {
         "TwoMips", &physical_texture, RenderGraph::TextureDesc{.mip_count = 2, .layer_count = 1}
     );
     int callback_count = 0;
-    graph.AddPass(
+    graph.AddRecordPass(
         "OutOfBoundsRead",
         [texture](RenderGraph::PassBuilder& builder) {
             builder.Read(texture, RenderGraph::TextureRange::Mips(2, 1));
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             ++callback_count;
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(!graph.Compile(), test_name, "out-of-bounds typed ranges must fail compile");
@@ -1286,7 +1539,7 @@ void TestUnknownTextureAspectIsRejected(TestSuite& suite) {
     constexpr std::string_view test_name = "unknown texture descriptor aspect";
     RenderGraph                graph("UnknownTextureAspect");
     constexpr auto             invalid_aspects = static_cast<RenderGraph::TextureAspect>(
-        static_cast<uint8_t>(RenderGraph::TextureAspect::Color) | uint8_t{0x80}
+        static_cast<Moer::uint8>(RenderGraph::TextureAspect::Color) | Moer::uint8{0x80}
     );
     const auto texture = graph.CreateTransientTexture(
         "InvalidTexture",
@@ -1305,12 +1558,13 @@ void TestUnknownTextureAspectIsRejected(TestSuite& suite) {
 void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
     constexpr std::string_view test_name = "texture attachment state aspect validation";
     auto add_side_effect = [](RenderGraph& graph) {
-        graph.AddPass(
+        graph.AddRecordPass(
             "SideEffect",
             [](RenderGraph::PassBuilder& builder) {
                 builder.SideEffect();
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
     };
 
@@ -1318,12 +1572,13 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
     const auto  color_access = color_access_graph.CreateTransientTexture(
         "Color", RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Color}
     );
-    color_access_graph.AddPass(
+    color_access_graph.AddRecordPass(
         "InvalidDepthWrite",
         [color_access](RenderGraph::PassBuilder& builder) {
-            builder.Write(color_access, RenderGraph::TextureState::DepthStencilWrite);
+            builder.Write(color_access, RenderGraph::TextureAccessType::DepthStencilAttachment);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !color_access_graph.Compile() &&
@@ -1336,12 +1591,13 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
     const auto  depth_access = depth_access_graph.CreateTransientTexture(
         "Depth", RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Depth}
     );
-    depth_access_graph.AddPass(
+    depth_access_graph.AddRecordPass(
         "InvalidColorWrite",
         [depth_access](RenderGraph::PassBuilder& builder) {
-            builder.Write(depth_access, RenderGraph::TextureState::RenderTarget);
+            builder.Write(depth_access, RenderGraph::TextureAccessType::ColorAttachment);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !depth_access_graph.Compile() &&
@@ -1354,12 +1610,13 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
     const auto  depth_storage = depth_storage_graph.CreateTransientTexture(
         "Depth", RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Depth}
     );
-    depth_storage_graph.AddPass(
+    depth_storage_graph.AddRecordPass(
         "InvalidStorageAccess",
         [depth_storage](RenderGraph::PassBuilder& builder) {
-            builder.ReadWrite(depth_storage, RenderGraph::TextureState::UnorderedAccess);
+            builder.ReadWrite(depth_storage, RenderGraph::TextureAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !depth_storage_graph.Compile() &&
@@ -1377,7 +1634,7 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
     );
     initial_graph.SetInitialState(
         initial_texture,
-        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::TextureAccessType::DepthStencilAttachment,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -1397,13 +1654,13 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
     );
     final_graph.SetInitialState(
         final_texture,
-        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::TextureAccessType::DepthStencilAttachment,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     final_graph.Export(
         final_texture,
-        RenderGraph::TextureState::RenderTarget,
+        RenderGraph::TextureAccessType::ColorAttachment,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
@@ -1412,59 +1669,6 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
         !final_graph.Compile() && Contains(final_graph.GetCompileError(), "selected aspects"),
         test_name,
         "an exported depth range must reject the color render-target state"
-    );
-
-    RenderGraph present_graph("InvalidPresentAspect");
-    int         present_physical = 0;
-    const auto  present_texture = present_graph.ImportTexture(
-        "Depth",
-        &present_physical,
-        RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Depth}
-    );
-    present_graph.SetInitialState(
-        present_texture,
-        RenderGraph::TextureState::DepthStencilRead,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-    present_graph.Export(
-        present_texture,
-        RenderGraph::TextureState::Present,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-    add_side_effect(present_graph);
-    suite.Check(
-        !present_graph.Compile() && Contains(present_graph.GetCompileError(), "selected aspects"),
-        test_name,
-        "only color aspects may cross a Present boundary"
-    );
-
-    RenderGraph color_present_graph("ValidColorPresent");
-    int         color_present_physical = 0;
-    const auto  color_present_texture = color_present_graph.ImportTexture(
-        "Color",
-        &color_present_physical,
-        RenderGraph::TextureDesc{.aspects = RenderGraph::TextureAspect::Color}
-    );
-    color_present_graph.SetInitialState(
-        color_present_texture,
-        RenderGraph::TextureState::ShaderResource,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-    color_present_graph.Export(
-        color_present_texture,
-        RenderGraph::TextureState::Present,
-        RenderGraph::QueueRole::Graphics,
-        RenderGraph::AccessMode::Read
-    );
-    add_side_effect(color_present_graph);
-    suite.Check(
-        color_present_graph.Compile(),
-        test_name,
-        "a color texture must remain exportable to Present: " +
-            color_present_graph.GetCompileError()
     );
 
     RenderGraph valid_graph("ValidDepthStencilAspects");
@@ -1478,24 +1682,25 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
     );
     valid_graph.SetInitialState(
         valid_texture,
-        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::TextureAccessType::DepthStencilAttachment,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    valid_graph.AddPass(
+    valid_graph.AddRecordPass(
         "ReadDepth",
         [valid_texture](RenderGraph::PassBuilder& builder) {
             builder.Read(
                 valid_texture,
-                RenderGraph::TextureState::DepthStencilRead,
+                RenderGraph::TextureAccessType::DepthStencilAttachment,
                 RenderGraph::TextureRange{.aspects = RenderGraph::TextureAspect::Depth}
             );
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     valid_graph.Export(
         valid_texture,
-        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::TextureAccessType::DepthStencilAttachment,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read,
         RenderGraph::TextureRange{.aspects = RenderGraph::TextureAspect::Stencil}
@@ -1508,9 +1713,9 @@ void TestTextureAttachmentStateMatchesSelectedAspects(TestSuite& suite) {
     );
 }
 
-void TestPresentationSourceBoundaryContract(TestSuite& suite) {
+void TestTransferSourceBoundaryContract(TestSuite& suite) {
     constexpr std::string_view test_name =
-        "presentation source boundary contract";
+        "ordinary transfer-source boundary contract";
     auto import_color = [](RenderGraph& graph, int& physical) {
         const auto texture = graph.ImportTexture(
             "Color",
@@ -1521,27 +1726,28 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
         );
         graph.SetInitialState(
             texture,
-            RenderGraph::TextureState::ShaderResource,
+            RenderGraph::TextureAccessType::Storage,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
-        graph.AddPass(
+        graph.AddRecordPass(
             "SideEffect",
             [](RenderGraph::PassBuilder& builder) {
                 builder.SideEffect();
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         return texture;
     };
 
-    RenderGraph valid_graph("ValidPresentationSource");
+    RenderGraph valid_graph("ValidTransferSource");
     int         valid_physical = 0;
     const auto  valid_texture =
         import_color(valid_graph, valid_physical);
     valid_graph.Export(
         valid_texture,
-        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -1553,31 +1759,27 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
     );
 
     for (const auto [graph_name, queue] :
-         {std::pair{"ComputePresentationSourceRejected",
-                    RenderGraph::QueueRole::Compute},
-          std::pair{"CopyPresentationSourceRejected",
-                    RenderGraph::QueueRole::Copy},
-          std::pair{"UnownedPresentationSourceRejected",
-                    RenderGraph::QueueRole::None}}) {
+         {std::pair{"ComputeTransferSourceRejected", RenderGraph::QueueRole::Compute},
+          std::pair{"CopyTransferSourceRejected", RenderGraph::QueueRole::Copy},
+          std::pair{"UnownedTransferSourceRejected", RenderGraph::QueueRole::None}}) {
         RenderGraph queue_graph(graph_name);
         int         queue_physical = 0;
         const auto  queue_texture =
             import_color(queue_graph, queue_physical);
         queue_graph.Export(
             queue_texture,
-            RenderGraph::TextureState::PresentationSource,
+            RenderGraph::TextureAccessType::TransferSource,
             queue,
             RenderGraph::AccessMode::Read
         );
         suite.Check(
-            !queue_graph.Compile() &&
-                Contains(queue_graph.GetCompileError(), "Graphics queue"),
+            queue == RenderGraph::QueueRole::None ? !queue_graph.Compile() : queue_graph.Compile(),
             test_name,
-            "a presentation source export accepted a non-Graphics owner queue"
+            "transfer-source exports must allow valid queues and reject an unowned known state"
         );
     }
 
-    RenderGraph initial_graph("PresentationSourceImportRejected");
+    RenderGraph initial_graph("TransferSourceReimport");
     int         initial_physical = 0;
     const auto  initial_texture = initial_graph.ImportTexture(
         "Color",
@@ -1588,45 +1790,42 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
     );
     initial_graph.SetInitialState(
         initial_texture,
-        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    initial_graph.AddPass(
+    initial_graph.AddRecordPass(
         "ReadImportedColor",
         [initial_texture](RenderGraph::PassBuilder& builder) {
             builder
                 .Read(
                     initial_texture,
-                    RenderGraph::TextureState::ShaderResource
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     initial_graph.Export(
         initial_texture,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureAccessType::Storage,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     suite.Check(
-        !initial_graph.Compile() &&
-            Contains(
-                initial_graph.GetCompileError(),
-                "export-boundary-only"
-            ),
+        initial_graph.Compile(),
         test_name,
-        "an import boundary accepted the export-only PresentationSource state"
+        "a following graph must import the previous presentation-copy read boundary"
     );
 
-    RenderGraph write_graph("PresentationSourceWriteRejected");
+    RenderGraph write_graph("TransferSourceWriteRejected");
     int         write_physical = 0;
     const auto  write_texture =
         import_color(write_graph, write_physical);
     write_graph.Export(
         write_texture,
-        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
@@ -1637,13 +1836,13 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
         "a presentation source boundary must reject write access"
     );
 
-    RenderGraph read_write_graph("PresentationSourceReadWriteRejected");
+    RenderGraph read_write_graph("TransferSourceReadWriteRejected");
     int         read_write_physical = 0;
     const auto  read_write_texture =
         import_color(read_write_graph, read_write_physical);
     read_write_graph.Export(
         read_write_texture,
-        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::ReadWrite
     );
@@ -1654,7 +1853,7 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
         "a presentation source boundary must reject read-write access"
     );
 
-    RenderGraph depth_graph("DepthPresentationSourceRejected");
+    RenderGraph depth_graph("DepthTransferSourceRejected");
     int         depth_physical = 0;
     const auto  depth_texture = depth_graph.ImportTexture(
         "Depth",
@@ -1665,28 +1864,28 @@ void TestPresentationSourceBoundaryContract(TestSuite& suite) {
     );
     depth_graph.SetInitialState(
         depth_texture,
-        RenderGraph::TextureState::DepthStencilRead,
+        RenderGraph::TextureAccessType::DepthStencilAttachment,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    depth_graph.AddPass(
+    depth_graph.AddRecordPass(
         "SideEffect",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     depth_graph.Export(
         depth_texture,
-        RenderGraph::TextureState::PresentationSource,
+        RenderGraph::TextureAccessType::TransferSource,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     suite.Check(
-        !depth_graph.Compile() &&
-            Contains(depth_graph.GetCompileError(), "selected aspects"),
+        depth_graph.Compile(),
         test_name,
-        "only a color aspect may be exported as a presentation source"
+        "a depth texture must support an ordinary transfer-source export"
     );
 }
 
@@ -1700,12 +1899,13 @@ void TestTypedAliasDescriptorMismatchIsRejected(TestSuite& suite) {
     const auto invalid_alias = graph.ImportTexture(
         "InvalidAlias", &physical_texture, RenderGraph::TextureDesc{.mip_count = 3, .layer_count = 1}
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "ReadCanonical",
         [canonical](RenderGraph::PassBuilder& builder) {
             builder.Read(canonical);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(!invalid_alias.IsValid(), test_name, "a mismatched alias import must return invalid");
@@ -1723,29 +1923,32 @@ void TestMultipleReadersProduceAllWarEdges(TestSuite& suite) {
     int                        physical_buffer = 0;
     const auto                 buffer =
         graph.ImportBuffer("Shared", &physical_buffer, RenderGraph::BufferDesc{.byte_size = 64});
-    const auto reader_a = graph.AddPass(
+    const auto reader_a = graph.AddRecordPass(
         "ReaderA",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Read(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto reader_b = graph.AddPass(
+    const auto reader_b = graph.AddRecordPass(
         "ReaderB",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Read(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto writer = graph.AddPass(
+    const auto writer = graph.AddRecordPass(
         "Writer",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Write(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -1764,73 +1967,73 @@ void TestExplicitStateValidation(TestSuite& suite) {
 
     struct TextureCase {
         RenderGraph::AccessMode   access;
-        RenderGraph::TextureState state;
+        RenderGraph::TextureAccessType state;
         RenderGraph::QueueRole    queue;
-        RenderGraph::PipelineType pipeline;
-        bool                      valid;
+        RenderGraph::GpuWorkType  work;
+        bool                     valid;
     };
     const std::vector<TextureCase> texture_cases{
         {RenderGraph::AccessMode::Read,
-         RenderGraph::TextureState::Sampled,
+         RenderGraph::TextureAccessType::Sampled,
          RenderGraph::QueueRole::Graphics,
-         RenderGraph::PipelineType::Graphics,
+         RenderGraph::GpuWorkType::Graphics,
          true},
         {RenderGraph::AccessMode::Write,
-         RenderGraph::TextureState::RenderTarget,
+         RenderGraph::TextureAccessType::ColorAttachment,
          RenderGraph::QueueRole::Graphics,
-         RenderGraph::PipelineType::Graphics,
+         RenderGraph::GpuWorkType::Graphics,
          true},
         {RenderGraph::AccessMode::ReadWrite,
-         RenderGraph::TextureState::UnorderedAccess,
+         RenderGraph::TextureAccessType::Storage,
          RenderGraph::QueueRole::Compute,
-         RenderGraph::PipelineType::Compute,
+         RenderGraph::GpuWorkType::Compute,
          true},
         {RenderGraph::AccessMode::Read,
-         RenderGraph::TextureState::TransferSource,
+         RenderGraph::TextureAccessType::TransferSource,
          RenderGraph::QueueRole::Copy,
-         RenderGraph::PipelineType::Copy,
+         RenderGraph::GpuWorkType::Transfer,
          true},
         {RenderGraph::AccessMode::Write,
-         RenderGraph::TextureState::Sampled,
+         RenderGraph::TextureAccessType::Sampled,
          RenderGraph::QueueRole::Graphics,
-         RenderGraph::PipelineType::Graphics,
+         RenderGraph::GpuWorkType::Graphics,
          false},
         {RenderGraph::AccessMode::Read,
-         RenderGraph::TextureState::TransferDestination,
+         RenderGraph::TextureAccessType::TransferDestination,
          RenderGraph::QueueRole::Copy,
-         RenderGraph::PipelineType::Copy,
+         RenderGraph::GpuWorkType::Transfer,
          false},
         {RenderGraph::AccessMode::Read,
-         RenderGraph::TextureState::RenderTarget,
+         RenderGraph::TextureAccessType::ColorAttachment,
          RenderGraph::QueueRole::Graphics,
-         RenderGraph::PipelineType::Graphics,
+         RenderGraph::GpuWorkType::Graphics,
          false},
         {RenderGraph::AccessMode::Read,
-         RenderGraph::TextureState::Automatic,
+         RenderGraph::TextureAccessType::Unspecified,
          RenderGraph::QueueRole::Graphics,
-         RenderGraph::PipelineType::Graphics,
+         RenderGraph::GpuWorkType::Graphics,
          false},
         {RenderGraph::AccessMode::Read,
-         RenderGraph::TextureState::Sampled,
+         RenderGraph::TextureAccessType::Sampled,
          RenderGraph::QueueRole::Copy,
-         RenderGraph::PipelineType::Copy,
+         RenderGraph::GpuWorkType::Transfer,
          false},
         {RenderGraph::AccessMode::Write,
-         RenderGraph::TextureState::RenderTarget,
+         RenderGraph::TextureAccessType::ColorAttachment,
          RenderGraph::QueueRole::Compute,
-         RenderGraph::PipelineType::Compute,
+         RenderGraph::GpuWorkType::Compute,
          false},
     };
 
-    for (uint32_t index = 0; index < texture_cases.size(); ++index) {
+    for (Moer::uint32 index = 0; index < texture_cases.size(); ++index) {
         const auto& current = texture_cases[index];
         RenderGraph graph("TextureStateCase");
         int         physical = 0;
         const auto  texture = graph.ImportTexture("Texture", &physical, RenderGraph::TextureDesc{});
-        graph.AddPass(
+        graph.AddRecordPass(
             "Access",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(current.queue, current.pipeline);
+                builder.ExecuteOn(current.queue, current.work);
                 switch (current.access) {
                     case RenderGraph::AccessMode::Read:
                         builder.Read(texture, current.state);
@@ -1845,7 +2048,8 @@ void TestExplicitStateValidation(TestSuite& suite) {
                         break;
                 }
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         suite.Check(
             graph.Compile() == current.valid,
@@ -1856,53 +2060,53 @@ void TestExplicitStateValidation(TestSuite& suite) {
 
     struct BufferCase {
         RenderGraph::AccessMode  access;
-        RenderGraph::BufferState state;
+        RenderGraph::BufferAccessType state;
         RenderGraph::QueueRole   queue;
-        RenderGraph::PipelineType pipeline;
+        RenderGraph::GpuWorkType work;
         bool                     valid;
     };
     const std::vector<BufferCase> buffer_cases{
         {RenderGraph::AccessMode::Read,
-         RenderGraph::BufferState::ShaderResource,
+         RenderGraph::BufferAccessType::ShaderRead,
          RenderGraph::QueueRole::Compute,
-         RenderGraph::PipelineType::Compute,
+         RenderGraph::GpuWorkType::Compute,
          true},
         {RenderGraph::AccessMode::Write,
-         RenderGraph::BufferState::TransferDestination,
+         RenderGraph::BufferAccessType::TransferDestination,
          RenderGraph::QueueRole::Copy,
-         RenderGraph::PipelineType::Copy,
+         RenderGraph::GpuWorkType::Transfer,
          true},
         {RenderGraph::AccessMode::Read,
-         RenderGraph::BufferState::VertexBuffer,
+         RenderGraph::BufferAccessType::VertexBuffer,
          RenderGraph::QueueRole::Graphics,
-         RenderGraph::PipelineType::Graphics,
+         RenderGraph::GpuWorkType::Graphics,
          true},
         {RenderGraph::AccessMode::Write,
-         RenderGraph::BufferState::ShaderResource,
+         RenderGraph::BufferAccessType::ShaderRead,
          RenderGraph::QueueRole::Compute,
-         RenderGraph::PipelineType::Compute,
+         RenderGraph::GpuWorkType::Compute,
          false},
         {RenderGraph::AccessMode::Read,
-         RenderGraph::BufferState::AccelerationStructureWrite,
+         RenderGraph::BufferAccessType::AccelerationStructureWrite,
          RenderGraph::QueueRole::Compute,
-         RenderGraph::PipelineType::RayTracing,
+         RenderGraph::GpuWorkType::RayTracing,
          false},
         {RenderGraph::AccessMode::Read,
-         RenderGraph::BufferState::VertexBuffer,
+         RenderGraph::BufferAccessType::VertexBuffer,
          RenderGraph::QueueRole::Compute,
-         RenderGraph::PipelineType::Compute,
+         RenderGraph::GpuWorkType::Compute,
          false},
     };
 
-    for (uint32_t index = 0; index < buffer_cases.size(); ++index) {
+    for (Moer::uint32 index = 0; index < buffer_cases.size(); ++index) {
         const auto& current = buffer_cases[index];
         RenderGraph graph("BufferStateCase");
         int         physical = 0;
         const auto  buffer = graph.ImportBuffer("Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 64});
-        graph.AddPass(
+        graph.AddRecordPass(
             "Access",
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(current.queue, current.pipeline);
+                builder.ExecuteOn(current.queue, current.work);
                 switch (current.access) {
                     case RenderGraph::AccessMode::Read:
                         builder.Read(buffer, current.state);
@@ -1917,7 +2121,8 @@ void TestExplicitStateValidation(TestSuite& suite) {
                         break;
                 }
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         suite.Check(
             graph.Compile() == current.valid,
@@ -1935,17 +2140,18 @@ void TestSameStateMemoryDependencies(TestSuite& suite) {
                                   RenderGraph::BufferHandle buffer,
                                   RenderGraph::AccessMode  mode
                               ) {
-        return graph.AddPass(
+        return graph.AddRecordPass(
             name,
             [=](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+                builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
                 if (mode == RenderGraph::AccessMode::Read) {
-                    builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+                    builder.Read(buffer, RenderGraph::BufferAccessType::Storage);
                 } else {
-                    builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+                    builder.Write(buffer, RenderGraph::BufferAccessType::Storage);
                 }
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
     };
 
@@ -1955,7 +2161,7 @@ void TestSameStateMemoryDependencies(TestSuite& suite) {
         const auto  buffer = graph.ImportBuffer("Uav", &physical, RenderGraph::BufferDesc{.byte_size = 64});
         graph.SetInitialState(
             buffer,
-            RenderGraph::BufferState::UnorderedAccess,
+            RenderGraph::BufferAccessType::Storage,
             RenderGraph::QueueRole::Compute,
             RenderGraph::AccessMode::Read
         );
@@ -1977,7 +2183,7 @@ void TestSameStateMemoryDependencies(TestSuite& suite) {
     const auto  buffer = read_graph.ImportBuffer("Uav", &physical, RenderGraph::BufferDesc{.byte_size = 64});
     read_graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::BufferAccessType::Storage,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Read
     );
@@ -2001,16 +2207,17 @@ void TestImportAndExportBoundaries(TestSuite& suite) {
     );
     known_graph.SetInitialState(
         known,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    const auto known_read = known_graph.AddPass(
+    const auto known_read = known_graph.AddRecordPass(
         "Read",
         [known](RenderGraph::PassBuilder& builder) {
-            builder.Read(known, RenderGraph::BufferState::ShaderResource);
+            builder.Read(known, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(known_graph.Compile(), test_name, known_graph.GetCompileError());
     const auto& known_plan = known_graph.GetCompiledPlan();
@@ -2028,12 +2235,13 @@ void TestImportAndExportBoundaries(TestSuite& suite) {
     const auto  unknown = unknown_graph.ImportBuffer(
         "Unknown", &unknown_physical, RenderGraph::BufferDesc{.byte_size = 64}
     );
-    const auto unknown_read = unknown_graph.AddPass(
+    const auto unknown_read = unknown_graph.AddRecordPass(
         "Read",
         [unknown](RenderGraph::PassBuilder& builder) {
-            builder.Read(unknown, RenderGraph::BufferState::ShaderResource);
+            builder.Read(unknown, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(unknown_graph.Compile(), test_name, unknown_graph.GetCompileError());
     const auto& unknown_plan = unknown_graph.GetCompiledPlan();
@@ -2050,17 +2258,18 @@ void TestImportAndExportBoundaries(TestSuite& suite) {
     const auto  output = final_graph.CreateTransientBuffer(
         "Output", RenderGraph::BufferDesc{.byte_size = 64}
     );
-    const auto write = final_graph.AddPass(
+    const auto write = final_graph.AddRecordPass(
         "Write",
         [output](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Write(output, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Write(output, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     final_graph.Export(
         output,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -2082,22 +2291,23 @@ void TestImportAndExportBoundaries(TestSuite& suite) {
     );
     untouched_graph.SetInitialState(
         untouched,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     untouched_graph.Export(
         untouched,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    untouched_graph.AddPass(
+    untouched_graph.AddRecordPass(
         "SideEffect",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(untouched_graph.Compile(), test_name, untouched_graph.GetCompileError());
     const auto& untouched_plan = untouched_graph.GetCompiledPlan();
@@ -2114,7 +2324,7 @@ void TestImportAndExportBoundaries(TestSuite& suite) {
 void TestQueueTopologySynchronization(TestSuite& suite) {
     constexpr std::string_view test_name = "queue topology synchronization";
     auto check_case = [&](RenderGraph::QueueTopology topology,
-                          RenderGraph::TextureDesc::SharingMode sharing,
+                          RenderGraph::SharingMode sharing,
                           bool                                  queue_dependency,
                           bool                                  ownership,
                           bool                                  gpu_wait,
@@ -2123,21 +2333,23 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
         const auto  buffer = graph.CreateTransientBuffer(
             "Shared", RenderGraph::BufferDesc{.byte_size = 64, .sharing_mode = sharing}
         );
-        const auto producer = graph.AddPass(
+        const auto producer = graph.AddRecordPass(
             "Produce",
             [buffer](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-                builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+                builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+                builder.Write(buffer, RenderGraph::BufferAccessType::Storage);
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
-        const auto consumer = graph.AddPass(
+        const auto consumer = graph.AddRecordPass(
             "Consume",
             [buffer](RenderGraph::PassBuilder& builder) {
-                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics);
-                builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics);
+                builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const auto& plan = graph.GetCompiledPlan();
@@ -2157,7 +2369,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
 
     check_case(
         RenderGraph::QueueTopology::SingleQueue(),
-        RenderGraph::TextureDesc::SharingMode::Exclusive,
+        RenderGraph::SharingMode::Exclusive,
         false,
         false,
         false,
@@ -2169,7 +2381,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
             .compute  = {RenderGraph::QueueRole::Compute, 1, 0},
             .copy     = {RenderGraph::QueueRole::Copy, 2, 0},
         },
-        RenderGraph::TextureDesc::SharingMode::Exclusive,
+        RenderGraph::SharingMode::Exclusive,
         true,
         false,
         true,
@@ -2177,7 +2389,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
     );
     check_case(
         RenderGraph::QueueTopology::DedicatedQueues(),
-        RenderGraph::TextureDesc::SharingMode::Exclusive,
+        RenderGraph::SharingMode::Exclusive,
         true,
         true,
         true,
@@ -2185,7 +2397,7 @@ void TestQueueTopologySynchronization(TestSuite& suite) {
     );
     check_case(
         RenderGraph::QueueTopology::DedicatedQueues(),
-        RenderGraph::TextureDesc::SharingMode::Concurrent,
+        RenderGraph::SharingMode::Concurrent,
         true,
         false,
         true,
@@ -2202,46 +2414,49 @@ void TestExclusiveOwnershipUsesCurrentOwnerFamily(TestSuite& suite) {
         &physical,
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+            .sharing_mode = RenderGraph::SharingMode::Exclusive,
         }
     );
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    const auto graphics_read = graph.AddPass(
+    const auto graphics_read = graph.AddRecordPass(
         "GraphicsRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto compute_read = graph.AddPass(
+    const auto compute_read = graph.AddRecordPass(
         "ComputeRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto copy_read = graph.AddPass(
+    const auto copy_read = graph.AddRecordPass(
         "CopyRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
-            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::GpuWorkType::Transfer);
+            builder.Read(buffer, RenderGraph::BufferAccessType::TransferSource);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* transfer = FindBarrier(plan, buffer.Untyped(), compute_read, copy_read);
     suite.Check(
@@ -2298,31 +2513,34 @@ void TestOwnershipWriterChainUsesCurrentFrontier(TestSuite& suite) {
     const auto  buffer = graph.CreateTransientBuffer(
         "Shared", RenderGraph::BufferDesc{.byte_size = 64}
     );
-    const auto writer = graph.AddPass(
+    const auto writer = graph.AddRecordPass(
         "GraphicsWrite",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.Write(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto compute_read = graph.AddPass(
+    const auto compute_read = graph.AddRecordPass(
         "ComputeRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto copy_read = graph.AddPass(
+    const auto copy_read = graph.AddRecordPass(
         "CopyRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
-            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::GpuWorkType::Transfer);
+            builder.Read(buffer, RenderGraph::BufferAccessType::TransferSource);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* transfer = FindBarrier(plan, buffer.Untyped(), compute_read, copy_read);
     suite.Check(
@@ -2371,82 +2589,87 @@ void TestOwnershipWriterChainUsesCurrentFrontier(TestSuite& suite) {
     );
 }
 
-void TestAutomaticReadsPreserveAvailabilityFrontier(TestSuite& suite) {
-    constexpr std::string_view test_name = "automatic reads preserve availability frontier";
-    RenderGraph graph("AutomaticAvailability", RenderGraph::QueueTopology::DedicatedQueues());
+void TestUnspecifiedReadsPreserveAvailabilityFrontier(TestSuite& suite) {
+    constexpr std::string_view test_name = "unspecified reads preserve availability frontier";
+    RenderGraph                graph("UnspecifiedAvailability", RenderGraph::QueueTopology::DedicatedQueues());
     const auto  buffer = graph.CreateTransientBuffer(
         "Concurrent",
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+            .sharing_mode = RenderGraph::SharingMode::Concurrent,
         }
     );
-    const auto writer = graph.AddPass(
+    const auto writer = graph.AddRecordPass(
         "GraphicsWrite",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.Write(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto transition = graph.AddPass(
+    const auto transition = graph.AddRecordPass(
         "GraphicsTransition",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto automatic_compute_a = graph.AddPass(
-        "ComputeAutomaticA",
+    const auto unspecified_compute_a = graph.AddRecordPass(
+        "ComputeUnspecifiedA",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
             builder.Read(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
-        "GraphicsAutomatic",
+    graph.AddRecordPass(
+        "GraphicsUnspecified",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Read(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto automatic_compute_b = graph.AddPass(
-        "ComputeAutomaticB",
+    const auto unspecified_compute_b = graph.AddRecordPass(
+        "ComputeUnspecifiedB",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
             builder.Read(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
             plan,
             transition,
-            automatic_compute_a,
+            unspecified_compute_a,
             RenderGraph::EdgeReasonKind::StateTransition,
             buffer.Untyped()
         ) &&
             HasEdgeReason(
                 plan,
                 transition,
-                automatic_compute_b,
+                unspecified_compute_b,
                 RenderGraph::EdgeReasonKind::StateTransition,
                 buffer.Untyped()
             ) &&
             !HasEdgeReason(
                 plan,
                 writer,
-                automatic_compute_b,
+                unspecified_compute_b,
                 RenderGraph::EdgeReasonKind::ReadAfterWrite,
                 buffer.Untyped()
             ),
         test_name,
-        "Automatic reads must inherit, preserve, and not bypass the transition availability frontier"
+        "Unspecified reads must inherit, preserve, and not bypass the transition availability frontier"
     );
-    const uint32_t transition_syncs = static_cast<uint32_t>(std::count_if(
+    const Moer::uint32 transition_syncs = static_cast<Moer::uint32>(std::count_if(
         plan.queue_syncs.begin(),
         plan.queue_syncs.end(),
         [&](const RenderGraph::CompiledQueueSync& sync) {
@@ -2466,37 +2689,42 @@ void TestSameNativeReadsDependOnTransitionFrontier(TestSuite& suite) {
     const auto  buffer = graph.CreateTransientBuffer(
         "Buffer", RenderGraph::BufferDesc{.byte_size = 64}
     );
-    const auto writer = graph.AddPass(
+    const auto writer = graph.AddRecordPass(
         "Write",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.Write(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto transition = graph.AddPass(
+    const auto transition = graph.AddRecordPass(
         "TransitionRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto sibling_a = graph.AddPass(
+    const auto sibling_a = graph.AddRecordPass(
         "CompatibleReadA",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto sibling_b = graph.AddPass(
+    const auto sibling_b = graph.AddRecordPass(
         "CompatibleReadB",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
+    const auto dependency_levels = plan.BuildDependencyLevels();
     suite.Check(
         HasEdgeReason(
             plan,
@@ -2537,11 +2765,11 @@ void TestSameNativeReadsDependOnTransitionFrontier(TestSuite& suite) {
         "compatible reads must fan out from the transition frontier without restoring a stale writer"
     );
     suite.Check(
-        plan.dependency_levels.size() == 3 &&
-            DependencyLevelContains(plan.dependency_levels[0], writer) &&
-            DependencyLevelContains(plan.dependency_levels[1], transition) &&
-            DependencyLevelContains(plan.dependency_levels[2], sibling_a) &&
-            DependencyLevelContains(plan.dependency_levels[2], sibling_b),
+        dependency_levels.size() == 3 &&
+            DependencyLevelContains(dependency_levels[0], writer) &&
+            DependencyLevelContains(dependency_levels[1], transition) &&
+            DependencyLevelContains(dependency_levels[2], sibling_a) &&
+            DependencyLevelContains(dependency_levels[2], sibling_b),
         test_name,
         "the writer, transition, and compatible sibling reads must occupy three dependency levels"
     );
@@ -2570,27 +2798,29 @@ void TestOwnershipAcquireOrdersSiblingNativeQueue(TestSuite& suite) {
     );
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Copy,
         RenderGraph::AccessMode::Read
     );
-    const auto acquire = graph.AddPass(
+    const auto acquire = graph.AddRecordPass(
         "GraphicsAcquire",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto sibling_read = graph.AddPass(
+    const auto sibling_read = graph.AddRecordPass(
         "ComputeRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -2628,27 +2858,29 @@ void TestImportAvailabilityOrdersSiblingNativeQueue(TestSuite& suite) {
     );
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::BufferAccessType::Storage,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
-    const auto first_read = graph.AddPass(
+    const auto first_read = graph.AddRecordPass(
         "GraphicsRead",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Read(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto sibling_read = graph.AddPass(
+    const auto sibling_read = graph.AddRecordPass(
         "ComputeRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
             builder.Read(buffer);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* boundary = FindBarrier(plan, buffer.Untyped(), {}, first_read);
     suite.Check(
@@ -2676,7 +2908,7 @@ void TestImportAvailabilityOrdersSiblingNativeQueue(TestSuite& suite) {
             plan.queue_syncs.front().signal_pass == first_read &&
             plan.queue_syncs.front().wait_pass == sibling_read,
         test_name,
-        "an Automatic sibling access must wait for the pass that acquired external availability"
+        "an Unspecified sibling access must wait for the pass that acquired external availability"
     );
 }
 
@@ -2696,42 +2928,46 @@ void TestOwnershipTransitionCollapsesReaderFrontier(TestSuite& suite) {
     );
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Copy,
         RenderGraph::AccessMode::Read
     );
-    const auto old_owner_read = graph.AddPass(
+    const auto old_owner_read = graph.AddRecordPass(
         "CopyRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
-            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::GpuWorkType::Transfer);
+            builder.Read(buffer, RenderGraph::BufferAccessType::TransferSource);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto acquire = graph.AddPass(
+    const auto acquire = graph.AddRecordPass(
         "GraphicsAcquire",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto transition = graph.AddPass(
+    const auto transition = graph.AddRecordPass(
         "ComputeTransition",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Read(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto sibling_read = graph.AddPass(
+    const auto sibling_read = graph.AddRecordPass(
         "GraphicsSiblingRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.Read(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* barrier = FindBarrier(plan, buffer.Untyped(), acquire, transition);
     suite.Check(
@@ -2796,42 +3032,46 @@ void TestWriterAdvancesAvailabilityFrontiers(TestSuite& suite) {
     );
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    const auto transition = graph.AddPass(
+    const auto transition = graph.AddRecordPass(
         "GraphicsTransition",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.Read(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto writer = graph.AddPass(
+    const auto writer = graph.AddRecordPass(
         "ComputeWrite",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Write(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "GraphicsRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.Read(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto sibling_read = graph.AddPass(
+    const auto sibling_read = graph.AddRecordPass(
         "ComputeRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Read(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -2888,42 +3128,46 @@ void TestOwnershipEpochDoesNotReusePriorFamilySources(TestSuite& suite) {
     );
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    const auto graphics_epoch_zero = graph.AddPass(
+    const auto graphics_epoch_zero = graph.AddRecordPass(
         "GraphicsEpochZero",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto compute_epoch_zero = graph.AddPass(
+    const auto compute_epoch_zero = graph.AddRecordPass(
         "ComputeEpochZero",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto graphics_epoch_one = graph.AddPass(
+    const auto graphics_epoch_one = graph.AddRecordPass(
         "GraphicsEpochOne",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto compute_epoch_one = graph.AddPass(
+    const auto compute_epoch_one = graph.AddRecordPass(
         "ComputeEpochOne",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* transfer = FindBarrier(
         plan, buffer.Untyped(), graphics_epoch_one, compute_epoch_one
@@ -2965,23 +3209,25 @@ void TestTokenCrossQueueSyncHasNoOwnership(TestSuite& suite) {
     constexpr std::string_view test_name = "token cross-queue synchronization";
     RenderGraph graph("TokenSync", RenderGraph::QueueTopology::DedicatedQueues());
     const auto  token = graph.CreateTransientToken("Token");
-    const auto  producer = graph.AddPass(
+    const auto  producer = graph.AddRecordPass(
         "Produce",
         [token](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
             builder.Write(token);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto consumer = graph.AddPass(
+    const auto consumer = graph.AddRecordPass(
         "Consume",
         [token](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics);
             builder.Read(token);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -3003,30 +3249,33 @@ void TestBatchPairSyncDeduplication(TestSuite& suite) {
     RenderGraph graph("SyncDedup", RenderGraph::QueueTopology::DedicatedQueues());
     const auto  first = graph.CreateTransientBuffer("First", RenderGraph::BufferDesc{.byte_size = 64});
     const auto  second = graph.CreateTransientBuffer("Second", RenderGraph::BufferDesc{.byte_size = 64});
-    graph.AddPass(
+    graph.AddRecordPass(
         "ProduceFirst",
         [first](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Write(first, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Write(first, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "ProduceSecond",
         [second](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Write(second, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Write(second, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "ConsumeBoth",
         [first, second](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics);
-            builder.Read(first, RenderGraph::BufferState::ShaderResource);
-            builder.Read(second, RenderGraph::BufferState::ShaderResource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics);
+            builder.Read(first, RenderGraph::BufferAccessType::ShaderRead);
+            builder.Read(second, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
@@ -3043,47 +3292,51 @@ void TestBatchPairSyncDeduplication(TestSuite& suite) {
     );
 }
 
-void TestPipelineDomainsAndBarrierSources(TestSuite& suite) {
-    constexpr std::string_view test_name = "pipeline domains and barrier sources";
+void TestGpuWorkTypesAndBarrierSources(TestSuite& suite) {
+    constexpr std::string_view test_name = "GPU work types and barrier sources";
     RenderGraph graph("DomainsAndSources", RenderGraph::QueueTopology::DedicatedQueues());
     const auto buffer = graph.CreateTransientBuffer(
         "Shared",
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+            .sharing_mode = RenderGraph::SharingMode::Concurrent,
         }
     );
-    const auto producer = graph.AddPass(
+    const auto producer = graph.AddRecordPass(
         "Producer",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Write(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto reader_a = graph.AddPass(
+    const auto reader_a = graph.AddRecordPass(
         "ReaderA",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::RayTracing);
-            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::RayTracing);
+            builder.Read(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto reader_b = graph.AddPass(
+    const auto reader_b = graph.AddRecordPass(
         "ReaderB",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::RayTracing);
-            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::RayTracing);
+            builder.Read(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto writer = graph.AddPass(
+    const auto writer = graph.AddRecordPass(
         "Writer",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::RayTracing);
-            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::RayTracing);
+            builder.Write(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
@@ -3092,14 +3345,14 @@ void TestPipelineDomainsAndBarrierSources(TestSuite& suite) {
     suite.Check(
         producer_access != nullptr &&
             producer_access->domain == RenderGraph::ExecutionDomain{
-                RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute
+                RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute
             } &&
             reader_access != nullptr &&
             reader_access->domain == RenderGraph::ExecutionDomain{
-                RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::RayTracing
+                RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::RayTracing
             },
         test_name,
-        "compiled accesses must retain their declared pipeline domains"
+        "compiled accesses must retain their declared GPU work types"
     );
 
     const auto reader_a_barrier = std::find_if(
@@ -3108,12 +3361,12 @@ void TestPipelineDomainsAndBarrierSources(TestSuite& suite) {
         }
     );
     suite.Check(
-        reader_a_barrier != plan.barriers.end() && reader_a_barrier->src_domain.pipeline ==
-                                                          RenderGraph::PipelineType::Compute &&
-            reader_a_barrier->dst_domain.pipeline == RenderGraph::PipelineType::RayTracing &&
+        reader_a_barrier != plan.barriers.end() && reader_a_barrier->src_domain.work ==
+                                                          RenderGraph::GpuWorkType::Compute &&
+            reader_a_barrier->dst_domain.work == RenderGraph::GpuWorkType::RayTracing &&
             HasBarrierSource(*reader_a_barrier, producer, RenderGraph::AccessMode::Write),
         test_name,
-        "a fan-out barrier must retain the producer source and both pipeline scopes"
+        "a fan-out barrier must retain the producer source and both work categories"
     );
 
     const auto fan_in = std::find_if(
@@ -3138,76 +3391,80 @@ void TestPartialRangeBarrier(TestSuite& suite) {
     const auto  buffer = graph.ImportBuffer("Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 128});
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    const auto write = graph.AddPass(
+    const auto write = graph.AddRecordPass(
         "WriteMiddle",
         [buffer](RenderGraph::PassBuilder& builder) {
             builder.Write(
                 buffer,
-                RenderGraph::BufferState::UnorderedAccess,
+                RenderGraph::BufferAccessType::Storage,
                 RenderGraph::BufferRange{.offset = 32, .size = 32}
             );
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto* barrier = FindBarrier(graph.GetCompiledPlan(), buffer.Untyped(), {}, write);
     suite.Check(
-        barrier != nullptr && barrier->range.kind == RenderGraph::ResourceKind::Buffer &&
-            barrier->range.buffer == RenderGraph::BufferRange{.offset = 32, .size = 32},
+        barrier != nullptr && RenderGraph::GetRangeKind(barrier->range) == RenderGraph::ResourceKind::Buffer &&
+            std::get<RenderGraph::BufferRange>(barrier->range) == RenderGraph::BufferRange{.offset = 32, .size = 32},
         test_name,
         "a partial access must emit one barrier for exactly its canonical byte interval"
     );
 }
 
-void TestMixedQueueExecuteRemainsDeclarationOrder(TestSuite& suite) {
+void TestMixedQueuePreservesDeclarationTieBreak(TestSuite& suite) {
     constexpr std::string_view test_name = "mixed-queue serial execution order";
     RenderGraph graph("MixedQueueExecute", RenderGraph::QueueTopology::DedicatedQueues());
     std::vector<int> callbacks;
-    const auto first = graph.AddPass(
+    const auto first = graph.AddRecordPass(
         "Compute",
         [](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute)
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute)
                 .SideEffect();
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             callbacks.push_back(1);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto second = graph.AddPass(
+    const auto second = graph.AddRecordPass(
         "Graphics",
         [](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
                 .SideEffect();
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             callbacks.push_back(2);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto third = graph.AddPass(
+    const auto third = graph.AddRecordPass(
         "Copy",
         [](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy).SideEffect();
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::GpuWorkType::Transfer).SideEffect();
         },
-        [&] {
+        [&](Moer::Render::CommandList&) {
             callbacks.push_back(3);
-        }
+        },
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     suite.Check(
         graph.GetCompiledPlan().execution_order ==
             std::vector<RenderGraph::PassHandle>{first, second, third},
         test_name,
-        "mixed logical queues must not change the production execution order"
+        "queue selection alone must not change the declaration-order tie-break"
     );
-    suite.Check(graph.Execute(), test_name, graph.GetCompileError());
+    suite.Check(RecordGraphForTest(graph), test_name, graph.GetCompileError());
     suite.Check(
         callbacks == std::vector<int>{1, 2, 3},
         test_name,
-        "mixed-queue callbacks must still execute serially in declaration order"
+        "mixed-queue serial callbacks must follow the compiled order"
     );
 }
 
@@ -3217,37 +3474,39 @@ void TestMixedQueueExecuteRemainsDeclarationOrder(TestSuite& suite) {
         "Output",
         RenderGraph::BufferDesc{
             .byte_size = 128,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Exclusive,
+            .sharing_mode = RenderGraph::SharingMode::Exclusive,
         }
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "CopyProduce",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::GpuWorkType::Transfer);
             builder.Write(
                 buffer,
-                RenderGraph::BufferState::TransferDestination,
+                RenderGraph::BufferAccessType::TransferDestination,
                 RenderGraph::BufferRange{.offset = 0, .size = 64}
             );
             builder.Write(
                 buffer,
-                RenderGraph::BufferState::TransferDestination,
+                RenderGraph::BufferAccessType::TransferDestination,
                 RenderGraph::BufferRange{.offset = 64, .size = 64}
             );
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "ComputeConsume",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -3264,7 +3523,7 @@ void TestStageTwoDumpDeterminism(TestSuite& suite) {
         Contains(first, "barrier_plan=explicit") &&
             Contains(first, "sync_plan=queue-dag external_endpoints=unbound") &&
             Contains(first, "barriers:\n") && Contains(first, "queue_batches:\n") &&
-            Contains(first, "queue_syncs:\n") && Contains(first, "pipeline=compute") &&
+            Contains(first, "queue_syncs:\n") && Contains(first, "work=compute") &&
             Contains(first, "flags=[execution,memory,transition,queue,ownership"),
         test_name,
         "the deterministic dump must retain state, domain, queue, and ownership decisions"
@@ -3285,30 +3544,33 @@ void TestBarrierSourcesIgnoreUnrelatedLastRead(TestSuite& suite) {
         "Concurrent",
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+            .sharing_mode = RenderGraph::SharingMode::Concurrent,
         }
     );
-    const auto writer = graph.AddPass(
+    const auto writer = graph.AddRecordPass(
         "Writer",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.Write(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto compute_read = graph.AddPass(
+    const auto compute_read = graph.AddRecordPass(
         "ComputeRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Read(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto graphics_read = graph.AddPass(
+    const auto graphics_read = graph.AddRecordPass(
         "GraphicsRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.Read(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
@@ -3344,37 +3606,40 @@ void TestFanInBarrierPlacementCoversEverySourceBatch(TestSuite& suite) {
         &physical,
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+            .sharing_mode = RenderGraph::SharingMode::Concurrent,
         }
     );
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Copy,
         RenderGraph::AccessMode::Read
     );
-    const auto copy_read = graph.AddPass(
+    const auto copy_read = graph.AddRecordPass(
         "CopyRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
-            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::GpuWorkType::Transfer);
+            builder.Read(buffer, RenderGraph::BufferAccessType::TransferSource);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto graphics_read = graph.AddPass(
+    const auto graphics_read = graph.AddRecordPass(
         "GraphicsRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::TransferSource);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto compute_write = graph.AddPass(
+    const auto compute_write = graph.AddRecordPass(
         "ComputeWrite",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Write(buffer, RenderGraph::BufferState::UnorderedAccess);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Write(buffer, RenderGraph::BufferAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
@@ -3392,7 +3657,7 @@ void TestFanInBarrierPlacementCoversEverySourceBatch(TestSuite& suite) {
     if (barrier_it == plan.barriers.end()) {
         return;
     }
-    const uint32_t barrier_index = static_cast<uint32_t>(barrier_it - plan.barriers.begin());
+    const Moer::uint32 barrier_index = static_cast<Moer::uint32>(barrier_it - plan.barriers.begin());
     suite.Check(
         plan.queue_batches.size() == 3 &&
             std::find(
@@ -3408,7 +3673,7 @@ void TestFanInBarrierPlacementCoversEverySourceBatch(TestSuite& suite) {
         test_name,
         "every cross-native source batch must receive the split-release placement hint"
     );
-    const uint32_t associated_syncs = static_cast<uint32_t>(std::count_if(
+    const Moer::uint32 associated_syncs = static_cast<Moer::uint32>(std::count_if(
         plan.queue_syncs.begin(),
         plan.queue_syncs.end(),
         [&](const RenderGraph::CompiledQueueSync& sync) {
@@ -3431,22 +3696,23 @@ void TestUntouchedBoundaryWriteRequiresMemoryDependency(TestSuite& suite) {
     const auto  buffer = graph.ImportBuffer("Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 64});
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::BufferAccessType::Storage,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
     graph.Export(
         buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    graph.AddPass(
+    graph.AddRecordPass(
         "SideEffect",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto* barrier = FindBarrier(graph.GetCompiledPlan(), buffer.Untyped(), {}, {});
@@ -3466,43 +3732,41 @@ void TestShaderReadStatesRequireTransition(TestSuite& suite) {
         graph.ImportTexture("Texture", &physical, RenderGraph::TextureDesc{});
     graph.SetInitialState(
         texture,
-        RenderGraph::TextureState::ShaderResource,
+        RenderGraph::TextureAccessType::Storage,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
-    const auto storage_read = graph.AddPass(
+    const auto storage_read = graph.AddRecordPass(
         "StorageRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(texture, RenderGraph::TextureState::ShaderResource);
+            builder.Read(texture, RenderGraph::TextureAccessType::Storage);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto sampled_read = graph.AddPass(
+    const auto sampled_read = graph.AddRecordPass(
         "SampledRead",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(texture, RenderGraph::TextureState::Sampled);
+            builder.Read(texture, RenderGraph::TextureAccessType::Sampled);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     graph.Export(
         texture,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto* barrier =
         FindBarrier(plan, texture.Untyped(), storage_read, sampled_read);
     suite.Check(
         barrier != nullptr && barrier->state_transition &&
-            barrier->before_state == RenderGraph::ResourceState::Texture(
-                RenderGraph::TextureState::ShaderResource
-            ) &&
-            barrier->after_state == RenderGraph::ResourceState::Texture(
-                RenderGraph::TextureState::Sampled
-            ) &&
+            barrier->before_state == RenderGraph::ResourceState{RenderGraph::TextureAccessType::Storage} &&
+            barrier->after_state == RenderGraph::ResourceState{RenderGraph::TextureAccessType::Sampled} &&
             HasEdgeReason(
                 plan,
                 storage_read,
@@ -3524,40 +3788,43 @@ void TestReadTransitionWaitsForEveryActiveReader(TestSuite& suite) {
         &physical,
         RenderGraph::BufferDesc{
             .byte_size    = 64,
-            .sharing_mode = RenderGraph::TextureDesc::SharingMode::Concurrent,
+            .sharing_mode = RenderGraph::SharingMode::Concurrent,
         }
     );
     graph.SetInitialState(
         buffer,
-        RenderGraph::BufferState::TransferSource,
+        RenderGraph::BufferAccessType::TransferSource,
         RenderGraph::QueueRole::Copy,
         RenderGraph::AccessMode::Read
     );
-    const auto copy_read = graph.AddPass(
+    const auto copy_read = graph.AddRecordPass(
         "CopyRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::PipelineType::Copy);
-            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Copy, RenderGraph::GpuWorkType::Transfer);
+            builder.Read(buffer, RenderGraph::BufferAccessType::TransferSource);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto graphics_read = graph.AddPass(
+    const auto graphics_read = graph.AddRecordPass(
         "GraphicsRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.Read(buffer, RenderGraph::BufferState::TransferSource);
+            builder.Read(buffer, RenderGraph::BufferAccessType::TransferSource);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    const auto compute_read = graph.AddPass(
+    const auto compute_read = graph.AddRecordPass(
         "ComputeRead",
         [buffer](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute);
-            builder.Read(buffer, RenderGraph::BufferState::ShaderResource);
+            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+            builder.Read(buffer, RenderGraph::BufferAccessType::ShaderRead);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     const auto barrier = std::find_if(
         plan.barriers.begin(),
@@ -3600,21 +3867,22 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
     );
     read_graph.SetInitialState(
         read_buffer,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         RenderGraph::BufferRange{.offset = 0, .size = 64}
     );
-    read_graph.AddPass(
+    read_graph.AddRecordPass(
         "InvalidRead",
         [read_buffer](RenderGraph::PassBuilder& builder) {
             builder.Read(
                 read_buffer,
-                RenderGraph::BufferState::ShaderResource,
+                RenderGraph::BufferAccessType::ShaderRead,
                 RenderGraph::BufferRange{.offset = 0, .size = 64}
             );
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !read_graph.Compile() && Contains(read_graph.GetCompileError(), "read before its first producer"),
@@ -3628,25 +3896,26 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
     );
     write_graph.SetInitialState(
         write_buffer,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         RenderGraph::BufferRange{.offset = 0, .size = 64}
     );
-    const auto write = write_graph.AddPass(
+    const auto write = write_graph.AddRecordPass(
         "Initialize",
         [write_buffer](RenderGraph::PassBuilder& builder) {
             builder.Write(
                 write_buffer,
-                RenderGraph::BufferState::UnorderedAccess,
+                RenderGraph::BufferAccessType::Storage,
                 RenderGraph::BufferRange{.offset = 0, .size = 64}
             );
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     write_graph.Export(
         write_buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read,
         RenderGraph::BufferRange{.offset = 0, .size = 64}
@@ -3674,24 +3943,25 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
     );
     read_export_graph.SetInitialState(
         read_export_buffer,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
-        RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferRange{}
     );
     read_export_graph.Export(
         read_export_buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read,
         RenderGraph::BufferRange{.offset = 0, .size = 64}
     );
-    read_export_graph.AddPass(
+    read_export_graph.AddRecordPass(
         "SideEffect",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !read_export_graph.Compile() &&
@@ -3706,24 +3976,25 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
     );
     write_export_graph.SetInitialState(
         write_export_buffer,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
-        RenderGraph::BufferRange::Whole()
+        RenderGraph::BufferRange{}
     );
     write_export_graph.Export(
         write_export_buffer,
-        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::BufferAccessType::Storage,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::Write,
         RenderGraph::BufferRange{.offset = 0, .size = 64}
     );
-    write_export_graph.AddPass(
+    write_export_graph.AddRecordPass(
         "SideEffect",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         write_export_graph.Compile(),
@@ -3738,9 +4009,9 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
             write_export_barrier->discard_previous_contents &&
             write_export_barrier->state_transition && write_export_barrier->memory_dependency &&
             write_export_barrier->after_access == RenderGraph::AccessMode::Write &&
-            write_export_barrier->range.kind == RenderGraph::ResourceKind::Buffer &&
-            write_export_barrier->range.buffer.offset == 0 &&
-            write_export_barrier->range.buffer.size == 64 &&
+            RenderGraph::GetRangeKind(write_export_barrier->range) == RenderGraph::ResourceKind::Buffer &&
+            std::get<RenderGraph::BufferRange>(write_export_barrier->range).offset == 0 &&
+            std::get<RenderGraph::BufferRange>(write_export_barrier->range).size == 64 &&
             write_export_graph.GetCompiledPlan().state_plan_complete,
         test_name,
         "a write-only export of Undefined contents must remain an explicit discard boundary"
@@ -3752,24 +4023,25 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
     );
     read_write_export_graph.SetInitialState(
         read_write_export_buffer,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         RenderGraph::BufferRange{.offset = 0, .size = 64}
     );
     read_write_export_graph.Export(
         read_write_export_buffer,
-        RenderGraph::BufferState::UnorderedAccess,
+        RenderGraph::BufferAccessType::Storage,
         RenderGraph::QueueRole::Compute,
         RenderGraph::AccessMode::ReadWrite,
         RenderGraph::BufferRange{.offset = 0, .size = 64}
     );
-    read_write_export_graph.AddPass(
+    read_write_export_graph.AddRecordPass(
         "SideEffect",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         !read_write_export_graph.Compile() &&
@@ -3784,24 +4056,25 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
     );
     disjoint_export_graph.SetInitialState(
         disjoint_export_buffer,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         RenderGraph::BufferRange{.offset = 0, .size = 64}
     );
     disjoint_export_graph.Export(
         disjoint_export_buffer,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read,
         RenderGraph::BufferRange{.offset = 64, .size = 64}
     );
-    disjoint_export_graph.AddPass(
+    disjoint_export_graph.AddRecordPass(
         "SideEffect",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         disjoint_export_graph.Compile(),
@@ -3816,18 +4089,19 @@ void TestUndefinedImportMustBeInitializedBeforeRead(TestSuite& suite) {
     );
     legacy_export_graph.SetInitialState(
         legacy_export_buffer,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None,
         RenderGraph::BufferRange{.offset = 0, .size = 64}
     );
     legacy_export_graph.Export(legacy_export_buffer);
-    legacy_export_graph.AddPass(
+    legacy_export_graph.AddRecordPass(
         "SideEffect",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         legacy_export_graph.Compile(),
@@ -3843,12 +4117,13 @@ void TestUnknownExportMakesStatePlanIncomplete(TestSuite& suite) {
     int         physical = 0;
     const auto  buffer = graph.ImportBuffer("Buffer", &physical, RenderGraph::BufferDesc{.byte_size = 64});
     graph.Export(buffer);
-    graph.AddPass(
+    graph.AddRecordPass(
         "SideEffect",
         [](RenderGraph::PassBuilder& builder) {
             builder.SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     suite.Check(
@@ -3861,25 +4136,26 @@ void TestUnknownExportMakesStatePlanIncomplete(TestSuite& suite) {
 void TestMergedAccessStateDeterminesPlanCompleteness(TestSuite& suite) {
     constexpr std::string_view test_name = "merged access state completeness";
 
-    const auto check_whole_resource_merge = [&](bool automatic_first) {
+    const auto check_whole_resource_merge = [&](bool unspecified_first) {
         RenderGraph graph(
-            automatic_first ? "AutomaticThenExplicitState" : "ExplicitThenAutomaticState"
+            unspecified_first ? "UnspecifiedThenExplicitState" : "ExplicitThenUnspecifiedState"
         );
         const auto texture = graph.CreateTransientTexture(
             "Color", RenderGraph::TextureDesc{.mip_count = 1, .layer_count = 1}
         );
-        const auto pass = graph.AddPass(
+        const auto pass = graph.AddRecordPass(
             "WriteColor",
             [=](RenderGraph::PassBuilder& builder) {
-                if (automatic_first) {
+                if (unspecified_first) {
                     builder.Write(texture);
-                    builder.Write(texture, RenderGraph::TextureState::RenderTarget);
+                    builder.Write(texture, RenderGraph::TextureAccessType::ColorAttachment);
                 } else {
-                    builder.Write(texture, RenderGraph::TextureState::RenderTarget);
+                    builder.Write(texture, RenderGraph::TextureAccessType::ColorAttachment);
                     builder.Write(texture);
                 }
             },
-            [] {}
+            [](Moer::Render::CommandList&) {},
+            RenderGraph::PassRecordPolicy::Serial
         );
 
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
@@ -3888,9 +4164,7 @@ void TestMergedAccessStateDeterminesPlanCompleteness(TestSuite& suite) {
         suite.Check(
             plan.state_plan_complete && plan.accesses.size() == 1 && access != nullptr &&
                 access->mode == RenderGraph::AccessMode::Write &&
-                access->state == RenderGraph::ResourceState::Texture(
-                                     RenderGraph::TextureState::RenderTarget
-                                 ),
+                access->state == RenderGraph::ResourceState{RenderGraph::TextureAccessType::ColorAttachment},
             test_name,
             "an explicit declaration must canonicalize the same atomic cell regardless of order"
         );
@@ -3899,47 +4173,50 @@ void TestMergedAccessStateDeterminesPlanCompleteness(TestSuite& suite) {
     check_whole_resource_merge(true);
     check_whole_resource_merge(false);
 
-    RenderGraph disjoint_graph("DisjointAutomaticAndExplicitStates");
+    RenderGraph disjoint_graph("DisjointUnspecifiedAndExplicitStates");
     const auto  disjoint_texture = disjoint_graph.CreateTransientTexture(
         "MipChain", RenderGraph::TextureDesc{.mip_count = 2, .layer_count = 1}
     );
-    disjoint_graph.AddPass(
+    disjoint_graph.AddRecordPass(
         "WriteMips",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(
                 disjoint_texture,
-                RenderGraph::TextureState::RenderTarget,
+                RenderGraph::TextureAccessType::ColorAttachment,
                 RenderGraph::TextureRange::Mips(0, 1)
             );
             builder.Write(disjoint_texture, RenderGraph::TextureRange::Mips(1, 1));
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(disjoint_graph.Compile(), test_name, disjoint_graph.GetCompileError());
     suite.Check(
         !disjoint_graph.GetCompiledPlan().state_plan_complete,
         test_name,
-        "an automatic declaration on a disjoint atomic cell must keep the plan incomplete"
+        "an unspecified declaration on a disjoint atomic cell must keep the plan incomplete"
     );
 
-    RenderGraph history_graph("AutomaticHistoryThenExplicitState");
+    RenderGraph history_graph("UnspecifiedHistoryThenExplicitState");
     const auto  history_texture = history_graph.CreateTransientTexture(
         "History", RenderGraph::TextureDesc{.mip_count = 1, .layer_count = 1}
     );
-    history_graph.AddPass(
-        "AutomaticWrite",
+    history_graph.AddRecordPass(
+        "UnspecifiedWrite",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Write(history_texture);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
-    history_graph.AddPass(
+    history_graph.AddRecordPass(
         "ExplicitWrite",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(history_texture, RenderGraph::TextureState::RenderTarget);
+            builder.Write(history_texture, RenderGraph::TextureAccessType::ColorAttachment);
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(history_graph.Compile(), test_name, history_graph.GetCompileError());
@@ -3948,6 +4225,26 @@ void TestMergedAccessStateDeterminesPlanCompleteness(TestSuite& suite) {
         test_name,
         "a later explicit state must not hide an unknown state from an earlier pass"
     );
+}
+
+void TestInvalidRecordingPolicyFails(TestSuite& suite) {
+    RenderGraph graph("InvalidRecordingPolicy");
+    graph.AddRecordPass(
+        "Invalid", {}, [](Moer::Render::CommandList&) {},
+        static_cast<RenderGraph::PassRecordPolicy>(255)
+    );
+    suite.Check(!graph.Compile() && Contains(graph.GetCompileError(), "invalid recording policy"),
+                "invalid recording policy", "an invalid policy must fail before scheduling");
+}
+
+void TestZeroRecordingWorkloadFails(TestSuite& suite) {
+    RenderGraph graph("ZeroRecordingWorkload");
+    int record_calls = 0;
+    graph.AddRecordPass("Invalid", [](RenderGraph::PassBuilder& pass) {
+        pass.SideEffect().RecordWorkload(0);
+    }, [&](Moer::Render::CommandList&) { ++record_calls; }, RenderGraph::PassRecordPolicy::ParallelAllowed);
+    suite.Check(!graph.Compile() && Contains(graph.GetCompileError(), "positive units") && record_calls == 0,
+        "zero recording workload", "zero workload must fail declaration before scheduling callbacks");
 }
 
 void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
@@ -3963,8 +4260,7 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
             builder.Write(hiz_token).SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::ParallelRecordEligible,
-        8
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const auto shadow = graph.AddRecordPass(
         "DirectionalShadowMask",
@@ -3972,15 +4268,15 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
             builder.Write(shadow_token).SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::ParallelRecordEligible,
-        4
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
-    const auto commit = graph.AddPass(
+    const auto commit = graph.AddRecordPass(
         "CommitHiZHistory",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(hiz_token).DependsOn(hiz).SideEffect();
         },
-        [] {}
+        [](Moer::Render::CommandList&) {},
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
@@ -3995,23 +4291,21 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
     );
     suite.Check(
         plan.frontend_record_units.size() == 3 &&
-            plan.frontend_record_units[0].record_execution_class ==
-                RenderGraph::PassExecutionClass::ParallelRecordEligible &&
-            plan.frontend_record_units[1].record_execution_class ==
-                RenderGraph::PassExecutionClass::ParallelRecordEligible &&
-            plan.frontend_record_units[2].record_execution_class ==
-                RenderGraph::PassExecutionClass::MainThread &&
-            plan.frontend_record_units[0].estimated_record_work == 8 &&
-            plan.frontend_record_units[1].estimated_record_work == 4,
+            plan.frontend_record_units[0].record_policy ==
+                RenderGraph::PassRecordPolicy::ParallelAllowed &&
+            plan.frontend_record_units[1].record_policy ==
+                RenderGraph::PassRecordPolicy::ParallelAllowed &&
+            plan.frontend_record_units[2].record_policy ==
+                RenderGraph::PassRecordPolicy::Serial,
         test_name,
-        "recording class and workload must survive compilation"
+        "recording policy must survive compilation"
     );
+    const auto dependency_levels = plan.BuildDependencyLevels();
     suite.Check(
-        plan.frontend_record_units.size() == 3 &&
-            plan.frontend_record_units[0].dependency_level_index ==
-                plan.frontend_record_units[1].dependency_level_index &&
-            plan.frontend_record_units[2].dependency_level_index >
-                plan.frontend_record_units[0].dependency_level_index,
+        dependency_levels.size() == 2 &&
+            dependency_levels[0].passes ==
+                std::vector{plan.frontend_record_units[0].pass, plan.frontend_record_units[1].pass} &&
+            dependency_levels[1].passes == std::vector{plan.frontend_record_units[2].pass},
         test_name,
         "independent recording passes must share a dependency level while their consumer follows"
     );
@@ -4019,12 +4313,12 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
         plan.frontend_dispatch_groups.size() == 2 &&
             plan.frontend_dispatch_groups[0].first_unit == 0 &&
             plan.frontend_dispatch_groups[0].unit_count == 2 &&
-            plan.frontend_dispatch_groups[0].record_execution_class ==
-                RenderGraph::PassExecutionClass::ParallelRecordEligible &&
+            plan.frontend_dispatch_groups[0].record_policy ==
+                RenderGraph::PassRecordPolicy::ParallelAllowed &&
             plan.frontend_dispatch_groups[1].first_unit == 2 &&
             plan.frontend_dispatch_groups[1].unit_count == 1 &&
-            plan.frontend_dispatch_groups[1].record_execution_class ==
-                RenderGraph::PassExecutionClass::MainThread,
+            plan.frontend_dispatch_groups[1].record_policy ==
+                RenderGraph::PassRecordPolicy::Serial,
         test_name,
         "the compiler must precompute contiguous CPU recording dispatch groups"
     );
@@ -4032,179 +4326,52 @@ void TestRecordingBatchPlanAndClassification(TestSuite& suite) {
         Contains(graph.Dump(), "frontend_record_units:\n") &&
             Contains(
                 graph.Dump(),
-                "record=parallel-record native=parallel work=8 level=0"
+                "record=parallel-allowed native=parallel"
             ),
         test_name,
         "the deterministic dump must expose the executable CPU recording schedule"
     );
-    suite.Check(
-        !graph.Execute() && Contains(graph.GetCompileError(), "owned CommandLists"),
-        test_name,
-        "legacy serial Execute must reject record callbacks instead of sharing a CommandList"
-    );
-}
 
-void TestRecordingCallbackClassMismatchFails(TestSuite& suite) {
-    constexpr std::string_view test_name = "recording callback class mismatch";
-
-    RenderGraph execute_graph("ExecuteAsRecord");
-    execute_graph.AddPass(
-        "BadExecute",
-        [](RenderGraph::PassBuilder& builder) {
-            builder.SideEffect().ParallelRecord();
-        },
-        [] {}
-    );
-    suite.Check(
-        !execute_graph.Compile() &&
-            Contains(execute_graph.GetCompileError(), "cannot use a command-recording class"),
-        test_name,
-        "an execute callback cannot masquerade as a record callback"
-    );
-
-    RenderGraph record_graph("RecordAsMainThread");
-    record_graph.AddRecordPass(
-        "BadRecord",
-        [](RenderGraph::PassBuilder& builder) {
-            builder.SideEffect();
-        },
-        [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::MainThread
-    );
-    suite.Check(
-        !record_graph.Compile() &&
-            Contains(record_graph.GetCompileError(), "must use SerialRecord"),
-        test_name,
-        "a record callback must own a serial or parallel CommandList"
-    );
-}
-
-void TestExternalControlIsAnUnmanagedJoinBoundary(TestSuite& suite) {
-    constexpr std::string_view test_name = "external control join boundary";
-    RenderGraph                graph("ExternalControlBoundary");
-    const auto                 produced = graph.CreateTransientToken("Produced");
-    const auto                 released = graph.CreateTransientToken("Released");
-    std::vector<std::string>   events{};
-
-    graph.AddRecordPass(
-        "RecordBeforeExternal",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(produced).SideEffect();
-        },
-        [&](Moer::Render::CommandList&) { events.emplace_back("record"); },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
-    );
-    const auto external = graph.AddPass(
-        "External",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(produced).Write(released).SideEffect().ExternalControl();
-        },
-        [&] { events.emplace_back("external"); }
-    );
-    const auto managed = graph.AddPass(
-        "ManagedMain",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(released).DependsOn(external).SideEffect();
-        },
-        [&] { events.emplace_back("main"); }
-    );
-
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const auto& plan = graph.GetCompiledPlan();
-    suite.Check(
-        plan.frontend_record_units.size() == 3 &&
-            plan.frontend_record_units[1].record_execution_class ==
-                RenderGraph::PassExecutionClass::ExternalControl &&
-            Contains(graph.Dump(), "record=external-control"),
-        test_name,
-        "the compiler and dump must retain the explicit external-control policy"
-    );
-    suite.Check(
-        plan.queue_batches.size() == 3 &&
-            plan.queue_batches[0].passes ==
-                std::vector{plan.frontend_record_units[0].pass} &&
-            !plan.queue_batches[0].external_control &&
-            plan.queue_batches[1].passes == std::vector{external} &&
-            plan.queue_batches[1].external_control &&
-            plan.queue_batches[2].passes == std::vector{managed} &&
-            !plan.queue_batches[2].external_control &&
-            Contains(graph.Dump(), "external_control=true passes=[External]"),
-        test_name,
-        "external control must be a standalone queue batch that managed lowering cannot cross"
-    );
-
-    size_t published_groups = 0;
-    size_t managed_observers = 0;
-    const bool executed = graph.ExecuteFrontendRecordingPlan(
-        [&](const RenderGraph::ExecutedPassInfo& pass) {
-            ++managed_observers;
-            events.emplace_back(std::string("observer:") + std::string(pass.name));
-        },
-        {},
-        false,
-        [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
-            ++published_groups;
-            suite.Check(
-                sources.size() == 1 &&
-                    sources.front().completion.Status() ==
-                        Moer::Render::ERHIRecordingStatus::Pending,
-                test_name,
-                "recording ownership must be published before the producer completes"
-            );
-        }
-    );
-
-    suite.Check(executed, test_name, graph.GetCompileError());
-    suite.Check(
-        events == std::vector<std::string>{"record", "external", "main", "observer:ManagedMain"},
-        test_name,
-        "external control must join prior recording and bypass the managed-command observer"
-    );
-    suite.Check(
-        published_groups == 1 && managed_observers == 1,
-        test_name,
-        "only owned record batches are published and only managed main-thread passes are observed"
-    );
 }
 
 class FakeUiViewportResources final :
     public Moer::Render::UiViewportRenderResources {
 public:
-    explicit FakeUiViewportResources(uint64_t pending_slot) :
+    explicit FakeUiViewportResources(Moer::uint64 pending_slot) :
         pending_slot(pending_slot) {}
 
-    [[nodiscard]] uint64_t
+    [[nodiscard]] Moer::uint64
     GetPendingRecordingSlot() const noexcept override {
         return pending_slot;
     }
 
     [[nodiscard]] bool
-    IsPendingRecordingSlot(uint64_t slot) const noexcept override {
+    IsPendingRecordingSlot(Moer::uint64 slot) const noexcept override {
         return slot == pending_slot;
     }
 
-    void CommitRecordingSlot(uint64_t slot) noexcept override {
+    void CommitRecordingSlot(Moer::uint64 slot) noexcept override {
         if (slot == pending_slot) {
             ++pending_slot;
             ++commit_count;
         }
     }
 
-    [[nodiscard]] uint64_t PendingSlot() const {
+    [[nodiscard]] Moer::uint64 PendingSlot() const {
         return pending_slot;
     }
 
-    [[nodiscard]] uint32_t CommitCount() const {
+    [[nodiscard]] Moer::uint32 CommitCount() const {
         return commit_count;
     }
 
-    void SetPendingSlot(uint64_t slot) {
+    void SetPendingSlot(Moer::uint64 slot) {
         pending_slot = slot;
     }
 
 private:
-    uint64_t pending_slot = 0;
-    uint32_t commit_count = 0;
+    Moer::uint64 pending_slot = 0;
+    Moer::uint32 commit_count = 0;
 };
 
 class FakeUiDrawBackend final : public Moer::Render::UiDrawFrameBackend {
@@ -4242,8 +4409,8 @@ public:
         ++present_count;
     }
 
-    uint32_t render_count = 0;
-    uint32_t present_count = 0;
+    Moer::uint32                         render_count              = 0;
+    Moer::uint32                         present_count             = 0;
     bool saw_valid_recording_slots = true;
     Moer::Render::EUiDrawExecutionThread last_execution_thread{
         Moer::Render::EUiDrawExecutionThread::Game
@@ -4257,7 +4424,6 @@ public:
         ETextureUsageFlags usage =
             ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT |
-            ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST,
         ETextureAspectFlags aspects = ETextureAspectFlags::COLOR,
@@ -4267,7 +4433,7 @@ public:
         SetName(name);
     }
 
-    Moer::uint GetMipByteSize(Moer::uint) const override {
+    Moer::uint32 GetMipByteSize(Moer::uint32) const override {
         return 4;
     }
 
@@ -4448,7 +4614,6 @@ void TestUiDrawablePresentationContracts(TestSuite& suite) {
         "SmallDetachedFramebuffer",
         ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT |
-            ETextureUsageFlags::PRESENTATION_SOURCE |
             ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST,
         ETextureAspectFlags::COLOR,
@@ -4695,66 +4860,15 @@ void TestRasterStyleUiSlotClaimTracksNativeAcceptance(TestSuite& suite) {
     UiDrawFrameSlotClaim accepted_claim(accepted_frame);
     CommandList         accepted_commands;
     RenderUiDrawFrame(
-        accepted_commands,
-        accepted_main_output->GetView(),
-        accepted_frame,
-        EUiDrawExecutionThread::Game
+        accepted_commands, accepted_main_output->GetView(), accepted_frame, EUiDrawExecutionThread::Game
     );
-    const bool raster_boundary_recorded =
-        UiFrameGraphPass::RecordPresentationBoundary(
-            accepted_commands,
-            {},
-            accepted_frame,
-            accepted_main_output
-        );
-    const CmdSubmit accepted_submit = accepted_commands.Submit();
-    bool raster_boundary_valid =
-        raster_boundary_recorded &&
-        !accepted_submit.HasExplicitResourceStateOwnership() &&
-        !accepted_submit.cmds.empty() &&
-        accepted_submit.cmds.back()->Type() ==
-            Command::EType::Barrier;
-    if (raster_boundary_valid) {
-        const auto& terminal = *static_cast<const BarrierCmd*>(
-            accepted_submit.cmds.back().get()
-        );
-        const std::array<Texture*, 2> expected{
-            accepted_main_output.Get(),
-            accepted_platform_output.Get(),
-        };
-        raster_boundary_valid =
-            terminal.ReadTextures().size() == expected.size() &&
-            terminal.WriteTextures().empty() &&
-            terminal.ExplicitTextures().empty();
-        for (Texture* texture : expected) {
-            const auto matches = std::count_if(
-                terminal.ReadTextures().begin(),
-                terminal.ReadTextures().end(),
-                [texture](const TextureBarrier& barrier) {
-                    return barrier.handle ==
-                               reinterpret_cast<std::uint64_t>(texture) &&
-                           barrier.state == ETextureState::TRANSFER &&
-                           barrier.pass_type == EPassType::Copy &&
-                           barrier.publish_external_state &&
-                           barrier.mip_level == 0 &&
-                           barrier.mip_cnt == texture->GetNumMips() &&
-                           barrier.array_layer == 0 &&
-                           barrier.array_cnt == texture->GetNumArray();
-                }
-            );
-            raster_boundary_valid =
-                raster_boundary_valid && matches == 1;
-        }
-    }
     suite.Check(
         accepted_backend->render_count == 1 &&
             accepted_backend->saw_valid_recording_slots &&
             accepted_resources->PendingSlot() == 23 &&
-            accepted_resources->CommitCount() == 0 &&
-            raster_boundary_valid,
+            accepted_resources->CommitCount() == 0,
         test_name,
-        "Raster UI recording advanced the upload ring or omitted its terminal "
-        "presentation-source boundary before native acceptance"
+        "Raster UI recording advanced the upload ring before native acceptance"
     );
     suite.Check(
         accepted_claim.CommitAccepted() &&
@@ -4970,111 +5084,6 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         EUiDrawExecutionThread::Render
     );
 
-    auto linear_shared_slots =
-        Moer::MakeShared<FakeUiViewportResources>(15);
-    auto linear_platform_slots =
-        Moer::MakeShared<FakeUiViewportResources>(19);
-    auto linear_backend = Moer::MakeShared<FakeUiDrawBackend>();
-    UiDrawFramePacket linear_draw_frame{};
-    linear_draw_frame.backend = linear_backend;
-    linear_draw_frame.main_viewport.render_resources =
-        linear_shared_slots;
-    linear_draw_frame.main_viewport.commands.emplace_back();
-    const auto append_linear_platform =
-        [&](
-            TextureRef framebuffer,
-            Moer::SharedPtr<FakeUiViewportResources> slots,
-            bool metadata_only = false
-        ) {
-            UiViewportDrawPacket viewport{};
-            viewport.framebuffer                = std::move(framebuffer);
-            viewport.render_resources           = std::move(slots);
-            viewport.presentation_metadata_only = metadata_only;
-            viewport.commands.emplace_back();
-            linear_draw_frame.platform_viewports.emplace_back(
-                std::move(viewport)
-            );
-        };
-    append_linear_platform(main_output, linear_shared_slots);
-    append_linear_platform(window_output, linear_shared_slots);
-    append_linear_platform(platform_output, linear_platform_slots);
-    append_linear_platform(metadata_output, linear_platform_slots, true);
-    auto linear_prepared = UiFrameGraphPass::Prepare(
-        UiCompositionFrameData{
-            .enabled                = true,
-            .separate_window        = true,
-            .output_resolution      = Moer::uint2(64, 64),
-            .scene_color_position   = Moer::float2(0.f, 0.f),
-            .scene_color_resolution = Moer::float2(64.f, 64.f),
-            .window_frame_buffer    = window_output,
-        },
-        std::move(linear_draw_frame),
-        EUiDrawExecutionThread::Render
-    );
-    CommandList linear_commands(EQueueType::Graphics);
-    const bool linear_recorded =
-        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
-            linear_commands,
-            [](CommandList&) {},
-            linear_prepared,
-            scene_color,
-            main_output
-        );
-    CmdSubmit linear_submit = linear_commands.Submit();
-    bool linear_publications_valid =
-        linear_recorded &&
-        !linear_submit.HasExplicitResourceStateOwnership() &&
-        !linear_submit.cmds.empty() &&
-        linear_submit.cmds.back()->Type() ==
-            Command::EType::Barrier;
-    if (linear_publications_valid) {
-        const auto& terminal = *static_cast<const BarrierCmd*>(
-            linear_submit.cmds.back().get()
-        );
-        const std::array<Texture*, 3> expected{
-            main_output.Get(),
-            window_output.Get(),
-            platform_output.Get(),
-        };
-        linear_publications_valid =
-            terminal.ReadTextures().size() == expected.size() &&
-            terminal.WriteTextures().empty() &&
-            terminal.ExplicitTextures().empty();
-        for (Texture* texture : expected) {
-            const auto matches = std::count_if(
-                terminal.ReadTextures().begin(),
-                terminal.ReadTextures().end(),
-                [texture](const TextureBarrier& barrier) {
-                    return barrier.handle ==
-                               reinterpret_cast<std::uint64_t>(
-                                   texture
-                               ) &&
-                           barrier.state ==
-                               ETextureState::TRANSFER &&
-                           barrier.pass_type == EPassType::Copy &&
-                           barrier.publish_external_state &&
-                           barrier.mip_level == 0 &&
-                           barrier.mip_cnt ==
-                               texture->GetNumMips() &&
-                           barrier.array_layer == 0 &&
-                           barrier.array_cnt ==
-                               texture->GetNumArray();
-                }
-            );
-            linear_publications_valid =
-                linear_publications_valid && matches == 1;
-        }
-    }
-    suite.Check(
-        linear_publications_valid &&
-            linear_prepared->GetRecordingState() ==
-                UiFrameGraphPass::ERecordingState::Recorded &&
-            linear_backend->render_count == 1,
-        test_name,
-        "linear UI tail did not retain BackendTracked ownership with one "
-        "terminal full-range publication per presentation target"
-    );
-
     RenderGraph graph("UiFrameGraphTailContract");
     const auto scene = graph.ImportTexture(
         "SceneColor",
@@ -5087,9 +5096,16 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     );
     graph.SetInitialState(
         scene,
-        RenderGraph::TextureState::Undefined,
+        RenderGraph::TextureBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
+    );
+    // Active lowering requires the final boundary of every imported resource.
+    graph.Export(
+        scene,
+        RenderGraph::TextureAccessType::Sampled,
+        RenderGraph::QueueRole::Graphics,
+        RenderGraph::AccessMode::Read
     );
     const auto presentation_ready =
         graph.CreateTransientToken("PresentationReady");
@@ -5099,15 +5115,14 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Graphics
+                    RenderGraph::GpuWorkType::Graphics
                 )
-                .Write(scene, RenderGraph::TextureState::RenderTarget)
+                .Write(scene, RenderGraph::TextureAccessType::ColorAttachment)
                 .Write(presentation_ready)
-                .SideEffect()
-                .ParallelRecord();
+                .SideEffect();
         },
         [](CommandList&) {},
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     UiFrameGraphPass::GraphPasses ui_passes{};
@@ -5128,7 +5143,7 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         test_name,
         "physical presentation aliases were not deduplicated"
     );
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     if (!graph.IsCompiled()) {
         return;
     }
@@ -5164,18 +5179,18 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
     );
 
     const auto& clear_unit =
-        plan.frontend_record_units[ui_passes.clear.index];
+        plan.frontend_record_units[ui_passes.clear.pass_id];
     const auto& compose_unit =
-        plan.frontend_record_units[ui_passes.compose.index];
+        plan.frontend_record_units[ui_passes.compose.pass_id];
     const auto& draw_unit =
-        plan.frontend_record_units[ui_passes.draw.index];
+        plan.frontend_record_units[ui_passes.draw.pass_id];
     suite.Check(
-        clear_unit.record_execution_class ==
-                RenderGraph::PassExecutionClass::SerialRecord &&
-            compose_unit.record_execution_class ==
-                RenderGraph::PassExecutionClass::SerialRecord &&
-            draw_unit.record_execution_class ==
-                RenderGraph::PassExecutionClass::SerialRecord &&
+        clear_unit.record_policy ==
+                RenderGraph::PassRecordPolicy::Serial &&
+            compose_unit.record_policy ==
+                RenderGraph::PassRecordPolicy::Serial &&
+            draw_unit.record_policy ==
+                RenderGraph::PassRecordPolicy::Serial &&
             clear_unit.native_translate_class ==
                 ERHITranslateExecutionClass::Parallel &&
             compose_unit.native_translate_class ==
@@ -5199,27 +5214,21 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
             access_contract_valid && clear_access && draw_access &&
             clear_access->mode == RenderGraph::AccessMode::Write &&
             clear_access->state ==
-                RenderGraph::ResourceState::Texture(
-                    RenderGraph::TextureState::TransferDestination
-                ) &&
+                RenderGraph::ResourceState{RenderGraph::TextureAccessType::TransferDestination} &&
             clear_access->domain.queue == RenderGraph::QueueRole::Graphics &&
-            clear_access->domain.pipeline ==
-                RenderGraph::PipelineType::Copy &&
+            clear_access->domain.work ==
+                RenderGraph::GpuWorkType::Transfer &&
             draw_access->mode == RenderGraph::AccessMode::ReadWrite &&
             draw_access->state ==
-                RenderGraph::ResourceState::Texture(
-                    RenderGraph::TextureState::RenderTarget
-                ) &&
+                RenderGraph::ResourceState{RenderGraph::TextureAccessType::ColorAttachment} &&
             draw_access->domain.queue == RenderGraph::QueueRole::Graphics &&
-            draw_access->domain.pipeline ==
-                RenderGraph::PipelineType::Graphics;
+            draw_access->domain.work ==
+                RenderGraph::GpuWorkType::Graphics;
         export_contract_valid =
             export_contract_valid && export_barrier &&
             export_barrier->export_boundary &&
             export_barrier->after_state ==
-                RenderGraph::ResourceState::Texture(
-                    RenderGraph::TextureState::PresentationSource
-                ) &&
+                RenderGraph::ResourceState{RenderGraph::TextureAccessType::TransferSource} &&
             export_barrier->after_access == RenderGraph::AccessMode::Read;
     }
     const auto* compose_access = FindAccess(
@@ -5231,20 +5240,18 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         access_contract_valid && compose_access &&
             compose_access->mode == RenderGraph::AccessMode::Write &&
             compose_access->state ==
-                RenderGraph::ResourceState::Texture(
-                    RenderGraph::TextureState::RenderTarget
-                ) &&
+                RenderGraph::ResourceState{RenderGraph::TextureAccessType::ColorAttachment} &&
             compose_access->domain.queue ==
                 RenderGraph::QueueRole::Graphics &&
-            compose_access->domain.pipeline ==
-                RenderGraph::PipelineType::Graphics,
+            compose_access->domain.work ==
+                RenderGraph::GpuWorkType::Graphics,
         test_name,
         "UI Clear/Compose/Draw access declarations changed"
     );
     suite.Check(
         export_contract_valid,
         test_name,
-        "a presentation target was not exported as Graphics PresentationSource/Read"
+        "a presentation target was not exported as Graphics TransferSource/Read"
     );
     const std::string dump = graph.Dump();
     suite.Check(
@@ -5259,12 +5266,34 @@ void TestUiFrameGraphTailContract(TestSuite& suite) {
         "UI tail dump lost nodes/frontier or regained legacy fake dependencies"
     );
 
+    // Compile's temporary compiler is already destroyed. Both lowering and
+    // recompilation must consume graph-owned output, including nested frontiers.
+    RenderGraphLowering::LoweredPlan lowered;
+    std::string                     lowering_error;
+    const bool lowering_succeeded = RenderGraphLowering::Lower(graph, lowered, lowering_error);
+    suite.Check(lowering_succeeded, test_name, lowering_error);
+    const std::string lowered_dump = lowered.Dump();
+    const bool recompiled = graph.Compile(RenderGraph::DependencyDiagnostics::Enabled);
+    suite.Check(recompiled, test_name, graph.GetCompileError());
+    RenderGraphLowering::LoweredPlan rebuilt_lowered;
+    const bool rebuilt_lowering_succeeded =
+        RenderGraphLowering::Lower(graph, rebuilt_lowered, lowering_error);
+    suite.Check(rebuilt_lowering_succeeded, test_name, lowering_error);
+    if (lowering_succeeded && rebuilt_lowering_succeeded) {
+        suite.Check(
+            graph.Dump() == dump && lowered.Dump() == lowered_dump &&
+                rebuilt_lowered.Dump() == lowered_dump &&
+                rebuilt_lowered.passes.size() == plan.execution_order.size(),
+            test_name,
+            "compiler teardown and recompilation must preserve independently owned compiled and lowered plans"
+        );
+    }
+
     bool draw_source_kept_serial_control = false;
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
-        [&](const RenderGraph::ExecutedPassInfo& pass,
+        [&](std::span<const RenderGraph::ExecutedPassInfo> passes,
             RHIRecordingSource& source) {
-            if (pass.handle == ui_passes.draw) {
+            if (std::ranges::any_of(passes, [&](const auto& pass) { return pass.handle == ui_passes.draw; })) {
                 draw_source_kept_serial_control =
                     source.command_list->GetTranslateExecutionClass() ==
                         ERHITranslateExecutionClass::SerialControl &&
@@ -5301,11 +5330,10 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
         ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT
     ));
-    TextureRef missing_presentation_usage(MoerNew(FakeUiTexture)(
-        "MissingPresentationUsage",
+    TextureRef missing_transfer_usage(MoerNew(FakeUiTexture)(
+        "MissingTransferUsage",
         ETextureUsageFlags::SAMPLED |
             ETextureUsageFlags::COLOR_ATTACHMENT |
-            ETextureUsageFlags::TRANSFER_SRC |
             ETextureUsageFlags::TRANSFER_DST
     ));
 
@@ -5349,28 +5377,7 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
         "presentation usage"
     );
 
-    CommandList linear_commands{};
-    const bool linear_recorded =
-        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
-            linear_commands,
-            [](CommandList&) {},
-            prepared,
-            scene_color,
-            invalid_output
-        );
-    const CmdSubmit rejected_submit = linear_commands.Submit();
-    suite.Check(
-        !linear_recorded && rejected_submit.cmds.empty() &&
-            backend->render_count == 0 && slots->CommitCount() == 0 &&
-            slots->PendingSlot() == 23 &&
-            prepared->GetRecordingState() ==
-                UiFrameGraphPass::ERecordingState::Prepared,
-        test_name,
-        "linear fallback bypassed UI target validation or claimed the copied "
-        "packet"
-    );
-
-    RenderGraph semantic_graph("UiFrameGraphMissingPresentationUsage");
+    RenderGraph semantic_graph("UiFrameGraphMissingTransferUsage");
     const auto  scene_handle = semantic_graph.ImportTexture(
         "SceneColor",
         scene_color,
@@ -5390,7 +5397,7 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
             prepared,
             scene_handle,
             scene_color,
-            missing_presentation_usage,
+            missing_transfer_usage,
             semantic_ready,
             semantic_passes
         ) &&
@@ -5398,30 +5405,7 @@ void TestUiFrameGraphRejectsInvalidPhysicalContracts(TestSuite& suite) {
             prepared->GetRecordingState() ==
                 UiFrameGraphPass::ERecordingState::Prepared,
         test_name,
-        "graph declaration accepted a target without PRESENTATION_SOURCE "
-        "usage"
-    );
-
-    CommandList semantic_linear_commands{};
-    const bool semantic_linear_recorded =
-        UiFrameGraphPassTestAccess::ProcessLinearWithComposeRecorder(
-            semantic_linear_commands,
-            [](CommandList&) {},
-            prepared,
-            scene_color,
-            missing_presentation_usage
-        );
-    const CmdSubmit semantic_rejected_submit =
-        semantic_linear_commands.Submit();
-    suite.Check(
-        !semantic_linear_recorded &&
-            semantic_rejected_submit.cmds.empty() &&
-            backend->render_count == 0 && slots->CommitCount() == 0 &&
-            slots->PendingSlot() == 23 &&
-            prepared->GetRecordingState() ==
-                UiFrameGraphPass::ERecordingState::Prepared,
-        test_name,
-        "linear fallback accepted a target without PRESENTATION_SOURCE "
+        "graph declaration accepted a target without TRANSFER_SRC "
         "usage"
     );
 }
@@ -5439,22 +5423,22 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Compute
+                    RenderGraph::GpuWorkType::Compute
                 )
                 .SideEffect()
-                .SerialRecord()
+
                 .TranslateSerialControl();
         },
         [&](Moer::Render::CommandList&) { recorded = true; },
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         plan.frontend_record_units.size() == 1 &&
-            plan.frontend_record_units.front().record_execution_class ==
-                RenderGraph::PassExecutionClass::SerialRecord &&
+            plan.frontend_record_units.front().record_policy ==
+                RenderGraph::PassRecordPolicy::Serial &&
             plan.frontend_record_units.front().native_translate_class ==
                 Moer::Render::ERHITranslateExecutionClass::SerialControl &&
             Contains(graph.Dump(), "translate=serial-control"),
@@ -5463,7 +5447,6 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     );
 
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         false,
         [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
@@ -5485,16 +5468,15 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     weakened.AddRecordPass(
         "NRDIsland",
         [](RenderGraph::PassBuilder& builder) {
-            builder.SideEffect().SerialRecord().TranslateSerialControl();
+            builder.SideEffect().TranslateSerialControl();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(weakened.Compile(), test_name, weakened.GetCompileError());
     bool weakened_published = false;
     const bool weakened_executed = weakened.ExecuteFrontendRecordingPlan(
-        {},
-        [](const RenderGraph::ExecutedPassInfo&,
+        [](std::span<const RenderGraph::ExecutedPassInfo>,
            Moer::Render::RHIRecordingSource& source) {
             source.submit_metadata.translate_execution_class.reset();
         },
@@ -5518,10 +5500,10 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     publisher_attempt.AddRecordPass(
         "NRDIsland",
         [](RenderGraph::PassBuilder& builder) {
-            builder.SideEffect().SerialRecord().TranslateSerialControl();
+            builder.SideEffect().TranslateSerialControl();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
         publisher_attempt.Compile(),
@@ -5531,7 +5513,6 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     bool command_list_kept_floor = false;
     const bool publisher_attempt_executed =
         publisher_attempt.ExecuteFrontendRecordingPlan(
-            {},
             {},
             false,
             [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
@@ -5551,118 +5532,178 @@ void TestSerialControlTranslationIsADeclaredRecordingPolicy(TestSuite& suite) {
     );
 }
 
-void TestCpuPrepareReferencesIdentityWithoutGpuAccess(TestSuite& suite) {
-    constexpr std::string_view test_name = "cpu prepare identity reference";
-    RenderGraph                graph("CpuPrepareIdentity");
-    int                        physical_texture = 0;
-    const auto texture = graph.ImportTexture(
-        "PreparedTexture",
-        &physical_texture,
-        RenderGraph::TextureDesc{.mip_count = 1, .layer_count = 1}
-    );
-    bool cpu_prepare_ran = false;
-    graph.AddPass(
-        "Prepare",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Reference(texture).SideEffect().CpuPrepare();
-        },
-        [&] { cpu_prepare_ran = true; }
-    );
-
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const auto& plan = graph.GetCompiledPlan();
-    suite.Check(
-        plan.frontend_record_units.size() == 1 &&
-            plan.frontend_record_units.front().record_execution_class ==
-                RenderGraph::PassExecutionClass::CpuPrepare &&
-            plan.accesses.empty() && plan.edges.empty() && plan.barriers.empty() &&
-            plan.queue_batches.empty(),
-        test_name,
-        "a CPU identity reference must not synthesize GPU access, version, barrier, or queue metadata"
-    );
-    suite.Check(
-        Contains(graph.Dump(), "cpu=cpu-prepare") &&
-            Contains(graph.Dump(), "references=[PreparedTexture]"),
-        test_name,
-        "the dump must expose CPU-only scheduling and identity retention"
-    );
-
-    size_t observer_calls = 0;
-    size_t published_groups = 0;
-    const bool executed = graph.ExecuteFrontendRecordingPlan(
-        [&](const RenderGraph::ExecutedPassInfo&) { ++observer_calls; },
-        {},
-        true,
-        [&](Moer::Array<Moer::Render::RHIRecordingSource>&&) { ++published_groups; }
-    );
-    suite.Check(executed && cpu_prepare_ran, test_name, graph.GetCompileError());
-    suite.Check(
-        observer_calls == 0 && published_groups == 0,
-        test_name,
-        "CPU-only callbacks must bypass both managed CommandList sealing and recording publication"
-    );
+void TestSharedRecordingRespectsSourceBoundaries(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name = "shared streams respect queue and SerialControl boundaries";
+    RenderGraph graph("SharedStreamBoundaries", RenderGraph::QueueTopology::DedicatedQueues());
+    std::array<CommandList*, 7> streams{};
+    for (size_t i = 0; i < streams.size(); ++i) {
+        graph.AddRecordPass(std::string("Pass") + std::to_string(i),
+            [i](RenderGraph::PassBuilder& pass) {
+                pass.SideEffect();
+                if (i == 2) { pass.TranslateSerialControl(); }
+                if (i >= 5) {
+                    pass.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::GpuWorkType::Compute);
+                }
+            },
+            [&, i](CommandList& commands) { streams[i] = &commands; },
+            RenderGraph::PassRecordPolicy::Serial);
+    }
+    Moer::Array<RHIRecordingSource> published;
+    const bool recorded = graph.Compile() && graph.ExecuteFrontendRecordingPlan({}, false,
+        [&](Moer::Array<RHIRecordingSource>&& sources) {
+            for (auto& source : sources) { published.emplace_back(std::move(source)); }
+        });
+    suite.Check(recorded, test_name, graph.GetCompileError());
+    suite.Check(published.size() == 4 && streams[0] && streams[0] == streams[1] &&
+        streams[2] != streams[1] && streams[2] != streams[3] && streams[3] == streams[4] &&
+        streams[4] != streams[5] && streams[5] == streams[6], test_name,
+        "queue changes and both sides of SerialControl must split shared streams");
 }
 
-void TestCpuPrepareRejectsGpuAccess(TestSuite& suite) {
-    constexpr std::string_view test_name = "cpu prepare rejects GPU access";
-    RenderGraph                graph("CpuPrepareGpuAccess");
-    int                        physical_texture = 0;
-    const auto texture = graph.ImportTexture(
-        "GpuTexture",
-        &physical_texture,
-        RenderGraph::TextureDesc{.mip_count = 1, .layer_count = 1}
-    );
-    graph.AddPass(
-        "InvalidPrepare",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(texture).SideEffect().CpuPrepare();
-        },
-        [] {}
-    );
-
-    suite.Check(
-        !graph.Compile() && Contains(graph.GetCompileError(), "may only access token resources"),
-        test_name,
-        "CPU-only callbacks must use Reference rather than synthesize GPU accesses"
-    );
+void TestConfiguredRecordingSourceReceivesAllPasses(TestSuite& suite) {
+    using namespace Moer::Render;
+    constexpr std::string_view test_name = "configured shared source receives all pass identities";
+    RenderGraph graph("ConfiguredSources");
+    std::array<CommandList*, 3> streams{};
+    for (size_t i = 0; i < streams.size(); ++i) {
+        graph.AddRecordPass(std::string("Pass") + std::to_string(i),
+            [](RenderGraph::PassBuilder& pass) { pass.SideEffect(); },
+            [&, i](CommandList& commands) { streams[i] = &commands; },
+            RenderGraph::PassRecordPolicy::Serial);
+    }
+    std::vector<std::string> configured_names, published_labels;
+    int configure_calls = 0;
+    const bool recorded = graph.Compile() && graph.ExecuteFrontendRecordingPlan(
+        [&](std::span<const RenderGraph::ExecutedPassInfo> passes, RHIRecordingSource& source) {
+            ++configure_calls;
+            for (const auto& pass : passes) { configured_names.emplace_back(pass.name); }
+            const bool contains_target = std::ranges::any_of(passes,
+                [](const auto& pass) { return pass.name == "Pass1"; });
+            source.submit_metadata.debug_label = contains_target ? "ContainsTarget" : "MissingTarget";
+        }, false, [&](Moer::Array<RHIRecordingSource>&& sources) {
+            for (const auto& source : sources) {
+                published_labels.push_back(source.submit_metadata.debug_label.value_or("<missing>"));
+            }
+        });
+    suite.Check(recorded, test_name, graph.GetCompileError());
+    suite.Check(configured_names == std::vector<std::string>{"Pass0", "Pass1", "Pass2"} &&
+        configure_calls == 1 && published_labels == std::vector<std::string>{"ContainsTarget"} &&
+        streams[0] && streams[0] == streams[1] && streams[1] == streams[2], test_name,
+        "one metadata callback must see every pass in its shared source, including an interior target");
 }
 
-void TestCpuPrepareIsExcludedFromGpuQueuePlan(TestSuite& suite) {
-    constexpr std::string_view test_name = "cpu prepare is excluded from GPU queue plan";
-    RenderGraph graph("CpuPrepareQueuePlan", RenderGraph::QueueTopology::DedicatedQueues());
-    const auto  token = graph.CreateTransientToken("CpuPreparedToken");
-    const auto  prepare = graph.AddPass(
-        "PrepareOnCpu",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Compute, RenderGraph::PipelineType::Compute)
-                .Write(token)
-                .SideEffect()
-                .CpuPrepare();
-        },
-        [] {}
-    );
-    const auto consume = graph.AddPass(
-        "ConsumeOnGpu",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::PipelineType::Graphics)
-                .Read(token)
-                .SideEffect();
-        },
-        [] {}
-    );
-
+void TestWeightedParallelRecordingSharesStreams(TestSuite& suite, bool merge) {
+    using namespace std::chrono_literals;
+    using namespace Moer::Render;
+    const std::string test_name = std::string("weighted parallel recording: ") + (merge ? "merged" : "active");
+    RenderGraph graph(test_name);
+    constexpr std::array<Moer::uint32, 5> workloads{1, 1, 6, 1, 7};
+    std::array<CommandList*, 5> streams{};
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool second_group_finished = false, timed_out = false;
+    std::vector<int> completed_groups, callback_order;
+    for (size_t i = 0; i < workloads.size(); ++i) {
+        graph.AddRecordPass(std::string("Pass") + std::to_string(i),
+            [workload = workloads[i]](RenderGraph::PassBuilder& pass) {
+                pass.SideEffect().RecordWorkload(workload);
+            },
+            [&, i](CommandList& commands) {
+                streams[i] = &commands;
+                if (i == 0) {
+                    std::unique_lock lock(mutex);
+                    timed_out = !cv.wait_for(lock, 2s, [&] { return second_group_finished; });
+                }
+                commands.AddCallback([&, i] { callback_order.push_back(static_cast<int>(i)); });
+                if (i == 2 || i == 4) {
+                    std::lock_guard lock(mutex);
+                    completed_groups.push_back(static_cast<int>(i));
+                    if (i == 4) { second_group_finished = true; cv.notify_all(); }
+                }
+            }, RenderGraph::PassRecordPolicy::ParallelAllowed);
+    }
+    CommandList destination;
+    Moer::Array<RHIRecordingSource> published;
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    const auto& plan = graph.GetCompiledPlan();
-    suite.Check(
-        HasEdgeReason(
-            plan, prepare, consume, RenderGraph::EdgeReasonKind::ReadAfterWrite, token.Untyped()
-        ) &&
-            plan.frontend_record_units.size() == 2 && plan.queue_batches.size() == 1 &&
-            plan.queue_batches.front().passes == std::vector<RenderGraph::PassHandle>{consume} &&
-            plan.queue_syncs.empty(),
-        test_name,
-        "CPU preparation must order callbacks without requiring a nonexistent GPU signal"
-    );
+    Moer::TaskSystem::Init();
+    const bool recorded = merge ? graph.RecordAndMergeFrontendCommands(destination, true) :
+        graph.ExecuteFrontendRecordingPlan({}, true, [&](Moer::Array<RHIRecordingSource>&& sources) {
+            for (auto& source : sources) { published.emplace_back(std::move(source)); }
+        });
+    Moer::TaskSystem::ShutDown();
+    suite.Check(recorded, test_name, graph.GetCompileError());
+    suite.Check(streams[0] && streams[0] == streams[1] && streams[1] == streams[2] &&
+        streams[2] != streams[3] && streams[3] == streams[4], test_name,
+        "workloads 1+1+6 and 1+7 must form two exclusive recording streams");
+    suite.Check(!timed_out && completed_groups == std::vector<int>{4, 2}, test_name,
+        "the two weighted jobs must overlap and complete in reverse order");
+    if (!recorded) { return; }
+    Moer::Array<CmdSubmit> submits;
+    if (merge) { submits.emplace_back(destination.Submit()); }
+    else {
+        suite.Check(published.size() == 2, test_name, "one source per weighted stream must be published");
+        for (auto& source : published) { submits.emplace_back(source.command_list->Submit()); }
+    }
+    for (auto& submit : submits) {
+        for (auto& callback : submit.callbacks) { callback(); }
+        submit.callbacks.clear();
+    }
+    suite.Check(callback_order == std::vector<int>{0, 1, 2, 3, 4}, test_name,
+        "stream completion order must not change compiled command/callback order");
+}
+
+void TestSharedStreamGpuProfilingKeepsPassScopes(TestSuite& suite, bool merge) {
+    using namespace Moer::Render;
+    const std::string test_name = std::string("shared stream profiling: ") + (merge ? "merged" : "active");
+    GpuScopeStream scope_stream(RenderGraphGpuScopeConfig());
+    auto              frame = scope_stream.BeginFrame(9110 + static_cast<Moer::uint64>(merge));
+    RenderGraph graph(test_name);
+    for (const auto name : {"First", "Second"}) {
+        graph.AddRecordPass(name, [](RenderGraph::PassBuilder& pass) { pass.SideEffect(); },
+            [](CommandList&) {}, RenderGraph::PassRecordPolicy::Serial);
+    }
+    int bind_calls = 0;
+    const RenderGraph::GpuProfilingOptions profiling{
+        .try_bind_source = [&](const RenderGraph::ExecutedPassInfo& pass, CommandList& commands, RHIQueueBinding queue, Moer::uint64 order) {
+            ++bind_calls;
+            suite.Check(pass.name == "First" && order == 23 && commands.IsEmpty(), test_name,
+                        "binding must use the stream's first compiled pass before recording");
+            auto recorder = frame.CreateRecorder(queue, order);
+            if (!recorder.Valid()) {
+                return false;
+            }
+            commands.SetGpuScopeRecorder(std::move(recorder));
+            return true;
+        },
+        .source_order_base = 23
+    };
+    CommandList destination;
+    Moer::Array<RHIRecordingSource> published;
+    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    const bool recorded = merge ? graph.RecordAndMergeFrontendCommands(destination, false, profiling) :
+        graph.ExecuteFrontendRecordingPlan({}, false, [&](Moer::Array<RHIRecordingSource>&& sources) {
+            for (auto& source : sources) { published.emplace_back(std::move(source)); }
+        }, {}, profiling);
+    suite.Check(recorded && bind_calls == 1, test_name, graph.GetCompileError());
+    if (!recorded || (!merge && published.size() != 1)) {
+        suite.Check(false, test_name, "two serial passes must produce one profiled source");
+        return;
+    }
+    auto submit = merge ? destination.Submit() : published.front().command_list->Submit();
+    suite.Check(submit.query_tokens.size() == 2, test_name, "one timestamp scope per pass must remain");
+    suite.Check(scope_stream.SealFrame(frame), test_name, "profiling frame failed to seal");
+    for (size_t i = 0; i < submit.query_tokens.size(); ++i) {
+        suite.Check(QueryBackendAccess::ResolveTimestamp(submit.query_tokens[i],
+            RenderGraphTimestamp(100 + i * 20, 110 + i * 20)), test_name, "timestamp resolution failed");
+    }
+    ResolvedGpuScopeFrame resolved;
+    const bool popped = scope_stream.TryPopFrame(resolved);
+    suite.Check(popped && resolved.valid && resolved.queue_roots[0].size() == 2 &&
+        resolved.queue_roots[0][0].name == "First" && resolved.queue_roots[0][1].name == "Second" &&
+        resolved.queue_roots[0][0].source_order == 23 && resolved.queue_roots[0][1].source_order == 23,
+        test_name, "sharing a recorder must preserve both pass roots in compiled order");
+    ReleaseRenderGraphSubmit(submit);
 }
 
 void TestParallelRecordingFallsBackWithoutTaskGraph(TestSuite& suite) {
@@ -5691,7 +5732,7 @@ void TestParallelRecordingFallsBackWithoutTaskGraph(TestSuite& suite) {
                                    std::this_thread::get_id() == caller_thread;
                 events.emplace_back(id);
             },
-            RenderGraph::PassExecutionClass::ParallelRecordEligible
+            RenderGraph::PassRecordPolicy::ParallelAllowed
         );
     };
     add_record("First", first_token, 1);
@@ -5700,7 +5741,6 @@ void TestParallelRecordingFallsBackWithoutTaskGraph(TestSuite& suite) {
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     Moer::Array<Moer::Render::RHIRecordingGateView> published_gates{};
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         true,
         [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
@@ -5717,7 +5757,7 @@ void TestParallelRecordingFallsBackWithoutTaskGraph(TestSuite& suite) {
         "parallel-eligible work must use the stable serial path when TaskGraph is unavailable"
     );
     suite.Check(
-        published_gates.size() == 2 &&
+        published_gates.size() == 1 &&
             std::all_of(published_gates.begin(), published_gates.end(), [](const auto& gate) {
                 return gate.Status() == Moer::Render::ERHIRecordingStatus::Succeeded;
             }),
@@ -5745,7 +5785,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         RenderGraphGpuScopeConfig()
     );
     auto gpu_scope_frame = gpu_scope_stream.BeginFrame(9101);
-    std::vector<uint64_t>    profiling_source_orders{};
+    std::vector<Moer::uint64> profiling_source_orders{};
     std::vector<std::string> profiling_pass_names{};
 
     const auto make_record = [&](int id) {
@@ -5795,21 +5835,24 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
     const auto  first = graph.AddRecordPass(
         "FirstRecord",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(gpu_dependency).SideEffect();
+            builder.Write(gpu_dependency).SideEffect().RecordWorkload(8);
         },
         make_record(1),
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const auto second = graph.AddRecordPass(
         "SecondRecord",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(gpu_dependency).Write(second_token).SideEffect();
+            builder.Read(gpu_dependency).Write(second_token).SideEffect().RecordWorkload(8);
         },
         make_record(2),
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
-    bool joined_before_main = false;
-    graph.AddPass(
+    bool joined_before_serial = false;
+    bool serial_finished = false;
+    bool joined_after_serial = false;
+    const auto caller_thread = std::this_thread::get_id();
+    graph.AddRecordPass(
         "JoinBoundary",
         [=](RenderGraph::PassBuilder& builder) {
             builder.Read(gpu_dependency)
@@ -5818,16 +5861,29 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
                 .DependsOn(second)
                 .SideEffect();
         },
-        [&] {
-            joined_before_main = rendezvous.inflight.load() == 0 && rendezvous.entered == 2;
-        }
+        [&](Moer::Render::CommandList&) {
+            joined_before_serial = rendezvous.inflight.load() == 0 && rendezvous.entered == 2 &&
+                                   std::this_thread::get_id() == caller_thread;
+            serial_finished = true;
+        },
+        RenderGraph::PassRecordPolicy::Serial
+    );
+
+    graph.AddRecordPass(
+        "AfterSerialRecord",
+        [](RenderGraph::PassBuilder& builder) { builder.SideEffect(); },
+        [&](Moer::Render::CommandList&) { joined_after_serial = serial_finished; },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
     const auto& recording_plan = graph.GetCompiledPlan().frontend_record_units;
+    const auto dependency_levels = graph.GetCompiledPlan().BuildDependencyLevels();
     suite.Check(
-        recording_plan.size() == 3 &&
-            recording_plan[1].dependency_level_index > recording_plan[0].dependency_level_index,
+        recording_plan.size() == 4 &&
+            dependency_levels.size() >= 2 &&
+            DependencyLevelContains(dependency_levels[0], recording_plan[0].pass) &&
+            DependencyLevelContains(dependency_levels[1], recording_plan[1].pass),
         test_name,
         "the fixture must place the two record callbacks in different GPU dependency levels"
     );
@@ -5835,21 +5891,17 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
     Moer::Array<Moer::Array<Moer::Render::RHIRecordingSource>> published{};
     bool published_pending = false;
     bool distinct_command_lists = false;
-    Moer::Render::CommandList profiling_main_list(
-        Moer::Render::EQueueType::Graphics
-    );
     Moer::TaskSystem::Init();
     const bool executed = graph.ExecuteFrontendRecordingPlan(
         {},
-        {},
         true,
         [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
-            published_pending = sources.size() == 2 &&
+            published_pending |= sources.size() == 2 &&
                                 sources[0].completion.Status() ==
                                     Moer::Render::ERHIRecordingStatus::Pending &&
                                 sources[1].completion.Status() ==
                                     Moer::Render::ERHIRecordingStatus::Pending;
-            distinct_command_lists = sources.size() == 2 &&
+            distinct_command_lists |= sources.size() == 2 &&
                                      sources[0].command_list != sources[1].command_list;
             published.emplace_back(std::move(sources));
         },
@@ -5860,8 +5912,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
                     Moer::Render::CommandList&            command_list,
                     Moer::Render::RHIQueueBinding         queue_binding,
                     Moer::uint64                          source_order) {
-                    if (pass.execution_class ==
-                        RenderGraph::PassExecutionClass::MainThread) {
+                    if (pass.name != "FirstRecord" && pass.name != "SecondRecord") {
                         return false;
                     }
                     profiling_source_orders.emplace_back(source_order);
@@ -5875,7 +5926,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
                     command_list.SetGpuScopeRecorder(std::move(recorder));
                     return true;
                 },
-            .main_thread_command_list = &profiling_main_list,
+
             .source_order_base = 73,
         }
     );
@@ -5883,7 +5934,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
     Moer::Render::ResolvedGpuScopeFrame  resolved_gpu_frame{};
     bool profiling_submit_contract = false;
     bool profiling_resolution_contract = false;
-    if (published.size() == 1 && published.front().size() == 2) {
+    if (published.size() == 3 && published.front().size() == 2) {
         profiled_submits.reserve(2);
         for (auto& source : published.front()) {
             profiled_submits.emplace_back(source.command_list->Submit());
@@ -5925,7 +5976,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
 
     suite.Check(executed, test_name, graph.GetCompileError());
     suite.Check(
-        published.size() == 1 && published.front().size() == 2 && published_pending,
+        published.size() == 3 && published.front().size() == 2 && published_pending,
         test_name,
         "one stable source group must be published before either producer completes"
     );
@@ -5945,7 +5996,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         "the test must exercise completion order different from source order"
     );
     suite.Check(
-        profiling_source_orders == std::vector<uint64_t>{73, 74} &&
+        profiling_source_orders == std::vector<Moer::uint64>{73, 74} &&
             profiling_pass_names ==
                 std::vector<std::string>{"FirstRecord", "SecondRecord"} &&
             profiling_submit_contract &&
@@ -5960,9 +6011,9 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         "GPU profiling roots must follow compiled source order despite reverse worker/query completion"
     );
     suite.Check(
-        joined_before_main,
+        joined_before_serial && joined_after_serial,
         test_name,
-        "a caller-thread pass must not run until the frontend dispatch group has joined"
+        "serial recording must join preceding workers, run on the caller, and finish before later workers"
     );
     suite.Check(
         avoided_named_thread_reentry && explicitly_drained_named_task,
@@ -5970,7 +6021,7 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
         "joining recording workers must not pump unrelated named-thread work"
     );
     suite.Check(
-        published.size() == 1 &&
+        published.size() == 3 &&
             published.front()[0].completion.Status() ==
                 Moer::Render::ERHIRecordingStatus::Succeeded &&
             published.front()[1].completion.Status() ==
@@ -5980,549 +6031,6 @@ void TestParallelRecordingDispatchAndJoin(TestSuite& suite) {
     );
     for (auto& submit : profiled_submits) {
         ReleaseRenderGraphSubmit(submit);
-    }
-}
-
-void TestGpuProfilingMainThreadSparseOrderAndRebind(TestSuite& suite) {
-    using namespace Moer::Render;
-    constexpr std::string_view test_name =
-        "GPU profiling MainThread sparse order and rebind";
-
-    GpuScopeStream gpu_scope_stream(RenderGraphGpuScopeConfig());
-    auto           gpu_scope_frame = gpu_scope_stream.BeginFrame(9102);
-    CommandList    main_command_list(EQueueType::Graphics);
-    RenderGraph    graph("GpuProfileMainThread");
-
-    int main_a_calls = 0;
-    int cpu_calls = 0;
-    int external_calls = 0;
-    int main_b_calls = 0;
-    graph.AddPass(
-        "MainA",
-        [](RenderGraph::PassBuilder& builder) {
-            builder.SideEffect().MainThread();
-        },
-        [&] { ++main_a_calls; }
-    );
-    graph.AddPass(
-        "CpuPrepare",
-        [](RenderGraph::PassBuilder& builder) {
-            builder.SideEffect().CpuPrepare();
-        },
-        [&] {
-            ++cpu_calls;
-            suite.Check(
-                !main_command_list.HasGpuScopeRecorder(),
-                test_name,
-                "CpuPrepare unexpectedly inherited a GPU profiling source"
-            );
-        }
-    );
-    graph.AddPass(
-        "ExternalControl",
-        [](RenderGraph::PassBuilder& builder) {
-            builder.SideEffect().ExternalControl();
-        },
-        [&] {
-            ++external_calls;
-            suite.Check(
-                !main_command_list.HasGpuScopeRecorder(),
-                test_name,
-                "ExternalControl unexpectedly inherited a GPU profiling source"
-            );
-        }
-    );
-    graph.AddPass(
-        "MainB",
-        [](RenderGraph::PassBuilder& builder) {
-            builder.SideEffect().MainThread();
-        },
-        [&] { ++main_b_calls; }
-    );
-
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    std::vector<uint64_t> source_orders{};
-    std::vector<std::string> pass_names{};
-    Moer::Array<CmdSubmit> main_submits{};
-    bool recorder_cleared_after_submit = true;
-    int  observer_calls = 0;
-    int  publish_calls = 0;
-    const bool executed = graph.ExecuteFrontendRecordingPlan(
-        [&](const RenderGraph::ExecutedPassInfo&) {
-            ++observer_calls;
-            main_submits.emplace_back(main_command_list.Submit());
-            recorder_cleared_after_submit =
-                recorder_cleared_after_submit &&
-                !main_command_list.HasGpuScopeRecorder();
-        },
-        {},
-        false,
-        [&](Moer::Array<RHIRecordingSource>&&) { ++publish_calls; },
-        {},
-        RenderGraph::GpuProfilingOptions{
-            .try_bind_source =
-                [&](const RenderGraph::ExecutedPassInfo& pass,
-                    CommandList&                         command_list,
-                    RHIQueueBinding                      queue_binding,
-                    Moer::uint64                         source_order) {
-                    source_orders.emplace_back(source_order);
-                    pass_names.emplace_back(pass.name);
-                    auto recorder = gpu_scope_frame.CreateRecorder(
-                        queue_binding, source_order
-                    );
-                    if (!recorder.Valid()) {
-                        return false;
-                    }
-                    command_list.SetGpuScopeRecorder(std::move(recorder));
-                    return true;
-                },
-            .main_thread_command_list = &main_command_list,
-            .source_order_base = 100,
-        }
-    );
-
-    ResolvedGpuScopeFrame resolved{};
-    const bool submitted =
-        main_submits.size() == 2 &&
-        main_submits[0].query_tokens.size() == 1 &&
-        main_submits[1].query_tokens.size() == 1 &&
-        gpu_scope_stream.SealFrame(gpu_scope_frame);
-    bool resolved_ok = false;
-    if (submitted) {
-        resolved_ok =
-            ResolveRenderGraphTimestamp(main_submits[1], 300, 340) &&
-            !gpu_scope_stream.TryPopFrame(resolved) &&
-            ResolveRenderGraphTimestamp(main_submits[0], 200, 225) &&
-            gpu_scope_stream.TryPopFrame(resolved);
-    }
-
-    suite.Check(executed, test_name, graph.GetCompileError());
-    suite.Check(
-        main_a_calls == 1 && cpu_calls == 1 &&
-            external_calls == 1 && main_b_calls == 1 &&
-            observer_calls == 2 && publish_calls == 0,
-        test_name,
-        "MainThread/CPU/External callbacks did not retain their ownership classes"
-    );
-    suite.Check(
-        source_orders == std::vector<uint64_t>{100, 103} &&
-            pass_names == std::vector<std::string>{"MainA", "MainB"} &&
-            recorder_cleared_after_submit,
-        test_name,
-        "MainThread sources lost compiled-order gaps or Submit rebind semantics"
-    );
-    suite.Check(
-        resolved_ok && resolved.valid &&
-            resolved.queue_roots[0].size() == 2 &&
-            resolved.queue_roots[0][0].name == "MainA" &&
-            resolved.queue_roots[0][0].source_order == 100 &&
-            resolved.queue_roots[0][1].name == "MainB" &&
-            resolved.queue_roots[0][1].source_order == 103,
-        test_name,
-        "MainThread timestamp roots did not preserve sparse compiled order"
-    );
-    for (CmdSubmit& submit : main_submits) {
-        ReleaseRenderGraphSubmit(submit);
-    }
-}
-
-void TestGpuProfilingMainThreadGenerationReuse(TestSuite& suite) {
-    using namespace Moer::Render;
-    constexpr std::string_view test_name =
-        "GPU profiling MainThread generation reuse";
-
-    GpuScopeStream gpu_scope_stream(RenderGraphGpuScopeConfig());
-    auto           gpu_scope_frame = gpu_scope_stream.BeginFrame(9103);
-    CommandList    main_command_list(EQueueType::Graphics);
-    RenderGraph    graph("GpuProfileMainThreadGenerationReuse");
-
-    int pass_calls = 0;
-    for (std::string_view pass_name : {"MainA", "MainB"}) {
-        graph.AddPass(
-            pass_name,
-            [](RenderGraph::PassBuilder& builder) {
-                builder.SideEffect().MainThread();
-            },
-            [&] { ++pass_calls; }
-        );
-    }
-
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-    int                bind_calls = 0;
-    std::vector<uint64_t> source_orders{};
-    const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
-        {},
-        false,
-        {},
-        {},
-        RenderGraph::GpuProfilingOptions{
-            .try_bind_source =
-                [&](const RenderGraph::ExecutedPassInfo&,
-                    CommandList&                         command_list,
-                    RHIQueueBinding                      queue_binding,
-                    Moer::uint64                         source_order) {
-                    ++bind_calls;
-                    source_orders.emplace_back(source_order);
-                    auto recorder = gpu_scope_frame.CreateRecorder(
-                        queue_binding, source_order
-                    );
-                    if (!recorder.Valid()) {
-                        return false;
-                    }
-                    command_list.SetGpuScopeRecorder(std::move(recorder));
-                    return true;
-                },
-            .main_thread_command_list = &main_command_list,
-            .source_order_base = 120,
-        }
-    );
-
-    CmdSubmit submit = main_command_list.Submit();
-    ResolvedGpuScopeFrame resolved{};
-    const bool submitted =
-        submit.query_tokens.size() == 2 &&
-        !main_command_list.HasGpuScopeRecorder() &&
-        gpu_scope_stream.SealFrame(gpu_scope_frame);
-    bool resolved_ok = false;
-    if (submitted) {
-        resolved_ok =
-            QueryBackendAccess::ResolveTimestamp(
-                submit.query_tokens[1],
-                RenderGraphTimestamp(400, 440)
-            ) &&
-            !gpu_scope_stream.TryPopFrame(resolved) &&
-            QueryBackendAccess::ResolveTimestamp(
-                submit.query_tokens[0],
-                RenderGraphTimestamp(300, 325)
-            ) &&
-            gpu_scope_stream.TryPopFrame(resolved);
-    }
-
-    suite.Check(executed, test_name, graph.GetCompileError());
-    suite.Check(
-        pass_calls == 2 && bind_calls == 1 &&
-            source_orders == std::vector<uint64_t>{120},
-        test_name,
-        "one MainThread recording generation must bind exactly one stable source"
-    );
-    suite.Check(
-        resolved_ok && resolved.valid &&
-            resolved.queue_roots[0].size() == 2 &&
-            resolved.queue_roots[0][0].name == "MainA" &&
-            resolved.queue_roots[0][0].source_order == 120 &&
-            resolved.queue_roots[0][0].local_order == 0 &&
-            resolved.queue_roots[0][1].name == "MainB" &&
-            resolved.queue_roots[0][1].source_order == 120 &&
-            resolved.queue_roots[0][1].local_order == 1,
-        test_name,
-        "every pass in a shared MainThread generation must retain a timestamp root"
-    );
-    ReleaseRenderGraphSubmit(submit);
-}
-
-void TestGpuProfilingMainThreadManagedBoundary(TestSuite& suite) {
-    using namespace Moer::Render;
-    constexpr std::string_view test_name =
-        "GPU profiling MainThread managed boundary";
-
-    const auto run_case = [&](bool rotate_main_generation) {
-        CommandList main_command_list(EQueueType::Graphics);
-        RenderGraph graph(
-            rotate_main_generation ?
-                "GpuProfileManagedBoundaryRotated" :
-                "GpuProfileManagedBoundaryUnrotated"
-        );
-
-        int main_a_calls = 0;
-        int managed_calls = 0;
-        int main_b_calls = 0;
-        const auto main_a = graph.AddPass(
-            "MainA",
-            [](RenderGraph::PassBuilder& builder) {
-                builder.SideEffect().MainThread();
-            },
-            [&] { ++main_a_calls; }
-        );
-        const auto managed = graph.AddRecordPass(
-            "Managed",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.DependsOn(main_a).SideEffect();
-            },
-            [&](CommandList&) { ++managed_calls; },
-            RenderGraph::PassExecutionClass::SerialRecord
-        );
-        graph.AddPass(
-            "MainB",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.DependsOn(managed).SideEffect().MainThread();
-            },
-            [&] { ++main_b_calls; }
-        );
-
-        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        int                   observer_calls = 0;
-        int                   bind_calls = 0;
-        std::vector<uint64_t> source_orders{};
-        Moer::Array<CmdSubmit> main_submits{};
-        Moer::Array<RHIRecordingSource> published{};
-        const bool executed = graph.ExecuteFrontendRecordingPlan(
-            [&](const RenderGraph::ExecutedPassInfo&) {
-                ++observer_calls;
-                if (rotate_main_generation) {
-                    main_submits.emplace_back(main_command_list.Submit());
-                }
-            },
-            {},
-            false,
-            [&](Moer::Array<RHIRecordingSource>&& sources) {
-                published = std::move(sources);
-            },
-            {},
-            RenderGraph::GpuProfilingOptions{
-                .try_bind_source =
-                    [&](const RenderGraph::ExecutedPassInfo&,
-                        CommandList&,
-                        RHIQueueBinding,
-                        Moer::uint64 source_order) {
-                        ++bind_calls;
-                        source_orders.emplace_back(source_order);
-                        return false;
-                    },
-                .main_thread_command_list = &main_command_list,
-                .source_order_base = 200,
-            }
-        );
-
-        if (!main_command_list.IsEmpty() ||
-            main_command_list.HasGpuScopeRecorder() ||
-            main_command_list
-                .IsLegacyGpuProfilingSuppressedForGeneration()) {
-            main_submits.emplace_back(main_command_list.Submit());
-        }
-        for (RHIRecordingSource& source : published) {
-            CmdSubmit submit = source.command_list->Submit();
-            ReleaseRenderGraphSubmit(submit);
-        }
-        for (CmdSubmit& submit : main_submits) {
-            ReleaseRenderGraphSubmit(submit);
-        }
-
-        if (rotate_main_generation) {
-            suite.Check(
-                executed && main_a_calls == 1 && managed_calls == 1 &&
-                    main_b_calls == 1 && observer_calls == 2 &&
-                    bind_calls == 3 &&
-                    source_orders ==
-                        std::vector<uint64_t>{200, 201, 202},
-                test_name,
-                graph.GetCompileError()
-            );
-        } else {
-            suite.Check(
-                !executed && main_a_calls == 1 && managed_calls == 0 &&
-                    main_b_calls == 0 && observer_calls == 1 &&
-                    bind_calls == 1 && published.empty() &&
-                    source_orders == std::vector<uint64_t>{200} &&
-                    Contains(
-                        graph.GetCompileError(),
-                        "must rotate its recording generation"
-                    ),
-                test_name,
-                "an unrotated MainThread generation was not rejected before "
-                "the managed source was bound, published, or recorded"
-            );
-        }
-    };
-
-    run_case(false);
-    run_case(true);
-
-    {
-        CommandList main_command_list(EQueueType::Graphics);
-        RenderGraph graph("GpuProfileManagedBoundaryTerminal");
-        int main_calls = 0;
-        int managed_calls = 0;
-        const auto main = graph.AddPass(
-            "Main",
-            [](RenderGraph::PassBuilder& builder) {
-                builder.SideEffect().MainThread();
-            },
-            [&] { ++main_calls; }
-        );
-        graph.AddRecordPass(
-            "ManagedTerminal",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.DependsOn(main).SideEffect();
-            },
-            [&](CommandList&) { ++managed_calls; },
-            RenderGraph::PassExecutionClass::SerialRecord
-        );
-
-        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        int                   bind_calls = 0;
-        int                   publish_calls = 0;
-        std::vector<uint64_t> source_orders{};
-        const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
-            {},
-            false,
-            [&](Moer::Array<RHIRecordingSource>&&) {
-                ++publish_calls;
-            },
-            {},
-            RenderGraph::GpuProfilingOptions{
-                .try_bind_source =
-                    [&](const RenderGraph::ExecutedPassInfo&,
-                        CommandList&,
-                        RHIQueueBinding,
-                        Moer::uint64 source_order) {
-                        ++bind_calls;
-                        source_orders.emplace_back(source_order);
-                        return false;
-                    },
-                .main_thread_command_list = &main_command_list,
-                .source_order_base = 220,
-            }
-        );
-
-        CmdSubmit main_submit = main_command_list.Submit();
-        ReleaseRenderGraphSubmit(main_submit);
-        suite.Check(
-            !executed && main_calls == 1 && managed_calls == 0 &&
-                bind_calls == 1 && publish_calls == 0 &&
-                source_orders == std::vector<uint64_t>{220} &&
-                Contains(
-                    graph.GetCompileError(),
-                    "must rotate its recording generation"
-                ),
-            test_name,
-            "a terminal managed source escaped the pre-publication "
-            "MainThread generation boundary"
-        );
-    }
-
-    {
-        CommandList main_command_list(EQueueType::Graphics);
-        RenderGraph graph("GpuProfileManagedBoundaryDirtyReplacement");
-        int main_calls = 0;
-        int managed_calls = 0;
-        const auto main = graph.AddPass(
-            "Main",
-            [](RenderGraph::PassBuilder& builder) {
-                builder.SideEffect().MainThread();
-            },
-            [&] { ++main_calls; }
-        );
-        graph.AddRecordPass(
-            "Managed",
-            [=](RenderGraph::PassBuilder& builder) {
-                builder.DependsOn(main).SideEffect();
-            },
-            [&](CommandList&) { ++managed_calls; },
-            RenderGraph::PassExecutionClass::SerialRecord
-        );
-
-        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        int                    observer_calls = 0;
-        int                    bind_calls = 0;
-        int                    publish_calls = 0;
-        Moer::Array<CmdSubmit> main_submits{};
-        const bool executed = graph.ExecuteFrontendRecordingPlan(
-            [&](const RenderGraph::ExecutedPassInfo&) {
-                ++observer_calls;
-                main_submits.emplace_back(main_command_list.Submit());
-                main_command_list.PushScope("DirtyReplacement");
-                main_command_list.PopScope();
-            },
-            {},
-            false,
-            [&](Moer::Array<RHIRecordingSource>&&) {
-                ++publish_calls;
-            },
-            {},
-            RenderGraph::GpuProfilingOptions{
-                .try_bind_source =
-                    [&](const RenderGraph::ExecutedPassInfo&,
-                        CommandList&,
-                        RHIQueueBinding,
-                        Moer::uint64) {
-                        ++bind_calls;
-                        return false;
-                    },
-                .main_thread_command_list = &main_command_list,
-                .source_order_base = 230,
-            }
-        );
-
-        main_submits.emplace_back(main_command_list.Submit());
-        for (CmdSubmit& submit : main_submits) {
-            ReleaseRenderGraphSubmit(submit);
-        }
-        suite.Check(
-            !executed && main_calls == 1 && managed_calls == 0 &&
-                observer_calls == 1 && bind_calls == 1 &&
-                publish_calls == 0 &&
-                Contains(
-                    graph.GetCompileError(),
-                    "replacement recording generation empty and unbound"
-                ),
-            test_name,
-            "a MainThread observer recorded into the replacement generation "
-            "before managed publication"
-        );
-    }
-
-    {
-        RenderGraph graph("GpuProfileManagedOnly");
-        int managed_calls = 0;
-        graph.AddRecordPass(
-            "ManagedOnly",
-            [](RenderGraph::PassBuilder& builder) {
-                builder.SideEffect();
-            },
-            [&](CommandList&) { ++managed_calls; },
-            RenderGraph::PassExecutionClass::SerialRecord
-        );
-
-        suite.Check(graph.Compile(), test_name, graph.GetCompileError());
-        int bind_calls = 0;
-        Moer::Array<RHIRecordingSource> published{};
-        const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
-            {},
-            false,
-            [&](Moer::Array<RHIRecordingSource>&& sources) {
-                published = std::move(sources);
-            },
-            {},
-            RenderGraph::GpuProfilingOptions{
-                .try_bind_source =
-                    [&](const RenderGraph::ExecutedPassInfo&,
-                        CommandList&,
-                        RHIQueueBinding,
-                        Moer::uint64) {
-                        ++bind_calls;
-                        return false;
-                    },
-            }
-        );
-
-        const bool published_succeeded =
-            published.size() == 1 &&
-            published.front().completion.Status() ==
-                ERHIRecordingStatus::Succeeded;
-        for (RHIRecordingSource& source : published) {
-            CmdSubmit submit = source.command_list->Submit();
-            ReleaseRenderGraphSubmit(submit);
-        }
-        suite.Check(
-            executed && managed_calls == 1 && bind_calls == 1 &&
-                published_succeeded,
-            test_name,
-            "a managed-only graph incorrectly required a MainThread "
-            "CommandList"
-        );
     }
 }
 
@@ -6540,7 +6048,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
         graph.AddRecordPass(
             "Dropped",
             [](RenderGraph::PassBuilder& builder) {
-                builder.SideEffect().SerialRecord();
+                builder.SideEffect();
             },
             [&](CommandList& command_list) {
                 ++record_calls;
@@ -6557,11 +6065,10 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
                 );
                 command_list.PopScopeWithTimeScope();
             },
-            RenderGraph::PassExecutionClass::SerialRecord
+            RenderGraph::PassRecordPolicy::Serial
         );
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             false,
             [&](Moer::Array<RHIRecordingSource>&& sources) {
@@ -6603,15 +6110,14 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
         graph.AddRecordPass(
             "Pass",
             [](RenderGraph::PassBuilder& builder) {
-                builder.SideEffect().SerialRecord();
+                builder.SideEffect();
             },
             [&](CommandList&) { ++record_calls; },
-            RenderGraph::PassExecutionClass::SerialRecord
+            RenderGraph::PassRecordPolicy::Serial
         );
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
-            [&](const RenderGraph::ExecutedPassInfo&,
+            [&](std::span<const RenderGraph::ExecutedPassInfo>,
                 RHIRecordingSource& source) {
                 source.command_list->SetGpuScopeRecorder(
                     frame.CreateRecorder(
@@ -6656,14 +6162,13 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
             graph.AddRecordPass(
                 "Pass",
                 [](RenderGraph::PassBuilder& builder) {
-                    builder.SideEffect().SerialRecord();
+                    builder.SideEffect();
                 },
                 [&](CommandList&) { ++record_calls; },
-                RenderGraph::PassExecutionClass::SerialRecord
+                RenderGraph::PassRecordPolicy::Serial
             );
             suite.Check(graph.Compile(), test_name, graph.GetCompileError());
             const bool executed = graph.ExecuteFrontendRecordingPlan(
-                {},
                 {},
                 false,
                 [&](Moer::Array<RHIRecordingSource>&&) { ++publish_calls; },
@@ -6697,7 +6202,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
            RHIQueueBinding,
            Moer::uint64) {
             command_list.SetResourceStateOwnership(
-                ERHIResourceStateOwnership::Explicit
+                ERHIResourceStateOwnership::Compiled
             );
             return false;
         },
@@ -6725,14 +6230,13 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
         graph.AddRecordPass(
             "Pass",
             [](RenderGraph::PassBuilder& builder) {
-                builder.SideEffect().SerialRecord();
+                builder.SideEffect();
             },
             [&](CommandList&) { ++record_calls; },
-            RenderGraph::PassExecutionClass::SerialRecord
+            RenderGraph::PassRecordPolicy::Serial
         );
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             false,
             [&](Moer::Array<RHIRecordingSource>&& sources) {
@@ -6791,15 +6295,14 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
             graph.AddRecordPass(
                 name,
                 [](RenderGraph::PassBuilder& builder) {
-                    builder.SideEffect().SerialRecord();
+                    builder.SideEffect();
                 },
                 [&](CommandList&) { ++record_calls; },
-                RenderGraph::PassExecutionClass::SerialRecord
+                RenderGraph::PassRecordPolicy::Serial
             );
         }
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             false,
             [&](Moer::Array<RHIRecordingSource>&&) { ++publish_calls; },
@@ -6832,7 +6335,7 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
         graph.AddRecordPass(
             "Legacy",
             [](RenderGraph::PassBuilder& builder) {
-                builder.SideEffect().SerialRecord();
+                builder.SideEffect();
             },
             [&](CommandList& command_list) {
                 ++record_calls;
@@ -6848,11 +6351,10 @@ void TestGpuProfilingBindingFailureContracts(TestSuite& suite) {
                 );
                 command_list.PopScopeWithTimeScope();
             },
-            RenderGraph::PassExecutionClass::SerialRecord
+            RenderGraph::PassRecordPolicy::Serial
         );
         suite.Check(graph.Compile(), test_name, graph.GetCompileError());
         const bool executed = graph.ExecuteFrontendRecordingPlan(
-            {},
             {},
             false,
             [&](Moer::Array<RHIRecordingSource>&& sources) {
@@ -6912,7 +6414,7 @@ void TestGpuDependenciesDoNotSplitFrontendGroups(TestSuite& suite) {
             builder.Write(ordering_token).SideEffect();
         },
         make_record(1),
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const auto second = graph.AddRecordPass(
         "TokenConsumer",
@@ -6920,7 +6422,7 @@ void TestGpuDependenciesDoNotSplitFrontendGroups(TestSuite& suite) {
             builder.Read(ordering_token).SideEffect();
         },
         make_record(2),
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.AddRecordPass(
         "ExplicitConsumer",
@@ -6928,7 +6430,7 @@ void TestGpuDependenciesDoNotSplitFrontendGroups(TestSuite& suite) {
             builder.DependsOn(second).SideEffect();
         },
         make_record(3),
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
@@ -6937,14 +6439,13 @@ void TestGpuDependenciesDoNotSplitFrontendGroups(TestSuite& suite) {
         plan.frontend_dispatch_groups.size() == 1 &&
             plan.frontend_dispatch_groups.front().first_unit == 0 &&
             plan.frontend_dispatch_groups.front().unit_count == 3 &&
-            plan.frontend_dispatch_groups.front().record_execution_class ==
-                RenderGraph::PassExecutionClass::ParallelRecordEligible,
+            plan.frontend_dispatch_groups.front().record_policy ==
+                RenderGraph::PassRecordPolicy::ParallelAllowed,
         test_name,
         "GPU token and explicit edges must not become CPU recording boundaries"
     );
     Moer::TaskSystem::Init();
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         true,
         [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
@@ -6955,9 +6456,9 @@ void TestGpuDependenciesDoNotSplitFrontendGroups(TestSuite& suite) {
 
     suite.Check(executed, test_name, graph.GetCompileError());
     suite.Check(
-        published_group_sizes == std::vector<size_t>{3},
+        published_group_sizes == std::vector<size_t>{1},
         test_name,
-        "all adjacent parallel-record callbacks must publish as one frontend group"
+        "small adjacent parallel callbacks must share one source within their frontend group"
     );
     std::ranges::sort(record_order);
     suite.Check(
@@ -6977,13 +6478,12 @@ void TestRecordingPublicationFailureTerminatesGates(TestSuite& suite) {
             builder.SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     suite.Check(graph.Compile(), test_name, graph.GetCompileError());
 
     Moer::Array<Moer::Render::RHIRecordingSource> published{};
     const bool executed = graph.ExecuteFrontendRecordingPlan(
-        {},
         {},
         true,
         [&](Moer::Array<Moer::Render::RHIRecordingSource>&& sources) {
@@ -7010,13 +6510,12 @@ void TestRecordingPublicationFailureTerminatesGates(TestSuite& suite) {
             builder.SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(ownership_graph.Compile(), test_name, ownership_graph.GetCompileError());
     bool publisher_called = false;
     const bool ownership_executed = ownership_graph.ExecuteFrontendRecordingPlan(
-        {},
-        [](const RenderGraph::ExecutedPassInfo&, Moer::Render::RHIRecordingSource& source) {
+        [](std::span<const RenderGraph::ExecutedPassInfo>, Moer::Render::RHIRecordingSource& source) {
             source.completion = Moer::Render::RHIRecordingGate::Create();
         },
         false,
@@ -7068,19 +6567,19 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
     );
     graph.SetInitialState(
         tlas,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
     graph.SetInitialState(
         instances,
-        RenderGraph::BufferState::Undefined,
+        RenderGraph::BufferBoundary::Undefined,
         RenderGraph::QueueRole::None,
         RenderGraph::AccessMode::None
     );
     graph.SetInitialState(
         scene,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -7091,18 +6590,18 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
             builder.Write(bindless).SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     const auto normalize = graph.AddRecordPass(
         "NormalizeScene",
         [=](RenderGraph::PassBuilder& builder) {
             builder
                 .Read(bindless)
-                .Read(scene, RenderGraph::BufferState::ShaderResource)
+                .Read(scene, RenderGraph::BufferAccessType::ShaderRead)
                 .SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     const auto build = graph.AddRecordPass(
         "BuildTLAS",
@@ -7111,15 +6610,15 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
                 .Read(bindless)
                 .Write(
                     instances,
-                    RenderGraph::BufferState::UnorderedAccess
+                    RenderGraph::BufferAccessType::Storage
                 )
                 .Write(
                     tlas,
-                    RenderGraph::BufferState::AccelerationStructureWrite
+                    RenderGraph::BufferAccessType::AccelerationStructureWrite
                 );
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     const auto finalize = graph.AddRecordPass(
         "FinalizeFrameSetup",
@@ -7129,13 +6628,13 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
                 .Read(bindless)
                 .Read(
                     tlas,
-                    RenderGraph::BufferState::AccelerationStructureRead
+                    RenderGraph::BufferAccessType::AccelerationStructureRead
                 )
                 .Write(ready)
                 .SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     const auto prepare_lights = graph.AddRecordPass(
         "PrepareLights",
@@ -7145,28 +6644,28 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
                 .Read(bindless)
                 .Read(
                     previous_tlas,
-                    RenderGraph::BufferState::AccelerationStructureRead
+                    RenderGraph::BufferAccessType::AccelerationStructureRead
                 )
-                .Read(scene, RenderGraph::BufferState::ShaderResource)
+                .Read(scene, RenderGraph::BufferAccessType::ShaderRead)
                 .SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.Export(
         tlas,
-        RenderGraph::BufferState::AccelerationStructureRead,
+        RenderGraph::BufferAccessType::AccelerationStructureRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         instances,
-        RenderGraph::BufferState::AccelerationStructureBuildInput,
+        RenderGraph::BufferAccessType::AccelerationStructureBuildInput,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -7218,18 +6717,14 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
     suite.Check(
         import_barrier != nullptr && import_barrier->state_transition &&
             import_barrier->after_state ==
-                RenderGraph::ResourceState::Buffer(
-                    RenderGraph::BufferState::AccelerationStructureWrite
-                ),
+                RenderGraph::ResourceState{RenderGraph::BufferAccessType::AccelerationStructureWrite},
         test_name,
         "BuildTLAS must acquire an AS-write destination from the import boundary"
     );
     suite.Check(
         consumer_barrier != nullptr && consumer_barrier->state_transition &&
             consumer_barrier->after_state ==
-                RenderGraph::ResourceState::Buffer(
-                    RenderGraph::BufferState::AccelerationStructureRead
-                ),
+                RenderGraph::ResourceState{RenderGraph::BufferAccessType::AccelerationStructureRead},
         test_name,
         "FinalizeFrameSetup must establish the AS-readable consumer boundary"
     );
@@ -7239,9 +6734,7 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         instance_import_barrier != nullptr &&
             instance_import_barrier->state_transition &&
             instance_import_barrier->after_state ==
-                RenderGraph::ResourceState::Buffer(
-                    RenderGraph::BufferState::UnorderedAccess
-                ),
+                RenderGraph::ResourceState{RenderGraph::BufferAccessType::Storage},
         test_name,
         "a fresh TLAS instance payload must be a write-only producer"
     );
@@ -7250,7 +6743,7 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
     const auto  next_bindless =
         next_graph.ImportToken("Bindless", &bindless_identity);
     suite.Check(
-        next_bindless.Untyped().owner_id != bindless.Untyped().owner_id,
+        next_bindless.Untyped().graph_id != bindless.Untyped().graph_id,
         test_name,
         "same physical token identity in another graph must remain a distinct transaction"
     );
@@ -7270,13 +6763,13 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
     );
     scene_update_graph.SetInitialState(
         updated_scene,
-        RenderGraph::BufferState::TransferDestination,
+        RenderGraph::BufferAccessType::TransferDestination,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
     scene_update_graph.SetInitialState(
         stable_scene,
-        RenderGraph::BufferState::ShaderResource,
+        RenderGraph::BufferAccessType::ShaderRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
@@ -7284,15 +6777,15 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         "PublishSceneReads",
         [=](RenderGraph::PassBuilder& builder) {
             builder
-                .Read(updated_scene, RenderGraph::BufferState::ShaderResource)
-                .Read(stable_scene, RenderGraph::BufferState::ShaderResource)
+                .Read(updated_scene, RenderGraph::BufferAccessType::ShaderRead)
+                .Read(stable_scene, RenderGraph::BufferAccessType::ShaderRead)
                 .SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     suite.Check(
-        scene_update_graph.Compile(),
+        scene_update_graph.Compile(RenderGraph::DependencyDiagnostics::Enabled),
         test_name,
         scene_update_graph.GetCompileError()
     );
@@ -7307,13 +6800,9 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
             updated_scene_barrier->state_transition &&
             updated_scene_barrier->memory_dependency &&
             updated_scene_barrier->before_state ==
-                RenderGraph::ResourceState::Buffer(
-                    RenderGraph::BufferState::TransferDestination
-                ) &&
+                RenderGraph::ResourceState{RenderGraph::BufferAccessType::TransferDestination} &&
             updated_scene_barrier->after_state ==
-                RenderGraph::ResourceState::Buffer(
-                    RenderGraph::BufferState::ShaderResource
-                ),
+                RenderGraph::ResourceState{RenderGraph::BufferAccessType::ShaderRead},
         test_name,
         "an uploaded scene buffer must publish transfer-write to shader-read"
     );
@@ -7340,7 +6829,7 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
     );
     external_graph.SetInitialState(
         external_tlas,
-        RenderGraph::BufferState::AccelerationStructureWrite,
+        RenderGraph::BufferAccessType::AccelerationStructureWrite,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Write
     );
@@ -7350,21 +6839,21 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
             builder
                 .Read(
                     external_tlas,
-                    RenderGraph::BufferState::AccelerationStructureRead
+                    RenderGraph::BufferAccessType::AccelerationStructureRead
                 )
                 .SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     external_graph.Export(
         external_tlas,
-        RenderGraph::BufferState::AccelerationStructureRead,
+        RenderGraph::BufferAccessType::AccelerationStructureRead,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     suite.Check(
-        external_graph.Compile(),
+        external_graph.Compile(RenderGraph::DependencyDiagnostics::Enabled),
         test_name,
         external_graph.GetCompileError()
     );
@@ -7378,13 +6867,9 @@ void TestFrameSetupTokenAndTlasBoundaryContract(TestSuite& suite) {
         external_import_barrier != nullptr &&
             external_import_barrier->state_transition &&
             external_import_barrier->before_state ==
-                RenderGraph::ResourceState::Buffer(
-                    RenderGraph::BufferState::AccelerationStructureWrite
-                ) &&
+                RenderGraph::ResourceState{RenderGraph::BufferAccessType::AccelerationStructureWrite} &&
             external_import_barrier->after_state ==
-                RenderGraph::ResourceState::Buffer(
-                    RenderGraph::BufferState::AccelerationStructureRead
-                ),
+                RenderGraph::ResourceState{RenderGraph::BufferAccessType::AccelerationStructureRead},
         test_name,
         "an externally built TLAS must normalize AS-write to AS-read"
     );
@@ -7440,7 +6925,7 @@ void TestNrdSerialControlIslandContract(TestSuite& suite) {
          }) {
         graph.SetInitialState(
             texture,
-            RenderGraph::TextureState::Sampled,
+            RenderGraph::TextureAccessType::Sampled,
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
@@ -7449,10 +6934,10 @@ void TestNrdSerialControlIslandContract(TestSuite& suite) {
     graph.AddRecordPass(
         "FrameSetup",
         [=](RenderGraph::PassBuilder& builder) {
-            builder.Write(setup_ready).SideEffect().SerialRecord();
+            builder.Write(setup_ready).SideEffect();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     const auto lighting = graph.AddRecordPass(
         "Lighting",
@@ -7461,41 +6946,41 @@ void TestNrdSerialControlIslandContract(TestSuite& suite) {
                 .Read(setup_ready)
                 .Write(
                     diffuse,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Write(
                     specular,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 );
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const auto nrd = graph.AddRecordPass(
         "NRD",
         [=](RenderGraph::PassBuilder& builder) {
             builder
                 .Read(setup_ready)
-                .Read(motion, RenderGraph::TextureState::Sampled)
-                .Read(normal, RenderGraph::TextureState::Sampled)
-                .Read(depth, RenderGraph::TextureState::Sampled)
-                .Read(diffuse, RenderGraph::TextureState::Sampled)
-                .Read(specular, RenderGraph::TextureState::Sampled)
+                .Read(motion, RenderGraph::TextureAccessType::Sampled)
+                .Read(normal, RenderGraph::TextureAccessType::Sampled)
+                .Read(depth, RenderGraph::TextureAccessType::Sampled)
+                .Read(diffuse, RenderGraph::TextureAccessType::Sampled)
+                .Read(specular, RenderGraph::TextureAccessType::Sampled)
                 .ReadWrite(
                     denoised_diffuse,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .ReadWrite(
                     denoised_specular,
-                    RenderGraph::TextureState::UnorderedAccess
+                    RenderGraph::TextureAccessType::Storage
                 )
                 .Write(nrd_ready)
                 .SideEffect()
-                .SerialRecord()
+
                 .TranslateSerialControl();
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::SerialRecord
+        RenderGraph::PassRecordPolicy::Serial
     );
     const auto composition = graph.AddRecordPass(
         "Composition",
@@ -7504,30 +6989,30 @@ void TestNrdSerialControlIslandContract(TestSuite& suite) {
                 .Read(nrd_ready)
                 .Read(
                     denoised_diffuse,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 )
                 .Read(
                     denoised_specular,
-                    RenderGraph::TextureState::Sampled
+                    RenderGraph::TextureAccessType::Sampled
                 );
         },
         [](Moer::Render::CommandList&) {},
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     graph.Export(
         denoised_diffuse,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
     graph.Export(
         denoised_specular,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );
 
-    suite.Check(graph.Compile(), test_name, graph.GetCompileError());
+    suite.Check(graph.Compile(RenderGraph::DependencyDiagnostics::Enabled), test_name, graph.GetCompileError());
     const auto& plan = graph.GetCompiledPlan();
     suite.Check(
         HasEdgeReason(
@@ -7574,20 +7059,16 @@ void TestNrdSerialControlIslandContract(TestSuite& suite) {
     suite.Check(
         denoised_barrier != nullptr &&
             denoised_barrier->before_state ==
-                RenderGraph::ResourceState::Texture(
-                    RenderGraph::TextureState::UnorderedAccess
-                ) &&
+                RenderGraph::ResourceState{RenderGraph::TextureAccessType::Storage} &&
             denoised_barrier->after_state ==
-                RenderGraph::ResourceState::Texture(
-                    RenderGraph::TextureState::Sampled
-                ),
+                RenderGraph::ResourceState{RenderGraph::TextureAccessType::Sampled},
         test_name,
         "NRD storage outputs must normalize to Sampled before Composition"
     );
     suite.Check(
-        plan.frontend_record_units[nrd.index].record_execution_class ==
-                RenderGraph::PassExecutionClass::SerialRecord &&
-            plan.frontend_record_units[nrd.index].native_translate_class ==
+        plan.frontend_record_units[nrd.pass_id].record_policy ==
+                RenderGraph::PassRecordPolicy::Serial &&
+            plan.frontend_record_units[nrd.pass_id].native_translate_class ==
                 Moer::Render::ERHITranslateExecutionClass::SerialControl,
         test_name,
         "only the NRD island must carry the explicit translation frontier"
@@ -7625,20 +7106,25 @@ void TestNrdDenoiserFamiliesAreExplicit(TestSuite& suite) {
 int main() {
     TestSuite suite;
     TestStableSerialCallbackOrder(suite);
-    TestMergedRecordingPreservesFrontendSourcesAndSubmitOrder(suite);
+    TestMergedRecordingSharesStagingStreamAndPreservesSubmitOrder(suite);
     TestMergedRecordingFailureLeavesDestinationUntouched(suite);
+    TestMergedRecordingFailureLeavesDestinationUntouched(suite, true);
     TestFrontendCommandListMergeRebasesCachedArguments(suite);
-    TestPassCompletionObserverRunsAfterEachCallback(suite);
+
     TestUiDrawablePresentationContracts(suite);
     TestRasterStyleUiSlotClaimTracksNativeAcceptance(suite);
     TestUiPreparedFrameLifecycleIsOneShot(suite);
     TestUiFrameGraphTailContract(suite);
     TestUiFrameGraphRejectsInvalidPhysicalContracts(suite);
     TestImportedAliasIdentityAndDump(suite);
+    TestResourceNameAndIdentityNamespaces(suite);
+    TestDependencyLevelOrdering(suite);
+    TestDependencyCyclesRejectRecording(suite);
     TestHazardsAndDeterministicDump(suite);
+    TestDependencyDiagnosticsLifecycle(suite);
     TestTransientReadBeforeProducerFailsWithoutCallbacks(suite);
     TestCrossGraphHandlesAreRejected(suite);
-    TestCompileAndExecuteAreOneShot(suite);
+    TestRecompileBeforeOneShotExecution(suite);
     TestLifetimeAndExportDump(suite);
     TestUntouchedImportedResourceCanBeExported(suite);
     TestTypedTextureSubresourceHazards(suite);
@@ -7651,7 +7137,7 @@ int main() {
     TestInvalidTypedRangeIsRejected(suite);
     TestUnknownTextureAspectIsRejected(suite);
     TestTextureAttachmentStateMatchesSelectedAspects(suite);
-    TestPresentationSourceBoundaryContract(suite);
+    TestTransferSourceBoundaryContract(suite);
     TestTypedAliasDescriptorMismatchIsRejected(suite);
     TestMultipleReadersProduceAllWarEdges(suite);
     TestExplicitStateValidation(suite);
@@ -7660,7 +7146,7 @@ int main() {
     TestQueueTopologySynchronization(suite);
     TestExclusiveOwnershipUsesCurrentOwnerFamily(suite);
     TestOwnershipWriterChainUsesCurrentFrontier(suite);
-    TestAutomaticReadsPreserveAvailabilityFrontier(suite);
+    TestUnspecifiedReadsPreserveAvailabilityFrontier(suite);
     TestSameNativeReadsDependOnTransitionFrontier(suite);
     TestOwnershipAcquireOrdersSiblingNativeQueue(suite);
     TestImportAvailabilityOrdersSiblingNativeQueue(suite);
@@ -7669,9 +7155,9 @@ int main() {
     TestOwnershipEpochDoesNotReusePriorFamilySources(suite);
     TestTokenCrossQueueSyncHasNoOwnership(suite);
     TestBatchPairSyncDeduplication(suite);
-    TestPipelineDomainsAndBarrierSources(suite);
+    TestGpuWorkTypesAndBarrierSources(suite);
     TestPartialRangeBarrier(suite);
-    TestMixedQueueExecuteRemainsDeclarationOrder(suite);
+    TestMixedQueuePreservesDeclarationTieBreak(suite);
     TestStageTwoDumpDeterminism(suite);
     TestBarrierSourcesIgnoreUnrelatedLastRead(suite);
     TestFanInBarrierPlacementCoversEverySourceBatch(suite);
@@ -7681,18 +7167,21 @@ int main() {
     TestUndefinedImportMustBeInitializedBeforeRead(suite);
     TestUnknownExportMakesStatePlanIncomplete(suite);
     TestMergedAccessStateDeterminesPlanCompleteness(suite);
+    TestInvalidRecordingPolicyFails(suite);
+    TestZeroRecordingWorkloadFails(suite);
     TestRecordingBatchPlanAndClassification(suite);
-    TestRecordingCallbackClassMismatchFails(suite);
-    TestExternalControlIsAnUnmanagedJoinBoundary(suite);
+
     TestSerialControlTranslationIsADeclaredRecordingPolicy(suite);
-    TestCpuPrepareReferencesIdentityWithoutGpuAccess(suite);
-    TestCpuPrepareRejectsGpuAccess(suite);
-    TestCpuPrepareIsExcludedFromGpuQueuePlan(suite);
+
     TestParallelRecordingFallsBackWithoutTaskGraph(suite);
     TestParallelRecordingDispatchAndJoin(suite);
-    TestGpuProfilingMainThreadSparseOrderAndRebind(suite);
-    TestGpuProfilingMainThreadGenerationReuse(suite);
-    TestGpuProfilingMainThreadManagedBoundary(suite);
+    TestSharedRecordingRespectsSourceBoundaries(suite);
+    TestConfiguredRecordingSourceReceivesAllPasses(suite);
+    for (bool merge : {false, true}) {
+        TestWeightedParallelRecordingSharesStreams(suite, merge);
+        TestSharedStreamGpuProfilingKeepsPassScopes(suite, merge);
+    }
+
     TestGpuProfilingBindingFailureContracts(suite);
     TestGpuDependenciesDoNotSplitFrontendGroups(suite);
     TestRecordingPublicationFailureTerminatesGates(suite);

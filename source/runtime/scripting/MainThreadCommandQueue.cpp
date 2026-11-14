@@ -7,27 +7,24 @@ MainThreadCommandQueue::~MainThreadCommandQueue() {
 }
 
 void MainThreadCommandQueue::ProcessPendingCommands(Scene& scene) {
-    std::deque<std::unique_ptr<PendingCommandBase>> pending_commands;
-    {
-        std::lock_guard lock(m_mutex);
-        pending_commands.swap(m_pending_commands);
-    }
-
-    for (auto& pending_command : pending_commands) {
+    for (auto& pending_command : TakePendingCommands()) {
         pending_command->Execute(scene);
     }
 }
 
 void MainThreadCommandQueue::CancelPending(std::string_view reason) {
-    std::deque<std::unique_ptr<PendingCommandBase>> pending_commands;
+    for (auto& pending_command : TakePendingCommands()) {
+        pending_command->Cancel(reason);
+    }
+}
+
+MainThreadCommandQueue::PendingCommands MainThreadCommandQueue::TakePendingCommands() {
+    PendingCommands pending_commands;
     {
         std::lock_guard lock(m_mutex);
         pending_commands.swap(m_pending_commands);
     }
-
-    for (auto& pending_command : pending_commands) {
-        pending_command->Cancel(reason);
-    }
+    return pending_commands;
 }
 
 void MainThreadCommandQueue::Enqueue(std::unique_ptr<PendingCommandBase> command) {

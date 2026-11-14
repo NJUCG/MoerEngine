@@ -3,11 +3,11 @@
  */
 #pragma once
 
-#include <cstdint>
+#include "misc/Types.h"
 
 namespace Moer {
 
-enum class ESceneTestCaseId : std::uint32_t {
+enum class ESceneTestCaseId : uint32 {
     // 不运行任何 Scene testcase
     None,
 

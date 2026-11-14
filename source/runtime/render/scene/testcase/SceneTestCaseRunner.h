@@ -4,6 +4,7 @@
 #pragma once
 
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "scene/testcase/SceneTestCase.h"
 
 #include <chrono>
@@ -77,8 +78,8 @@ private:
     UniquePtr<ISceneTestCase>             m_active_case;
     ESceneTestCaseId                      m_active_case_id = ESceneTestCaseId::None;
     UniquePtr<SceneTestCaseRunResult>     m_completed_result;
-    std::uint64_t                         m_active_case_begin_frame = 0;
-    std::uint64_t                         m_frame_index             = 0;
+    uint64                                m_active_case_begin_frame = 0;
+    uint64                                m_frame_index             = 0;
     std::chrono::steady_clock::time_point m_start_time              = std::chrono::steady_clock::now();
 };
 

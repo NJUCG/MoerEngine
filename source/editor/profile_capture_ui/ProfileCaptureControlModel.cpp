@@ -1,5 +1,5 @@
 #include "profile_capture_ui/ProfileCaptureControlModel.h"
-
+#include "misc/Types.h"
 #include <utility>
 
 namespace Moer {
@@ -41,7 +41,7 @@ ProfileCaptureControlModel::ProfileCaptureControlModel(
 }
 
 void ProfileCaptureControlModel::Refresh() noexcept {
-    if (has_pending_request_) {
+    if (HasPendingRequest()) {
         Render::ProfileCaptureRequestCompletion completion;
         if (pending_ticket_.TryGet(completion)) {
             if (completion.kind == pending_kind_) {
@@ -54,7 +54,6 @@ void ProfileCaptureControlModel::Refresh() noexcept {
             }
             pending_ticket_     = {};
             pending_expected_generation_ = 0;
-            has_pending_request_ = false;
         }
     }
 
@@ -85,7 +84,7 @@ EProfileCaptureControlActionResult ProfileCaptureControlModel::RequestStart(
     Render::ProfileCaptureStartOptions options
 ) noexcept {
     Refresh();
-    if (has_pending_request_) {
+    if (HasPendingRequest()) {
         last_action_result_ =
             EProfileCaptureControlActionResult::PendingRequest;
         return last_action_result_;
@@ -132,7 +131,7 @@ EProfileCaptureControlActionResult ProfileCaptureControlModel::RequestStart(
 EProfileCaptureControlActionResult
 ProfileCaptureControlModel::RequestStop() noexcept {
     Refresh();
-    if (has_pending_request_) {
+    if (HasPendingRequest()) {
         last_action_result_ =
             EProfileCaptureControlActionResult::PendingRequest;
         return last_action_result_;
@@ -159,7 +158,7 @@ ProfileCaptureControlModel::RequestStop() noexcept {
     }
 
     try {
-        const std::uint64_t expected_generation =
+        const uint64 expected_generation =
             snapshot_.active_generation;
         return AcceptSubmission(
             callbacks_.request_stop(expected_generation),
@@ -175,20 +174,20 @@ ProfileCaptureControlModel::RequestStop() noexcept {
 
 bool ProfileCaptureControlModel::CanRequestStart() const noexcept {
     return snapshot_status_ == SnapshotStatus::Available &&
-           !has_pending_request_ && snapshot_.accepting_requests &&
+           !HasPendingRequest() && snapshot_.accepting_requests &&
            snapshot_.state == Render::ProfileCaptureControllerState::Idle &&
            !snapshot_.owns_runtime && snapshot_.active_generation == 0;
 }
 
 bool ProfileCaptureControlModel::CanRequestStop() const noexcept {
     return snapshot_status_ == SnapshotStatus::Available &&
-           !has_pending_request_ && snapshot_.accepting_requests &&
+           !HasPendingRequest() && snapshot_.accepting_requests &&
            snapshot_.state == Render::ProfileCaptureControllerState::Running &&
            snapshot_.owns_runtime && snapshot_.active_generation != 0;
 }
 
 bool ProfileCaptureControlModel::HasPendingRequest() const noexcept {
-    return has_pending_request_;
+    return pending_ticket_.Valid();
 }
 
 Render::ProfileCaptureRequestKind
@@ -196,7 +195,7 @@ ProfileCaptureControlModel::PendingRequestKind() const noexcept {
     return pending_kind_;
 }
 
-std::uint64_t
+uint64
 ProfileCaptureControlModel::PendingExpectedGeneration() const noexcept {
     return pending_expected_generation_;
 }
@@ -225,7 +224,7 @@ EProfileCaptureControlActionResult
 ProfileCaptureControlModel::AcceptSubmission(
     Render::ProfileCaptureRequestSubmission submission,
     Render::ProfileCaptureRequestKind       kind,
-    std::uint64_t                           expected_generation
+    uint64                                  expected_generation
 ) noexcept {
     last_submit_result_ = submission.result;
     if (submission.result != Render::ProfileCaptureSubmitResult::Queued) {
@@ -268,7 +267,6 @@ ProfileCaptureControlModel::AcceptSubmission(
     pending_ticket_              = std::move(submission.ticket);
     pending_kind_                = kind;
     pending_expected_generation_ = expected_generation;
-    has_pending_request_         = true;
     last_action_result_          =
         EProfileCaptureControlActionResult::Submitted;
     return last_action_result_;

@@ -1,7 +1,7 @@
 #ifndef MOREENGINE_PTR_H
 #define MOREENGINE_PTR_H
-#include <cstdint>
-template<typename TPtr, uint32_t Alignment>
+#include "misc/Types.h"
+template<typename TPtr, Moer::uint32 Alignment>
 class alignas(Alignment) AlignedPtr {
 public:
     AlignedPtr() {}

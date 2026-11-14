@@ -1,5 +1,5 @@
 #include "config/CVarSystem.h"
-
+#include "misc/Types.h"
 #include <atomic>
 #include <cctype>
 #include <charconv>
@@ -21,7 +21,7 @@ namespace Moer::CVar {
 
 namespace {
 
-using CVarValue = std::variant<bool, std::int64_t, double, std::string>;
+using CVarValue = std::variant<bool, int64, double, std::string>;
 
 std::string_view TrimView(std::string_view _text) noexcept {
     while (!_text.empty() && std::isspace(static_cast<unsigned char>(_text.front()))) {
@@ -92,7 +92,7 @@ constexpr EType TypeOf<bool>() {
 }
 
 template<>
-constexpr EType TypeOf<std::int64_t>() {
+constexpr EType TypeOf<int64>() {
     return EType::Int;
 }
 
@@ -110,7 +110,7 @@ std::string ValueToString(bool _value) {
     return _value ? "true" : "false";
 }
 
-std::string ValueToString(std::int64_t _value) {
+std::string ValueToString(int64 _value) {
     char buffer[32]{};
     const auto [end, error] = std::to_chars(buffer, buffer + sizeof(buffer), _value);
     return error == std::errc{} ? std::string(buffer, static_cast<std::size_t>(end - buffer)) : std::string{};
@@ -153,7 +153,7 @@ CVarSetResult ParseValue<bool>(std::string_view _text, bool& _value) {
 }
 
 template<>
-CVarSetResult ParseValue<std::int64_t>(std::string_view _text, std::int64_t& _value) {
+CVarSetResult ParseValue<int64>(std::string_view _text, int64& _value) {
     _text = TrimView(_text);
     if (_text.empty()) {
         return {
@@ -197,7 +197,7 @@ CVarSetResult ParseValue<std::string>(std::string_view _text, std::string& _valu
     return {.status = ESetStatus::Changed};
 }
 
-bool IntIsBelowMinimum(std::int64_t _value, double _minimum) noexcept {
+bool IntIsBelowMinimum(int64 _value, double _minimum) noexcept {
     constexpr double minimum_int           = -9223372036854775808.0;
     constexpr double maximum_int_exclusive = 9223372036854775808.0;
     const double     threshold             = std::ceil(_minimum);
@@ -207,10 +207,10 @@ bool IntIsBelowMinimum(std::int64_t _value, double _minimum) noexcept {
     if (threshold >= maximum_int_exclusive) {
         return true;
     }
-    return _value < static_cast<std::int64_t>(threshold);
+    return _value < static_cast<int64>(threshold);
 }
 
-bool IntIsAboveMaximum(std::int64_t _value, double _maximum) noexcept {
+bool IntIsAboveMaximum(int64 _value, double _maximum) noexcept {
     constexpr double minimum_int           = -9223372036854775808.0;
     constexpr double maximum_int_exclusive = 9223372036854775808.0;
     const double     threshold             = std::floor(_maximum);
@@ -220,11 +220,11 @@ bool IntIsAboveMaximum(std::int64_t _value, double _maximum) noexcept {
     if (threshold < minimum_int) {
         return true;
     }
-    return _value > static_cast<std::int64_t>(threshold);
+    return _value > static_cast<int64>(threshold);
 }
 
-thread_local std::uint32_t callback_destroy_depth = 0;
-thread_local std::uint32_t snapshot_visitor_depth = 0;
+thread_local uint32 callback_destroy_depth = 0;
+thread_local uint32 snapshot_visitor_depth = 0;
 
 struct CallbackOwner {
     CallbackOwner(void* _context, Detail::DestroyCallback _destroy) noexcept :
@@ -307,7 +307,7 @@ void InvokeSnapshotVisitor(
 
 class EntryBase {
 public:
-    EntryBase(std::uint64_t _id, std::string _registry_key, CVarDescriptor _descriptor, EType _type) :
+    EntryBase(uint64 _id, std::string _registry_key, CVarDescriptor _descriptor, EType _type) :
         id(_id),
         registry_key(std::move(_registry_key)),
         descriptor(std::move(_descriptor)),
@@ -384,7 +384,7 @@ public:
         return retired.load(std::memory_order_acquire);
     }
 
-    std::uint64_t    id = 0;
+    uint64                  id = 0;
     std::string      registry_key;
     CVarDescriptor   descriptor;
     EType            type = EType::String;
@@ -440,7 +440,7 @@ template<typename T, typename Callback>
 class Entry final : public EntryBase {
 public:
     Entry(
-        std::uint64_t  _id,
+        uint64         _id,
         std::string    _registry_key,
         CVarDescriptor _descriptor,
         T              _value,
@@ -498,8 +498,8 @@ public:
                 };
             }
         }
-        if (static_cast<std::uint8_t>(_source) <
-            static_cast<std::uint8_t>(set_source.load(std::memory_order_relaxed))) {
+        if (static_cast<uint8>(_source) <
+            static_cast<uint8>(set_source.load(std::memory_order_relaxed))) {
             return {
                 .status = ESetStatus::LowerPriority,
                 .detail = "cvar already has a higher-priority value",
@@ -569,7 +569,7 @@ private:
     };
 
     CVarSetResult ValidateRange(const T& _value) const {
-        if constexpr (std::is_same_v<T, std::int64_t>) {
+        if constexpr (std::is_same_v<T, int64>) {
             if (descriptor.min_value && IntIsBelowMinimum(_value, *descriptor.min_value)) {
                 return {
                     .status = ESetStatus::OutOfRange,
@@ -790,15 +790,15 @@ private:
 };
 
 using BoolEntry   = Entry<bool, Detail::BoolCallback>;
-using IntEntry    = Entry<std::int64_t, Detail::IntCallback>;
+using IntEntry    = Entry<int64, Detail::IntCallback>;
 using FloatEntry  = Entry<double, Detail::FloatCallback>;
 using StringEntry = Entry<std::string, Detail::StringCallback>;
 
 struct RegistryData {
     std::mutex                                                    registry_mutex;
     std::unordered_map<std::string, std::shared_ptr<EntryBase>>   by_name;
-    std::unordered_map<std::uint64_t, std::shared_ptr<EntryBase>> by_id;
-    std::atomic<std::uint64_t>                                    next_id{1};
+    std::unordered_map<uint64, std::shared_ptr<EntryBase>>        by_id;
+    std::atomic<uint64>                                           next_id{1};
     bool                                                          startup_sealed = false;
 };
 
@@ -811,7 +811,7 @@ RegistryData& GetRegistry() {
     return *registry;
 }
 
-std::shared_ptr<EntryBase> FindEntryById(std::uint64_t _id) {
+std::shared_ptr<EntryBase> FindEntryById(uint64 _id) {
     RegistryData&   registry = GetRegistry();
     std::lock_guard lock(registry.registry_mutex);
     const auto      found = registry.by_id.find(_id);
@@ -825,7 +825,7 @@ std::shared_ptr<EntryBase> FindEntryByName(std::string_view _name) {
     return found == registry.by_name.end() ? nullptr : found->second;
 }
 
-void Unregister(std::uint64_t _id) noexcept {
+void Unregister(uint64 _id) noexcept {
     if (_id == 0) {
         return;
     }
@@ -872,13 +872,13 @@ bool DescriptorIsInvalid(CVarDescriptorView _descriptor, const Value& _value) {
                                       (_descriptor.max_value && !std::isfinite(*_descriptor.max_value));
     const bool has_inverted_range =
         _descriptor.min_value && _descriptor.max_value && *_descriptor.min_value > *_descriptor.max_value;
-    const bool has_range_for_non_numeric = !std::is_same_v<Value, std::int64_t> &&
-                                           !std::is_same_v<Value, double> &&
-                                           (_descriptor.min_value || _descriptor.max_value);
+    const bool has_range_for_non_numeric   = !std::is_same_v<Value, int64> &&
+                                             !std::is_same_v<Value, double> &&
+                                             (_descriptor.min_value || _descriptor.max_value);
     const bool has_invalid_callback_budget = _descriptor.callback_dispatch_budget == 0 ||
                                              _descriptor.callback_dispatch_budget > MaxCallbackDispatchBudget;
     bool default_is_invalid = false;
-    if constexpr (std::is_same_v<Value, std::int64_t>) {
+    if constexpr (std::is_same_v<Value, int64>) {
         default_is_invalid = (_descriptor.min_value && IntIsBelowMinimum(_value, *_descriptor.min_value)) ||
                              (_descriptor.max_value && IntIsAboveMaximum(_value, *_descriptor.max_value));
     } else if constexpr (std::is_same_v<Value, double>) {
@@ -911,7 +911,7 @@ RegistrationResult RegisterEntry(
     }
 
     RegistryData&       registry = GetRegistry();
-    const std::uint64_t id       = registry.next_id.fetch_add(1, std::memory_order_relaxed);
+    const uint64        id       = registry.next_id.fetch_add(1, std::memory_order_relaxed);
     if (id == 0) {
         return {
             .status = ERegistrationStatus::InvalidDescriptor,
@@ -1031,11 +1031,11 @@ bool VisitEntrySnapshot(const std::shared_ptr<EntryBase>& _entry, SnapshotVisito
 
 } // namespace
 
-Registration Detail::RegistrationAccess::Create(std::uint64_t _id) noexcept {
+Registration Detail::RegistrationAccess::Create(uint64 _id) noexcept {
     return Registration(_id);
 }
 
-Registration::Registration(std::uint64_t _id) noexcept : id(_id) {}
+Registration::Registration(uint64 _id) noexcept : id(_id) {}
 
 Registration::~Registration() {
     Reset();
@@ -1060,7 +1060,7 @@ CVarSetResult Registration::SynchronizeOwnerValue(bool _value) {
                    };
 }
 
-CVarSetResult Registration::SynchronizeOwnerValue(std::int64_t _value) {
+CVarSetResult Registration::SynchronizeOwnerValue(int64 _value) {
     const std::shared_ptr<EntryBase> entry = FindEntryById(id);
     return entry ? entry->SynchronizeOwnerValue(CVarValue(_value)) :
                    CVarSetResult{
@@ -1088,7 +1088,7 @@ CVarSetResult Registration::SynchronizeOwnerValue(std::string_view _value) {
 }
 
 void Registration::Reset() noexcept {
-    const std::uint64_t reset_id = std::exchange(id, 0);
+    const uint64 reset_id = std::exchange(id, 0);
     Unregister(reset_id);
 }
 
@@ -1111,7 +1111,7 @@ RegistrationResult Detail::RegisterBoolRaw(
 
 RegistrationResult Detail::RegisterIntRaw(
     CVarDescriptorView _descriptor,
-    std::int64_t       _default_value,
+    int64              _default_value,
     IntCallback        _callback,
     void*              _context,
     DestroyCallback    _destroy
@@ -1164,7 +1164,7 @@ bool Detail::VisitSnapshotRaw(std::string_view _name, SnapshotVisitor _visitor, 
     return VisitEntrySnapshot(FindEntryByName(_name), _visitor, _context);
 }
 
-bool Detail::VisitSnapshotByIdRaw(std::uint64_t _id, SnapshotVisitor _visitor, void* _context) {
+bool Detail::VisitSnapshotByIdRaw(uint64 _id, SnapshotVisitor _visitor, void* _context) {
     return VisitEntrySnapshot(FindEntryById(_id), _visitor, _context);
 }
 

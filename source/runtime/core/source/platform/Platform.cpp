@@ -1,7 +1,7 @@
 #include "platform/Platform.h"
 #include "PlatformImplement.h"
 #include "misc/STL.h"
-#include <cstdint>
+#include "misc/Types.h"
 #include <cstdlib>
 #if PLATFORM_WINDOWS
 #include <basetsd.h>
@@ -37,7 +37,7 @@ static constexpr size_t max_core_cnt  = 256;
 static constexpr size_t max_group_cnt = 256;
 
 struct ProcessorGroup {
-    uint32_t  cnt;
+    uint32    cnt;
     KAFFINITY mask;
 };
 struct ProcessorGroups {
@@ -73,8 +73,8 @@ const ProcessorGroups& GetProcessorGroups() {
 #endif
 
 PlatformStackTrace PlatformImplement::CaptureStackTrace(
-    std::uint32_t,
-    std::uint32_t
+    Moer::uint32,
+    Moer::uint32
 ) noexcept {
     return {};
 }
@@ -85,7 +85,7 @@ bool PlatformImplement::InitializeCrashDiagnostics() noexcept {
 
 PlatformCrashArtifactResult PlatformImplement::WriteCrashArtifacts(
     const PlatformCrashArtifactRequest&,
-    std::uint32_t
+    Moer::uint32
 ) noexcept {
     return {};
 }
@@ -117,7 +117,7 @@ Affinity Affinity::All() {
     return Affinity();
 #endif
 }
-Affinity Affinity::AnyOf(uint32_t _thread_id, Affinity&& _in_affinity) {
+Affinity Affinity::AnyOf(Moer::uint32 _thread_id, Affinity&& _in_affinity) {
 #if PLATFORM_WINDOWS
     Affinity affinity;
     auto     cnt = _in_affinity.GetSize();
@@ -156,34 +156,34 @@ void Platform::SetCurrentThreadAffinity(Affinity&& _affinity) {
 void Platform::SetCurrentThreadName(std::string_view _name) {
     PlatformImplement::GetInstance()->SetCurrentThreadName(_name);
 }
-void Platform::SetThreadAffinity(void* current_thread_handle, uint64_t mask) {
+void Platform::SetThreadAffinity(void* current_thread_handle, Moer::uint64 mask) {
 
     PlatformImplement::GetInstance()->SetThreadAffinityMask(current_thread_handle, mask);
 }
 void Platform::SetThreadGroupAffinity(
-    void*    current_thread_handle,
-    uint16_t group_mask,
-    uint64_t affinity_mask
+    void*        current_thread_handle,
+    Moer::uint16 group_mask,
+    Moer::uint64 affinity_mask
 ) {
     PlatformImplement::GetInstance()->SetThreadGroupAffinity(
         current_thread_handle, group_mask, affinity_mask
     );
 }
 
-int32_t Platform::GetProcessorWorkGroupCount() {
+Moer::int32 Platform::GetProcessorWorkGroupCount() {
     return PlatformImplement::GetInstance()->GetProcessorWorkGroupCount();
 }
 
-int32_t Platform::GetProcessorCoreCountInGroup(uint32_t groupID) {
+Moer::int32 Platform::GetProcessorCoreCountInGroup(Moer::uint32 groupID) {
     return PlatformImplement::GetInstance()->GetProcessorCoreCountInGroup(groupID);
 }
 
-int32_t Platform::GetProcessorCoreCount() {
+Moer::int32 Platform::GetProcessorCoreCount() {
 
     return PlatformImplement::GetInstance()->GetProcessorCoreCount();
 }
 
-uint32_t Platform::GetCurrentThreadID() {
+Moer::uint32 Platform::GetCurrentThreadID() {
     return PlatformImplement::GetInstance()->GetCurrentThreadID();
 }
 
@@ -196,7 +196,7 @@ void Platform::SetEnv(const char* _name, const char* _value) {
 }
 
 PlatformStackTrace
-Platform::CaptureStackTrace(std::uint32_t _frames_to_skip, std::uint32_t _max_frames) noexcept {
+Platform::CaptureStackTrace(Moer::uint32 _frames_to_skip, Moer::uint32 _max_frames) noexcept {
     return PlatformImplement::GetInstance()->CaptureStackTrace(_frames_to_skip, _max_frames);
 }
 
@@ -207,7 +207,7 @@ bool Platform::InitializeCrashDiagnostics() noexcept {
 PlatformCrashArtifactResult
 Platform::WriteCrashArtifacts(
     const PlatformCrashArtifactRequest& _request,
-    std::uint32_t _timeout_ms
+    Moer::uint32                        _timeout_ms
 ) noexcept {
     return PlatformImplement::GetInstance()->WriteCrashArtifacts(
         _request, _timeout_ms

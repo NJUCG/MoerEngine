@@ -1,6 +1,7 @@
 #ifndef MOER_ENGINE_PROFILE_SUMMARY_CONTRACT_H
 #define MOER_ENGINE_PROFILE_SUMMARY_CONTRACT_H
 
+#include "misc/Types.h"
 #include "profile_consumer/ProfileSession.h"
 
 #include <new>
@@ -11,7 +12,7 @@
 namespace Moer::ProfileDump {
 
 inline constexpr std::string_view kProfileSummaryContractName{"moer.profile.summary"};
-inline constexpr std::uint32_t    kProfileSummaryContractVersion{1};
+inline constexpr uint32           kProfileSummaryContractVersion{1};
 
 inline constexpr std::string_view kProfileSummaryAllocationFailureJson{
     R"json({"contract":"moer.profile.summary","version":1,"load":{"status":"resource_exhausted","incomplete_reason":"none","error_code":"resource_allocation_failed","limit":"none","codec_status":"ok","input_bytes":"0","valid_prefix_bytes":"0","error_byte_offset":null,"error_packet_index":null,"incomplete_byte_offset":null,"incomplete_packet_index":null}})json"

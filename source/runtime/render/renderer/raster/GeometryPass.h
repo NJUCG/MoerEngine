@@ -3,9 +3,11 @@
 
 #include "math/Function.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
+#include "profile/ProfileScope.h"
+#include "rendergraph/RenderGraph.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
-#include "rendergraph/RenderGraph.h"
 #include "scene/camera/Camera.h"
 #include "shader/ShaderCommon.h"
 #include "shader/ShaderMutation.h"
@@ -48,8 +50,8 @@ public:
         BufferView                     index_buffer{};
         BufferView                     draw_commands{};
         BufferView                     draw_count{};
-        uint                           draw_command_stride = 0;
-        uint                           max_draw_count      = 0;
+        uint32                         draw_command_stride = 0;
+        uint32                         max_draw_count      = 0;
         Rect2D                         render_area{};
         DepthBufferRef                 depth{};
         TextureRef                     base_color{};
@@ -66,7 +68,7 @@ public:
             {},
             {
                 RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM),           // base_color
-                RHIColorAttachmentInfo::Preset(PF_A2R10G10B10_UNORM_PACK32), // normal
+                RHIColorAttachmentInfo::Preset(PF_A2B10G10R10_UNORM_PACK32), // normal
                 RHIColorAttachmentInfo::Preset(PF_R8G8B8A8_UNORM)            // metal_rough_ao
             },
             depth_stencil_info,
@@ -92,6 +94,7 @@ public:
 
     [[nodiscard]] RecordParameters
     Prepare(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {
+        MOER_PROFILE_SCOPE("Raster.Prepare.Geometry");
         const auto& gpu_scene_res = context.GetGpuSceneRes();
 
         const bool use_occlusion_culling = raster_config.enable_occlusion_culling &&
@@ -145,7 +148,7 @@ public:
         param.alpha_test_blend_pixel_cutoff =
             raster_config.geometry_alpha_test_blend_pixel_cutoff;
         param.debug_visualization_mode =
-            static_cast<uint>(raster_config.geometry_debug_visualization);
+            static_cast<uint32>(raster_config.geometry_debug_visualization);
 
         const auto render_area = context.textures.base_color.GetRect2D();
         assert(
@@ -173,7 +176,10 @@ public:
 
     void Record(CommandList& cmd_list, const RecordParameters& parameters) {
         culling_pass.Record(cmd_list, parameters.culling);
+        RecordDraw(cmd_list, parameters);
+    }
 
+    void RecordDraw(CommandList& cmd_list, const RecordParameters& parameters) {
         cmd_list.PushScopeWithTimeScope(RasterTool::GetGeometryDrawProfileScopeName());
         auto draw_command = cmd_list.Gfx(pipeline, parameters.bindless, parameters.shader);
         draw_command.DrawIndirect(
@@ -193,13 +199,12 @@ public:
         cmd_list.PopScopeWithTimeScope();
     }
 
-    RenderGraph::PreparedPassHandle AddToGraph(
-        RenderGraph& graph,
+    RenderGraph::PassHandle AddToGraph(
+        RenderGraph&   graph,
         RasterContext& context,
-        RasterConfig& raster_config,
-        const Camera& camera,
-        GraphResources resources,
-        std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
+        RasterConfig&  raster_config,
+        const Camera&  camera,
+        GraphResources resources
     );
 
     void Process(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {

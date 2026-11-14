@@ -1,9 +1,11 @@
 //
 // Created by 17152 on 2023/9/21.
 //
+
 #include "PixelFormat.h"
 #include "RHIImpl.h"
 #include "misc/STL.h"
+#include "misc/Types.h"
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 #include "rhi/RHIResource.h"
@@ -33,19 +35,19 @@ uint64 NextNonZeroId(std::atomic<uint64>& _counter) noexcept {
 
 uint3 FullTextureMipExtent(
     const Texture& _texture,
-    uint           _mip_level
+    uint32         _mip_level
 ) noexcept {
     const uint3 base_extent = _texture.GetExtent();
-    const auto mip_dimension = [_mip_level](uint _dimension) noexcept {
-        if (_mip_level >= std::numeric_limits<uint>::digits) {
+    const auto  mip_dimension = [_mip_level](uint32 _dimension) noexcept {
+        if (_mip_level >= std::numeric_limits<uint32>::digits) {
             return 1u;
         }
         return std::max(_dimension >> _mip_level, 1u);
     };
     return uint3(
-        mip_dimension(uint(base_extent.x)),
-        mip_dimension(uint(base_extent.y)),
-        mip_dimension(uint(base_extent.z))
+        mip_dimension(uint32(base_extent.x)),
+        mip_dimension(uint32(base_extent.y)),
+        mip_dimension(uint32(base_extent.z))
     );
 }
 
@@ -77,10 +79,10 @@ bool IsOwningTextureReadbackSupported(
     // owning contract honest by accepting only the contiguous,
     // single-plane color range until block-compressed and multi-plane
     // packing is represented explicitly by the RHI.
-    const uint format = static_cast<uint>(texture->GetFormat());
-    const bool contiguous_single_plane_color =
-        format >= static_cast<uint>(PF_R4G4_UNORM_PACK8) &&
-        format <= static_cast<uint>(PF_E5B9G9R9_UFLOAT_PACK32);
+    const uint32 format = static_cast<uint32>(texture->GetFormat());
+    const bool   contiguous_single_plane_color =
+        format >= static_cast<uint32>(PF_R4G4_UNORM_PACK8) &&
+        format <= static_cast<uint32>(PF_E5B9G9R9_UFLOAT_PACK32);
     const ETextureUsageFlags required_usage =
         ETextureUsageFlags::TRANSFER_SRC;
     const uint3 base_extent = texture->GetExtent();
@@ -179,7 +181,8 @@ CommandList::~CommandList() {
         std::move(commands),
         std::move(callbacks),
         std::move(success_callbacks),
-        std::move(cached_args)
+        std::move(cached_args),
+        std::move(lifetime)
     );
     rejected.gpu_completion_tokens =
         std::move(gpu_completion_tokens);
@@ -273,7 +276,8 @@ CommandList& CommandList::operator=(CommandList&& _other) {
         std::move(commands),
         std::move(callbacks),
         std::move(success_callbacks),
-        std::move(cached_args)
+        std::move(cached_args),
+        std::move(lifetime)
     );
     replaced.gpu_completion_tokens =
         std::move(gpu_completion_tokens);
@@ -298,6 +302,7 @@ CommandList& CommandList::operator=(CommandList&& _other) {
     gpu_scope_recorder_bound_this_generation = false;
     suppress_legacy_gpu_profiling_this_generation = false;
 
+    lifetime                    = std::move(_other.lifetime);
     commands                    = std::move(_other.commands);
     current_barriers            = _other.current_barriers;
     callbacks                   = std::move(_other.callbacks);
@@ -444,16 +449,6 @@ CommandList::ManagedRecordingLease CommandList::AcquireManagedRecordingLease() {
     ++managed_recording_lease_count;
     return ManagedRecordingLease(*this);
 }
-// void CommandList::ArgSetter::SetBuffer(uint64 _index, BufferView _buffer) {
-//     auto idx          = handle.GetBindingIdx(_index);
-//     temp_args[_index] = _buffer;
-// }
-
-// void CommandList::ArgSetter::SetTexture(uint64 _index, TextureView _texture) {
-//     auto idx          = handle.GetBindingIdx(_index);
-//     temp_args[_index] = _texture;
-// }
-
 // void CommandList::ArgSetter::SetConstant(void* _data, uint _size) {
 //     temp_constant.resize(_size);
 //     std::memcpy(temp_constant.data(), _data, _size);
@@ -521,6 +516,8 @@ void CommandList::ComputeDispatcher::Dispatch(
             _name
         );
     }
+    cmd_list.RetainResource(pso.handle.GetState());
+    cmd_list.Retain(args);
     cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _group_count, _section));
     cmd_list.commands.back()->name = _name;
 }
@@ -531,8 +528,27 @@ void CommandList::ComputeDispatcher::DispatchIndirect(
     ProfileSection   _section
 ) {
     ValidateRHICommandAccess("CommandList::DispatchIndirect");
+    cmd_list.Retain(_indirect);
+    cmd_list.RetainResource(pso.handle.GetState());
+    cmd_list.Retain(args);
     cmd_list.commands.push_back(MakeUnique<DispatchCmd>(std::move(args), pso.handle, _indirect, _section));
     cmd_list.commands.back()->name = _name;
+}
+
+void CommandList::BeginResourceAccesses(std::span<const RHIResourceAccess> accesses, std::string_view label) {
+    ValidateRHICommandAccess("CommandList::BeginResourceAccesses");
+    for (const auto& access : accesses) {
+        std::visit([this](const auto& view) {
+            Retain(view);
+        },
+                   access.resource);
+    }
+    commands.push_back(MakeUnique<ResourceAccessScopeCmd>(accesses, true, label));
+}
+
+void CommandList::EndResourceAccesses() {
+    ValidateRHICommandAccess("CommandList::EndResourceAccesses");
+    commands.push_back(MakeUnique<ResourceAccessScopeCmd>(std::span<const RHIResourceAccess>{}, false, "EndResourceAccesses"));
 }
 
 CmdSubmit CommandList::Submit() {
@@ -597,7 +613,8 @@ CmdSubmit CommandList::Submit() {
         std::move(commands),
         std::move(callbacks),
         std::move(success_callbacks),
-        std::move(cached_args)
+        std::move(cached_args),
+        std::move(lifetime)
     );
     submit.gpu_completion_tokens = std::move(gpu_completion_tokens);
     submit.query_tokens = std::move(query_tokens);
@@ -666,8 +683,7 @@ void CommandList::AppendRecorded(CommandList&& _source) {
             "CommandList cannot append its own recording generation"
         );
     }
-    if (managed_recording_lease_count != 0 ||
-        _source.managed_recording_lease_count != 0) {
+    if (_source.managed_recording_lease_count != 0) {
         throw std::logic_error(
             "CommandList merge is forbidden while graph-managed recording is active"
         );
@@ -687,8 +703,9 @@ void CommandList::AppendRecorded(CommandList&& _source) {
             "frontend CommandList merge requires every barrier batch to be closed"
         );
     }
-    if (!scope_stack.empty() || !_source.scope_stack.empty() ||
-        HasOpenQueries() || _source.HasOpenQueries()) {
+    // A complete child stream can be nested inside the destination's scope.
+    // Only the source is sealed; the parent's recording lease stays intact.
+    if (!_source.scope_stack.empty() || _source.HasOpenQueries()) {
         throw std::logic_error(
             "frontend CommandList merge requires closed marker and query scopes"
         );
@@ -704,10 +721,10 @@ void CommandList::AppendRecorded(CommandList&& _source) {
 
     const size_t destination_cache_size = cached_args.size();
     const size_t source_cache_size      = _source.cached_args.size();
-    if (destination_cache_size > std::numeric_limits<uint>::max() ||
-        source_cache_size > std::numeric_limits<uint>::max() ||
+    if (destination_cache_size > std::numeric_limits<uint32>::max() ||
+        source_cache_size > std::numeric_limits<uint32>::max() ||
         source_cache_size >
-            std::numeric_limits<uint>::max() - destination_cache_size) {
+            std::numeric_limits<uint32>::max() - destination_cache_size) {
         throw std::overflow_error(
             "frontend CommandList cached-argument index overflow"
         );
@@ -738,6 +755,10 @@ void CommandList::AppendRecorded(CommandList&& _source) {
             ERHITranslateExecutionClass::SerialControl :
             ERHITranslateExecutionClass::Parallel;
 
+    if (managed_recording_lease_count != 0 && merged_translate_class != translate_execution_class) {
+        throw std::logic_error("a nested stream cannot change its parent's translation class");
+    }
+
     // Submit() is only a frontend sealing operation. It rotates the source's
     // cancellation generation and packages every side payload without
     // publishing anything to RHI.
@@ -758,7 +779,15 @@ void CommandList::AppendRecorded(CommandList&& _source) {
                 "frontend CommandList merge exceeds container capacity"
             );
         }
-        destination.reserve(destination.size() + input.size());
+        const size_t required = destination.size() + input.size();
+        if (required > destination.capacity()) {
+            // Exact-size reserves on every appended pass repeatedly move the
+            // entire frame prefix. Preserve amortized growth while reserving
+            // before any source payload is moved.
+            const size_t capacity = destination.capacity();
+            const size_t growth = std::min(capacity / 2, destination.max_size() - capacity);
+            destination.reserve(std::max(required, capacity + growth));
+        }
     };
     reserve_append(commands, source.cmds);
     reserve_append(callbacks, source.callbacks);
@@ -782,7 +811,9 @@ void CommandList::AppendRecorded(CommandList&& _source) {
         query_cancellation_domain.Register(token);
     }
 
-    const uint cache_offset = static_cast<uint>(destination_cache_size);
+    KeepAlive(source.lifetime);
+
+    const uint32 cache_offset = static_cast<uint32>(destination_cache_size);
     for (auto& command : source.cmds) {
         if (command != nullptr) {
             command->RebaseCachedArgumentReferences(cache_offset);
@@ -823,6 +854,10 @@ Array<std::function<void()>> CommandList::DrainOrdinaryCallbacksForRejection() {
         gpu_completion_cancellation_domain.GetView();
     QueryCancellationView rejected_query_cancellation =
         query_cancellation_domain.GetView();
+    // Allocate the legacy callback adapter before the destructive drain.
+    if (lifetime && !callbacks.empty()) {
+        callbacks.emplace_back([owner = std::shared_ptr<const RHICommandLifetime>(lifetime)] {});
+    }
     CmdSubmit rejected = PrepareRecordingRejectionDrain();
 
     const GpuCompletionPublishBatch rejected_completion_batch =
@@ -900,7 +935,8 @@ CmdSubmit CommandList::PrepareRecordingRejectionDrain(
         std::move(commands),
         std::move(callbacks),
         std::move(success_callbacks),
-        std::move(cached_args)
+        std::move(cached_args),
+        std::move(lifetime)
     );
     rejected.gpu_completion_tokens =
         std::move(gpu_completion_tokens);
@@ -956,7 +992,7 @@ CmdSubmit CommandList::PrepareRecordingRejectionDrain(
 }
 
 bool CommandList::IsEmpty() const {
-    return commands.empty() && callbacks.empty() &&
+    return !lifetime && commands.empty() && callbacks.empty() &&
            success_callbacks.empty() && gpu_completion_tokens.empty() &&
            signal_events.empty() && signal_rejection_keepalives.empty() &&
            cached_args.empty() && query_tokens.empty() &&
@@ -965,6 +1001,8 @@ bool CommandList::IsEmpty() const {
 
 void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _name) {
     ValidateRHICommandAccess("CommandList::CopyFrom");
+    Retain(_src);
+    Retain(_dst);
     commands.push_back(
         MakeUnique<CopyBufferCmd>(
             reinterpret_cast<uint64>(_src.GetBuffer()),
@@ -978,22 +1016,37 @@ void CommandList::CopyFrom(BufferView _src, BufferView _dst, std::string_view _n
 }
 void CommandList::CopyFrom(TextureView _src, TextureView _dst, std::string_view _name) {
     ValidateRHICommandAccess("CommandList::CopyFrom");
-    commands.push_back(
-        MakeUnique<CopyTextureCmd>(
-            _src.texture->GetFormat(),
-            reinterpret_cast<uint64>(_src.texture), //reinterpret_cast<uint64
-            reinterpret_cast<uint64>(_dst.texture),
-            _src.mip_level,
-            _dst.mip_level,
-            _src.offset,
-            _dst.offset,
-            _src.extent,
-            _name
-        )
-    );
+    const auto valid_range = [](TextureView view) {
+        return view.texture && view.num_array && view.array_layer <= view.texture->GetNumArray() &&
+               view.num_array <= view.texture->GetNumArray() - view.array_layer;
+    };
+    if (!valid_range(_src) || !valid_range(_dst) || _src.num_array != _dst.num_array) {
+        throw std::invalid_argument("Texture copy requires matching, valid array ranges");
+    }
+    Retain(_src);
+    Retain(_dst);
+    for (uint32 layer = 0; layer < _src.num_array; ++layer) {
+        commands.push_back(
+            MakeUnique<CopyTextureCmd>(
+                _src.texture->GetFormat(),
+                reinterpret_cast<uint64>(_src.texture),
+                reinterpret_cast<uint64>(_dst.texture),
+                _src.mip_level,
+                _dst.mip_level,
+                _src.offset,
+                _dst.offset,
+                TextureCopyExtent(_src),
+                _name,
+                _src.array_layer + layer,
+                _dst.array_layer + layer
+            )
+        );
+    }
 }
 void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _name) {
     ValidateRHICommandAccess("CommandList::CopyFrom");
+    Retain(_src);
+    Retain(_dst);
     commands.push_back(
         MakeUnique<CopyTextureToBufferCmd>(
             _src.texture->GetFormat(),
@@ -1010,6 +1063,8 @@ void CommandList::CopyFrom(TextureView _src, BufferView _dst, std::string_view _
 }
 void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _name) {
     ValidateRHICommandAccess("CommandList::CopyFrom");
+    Retain(_src);
+    Retain(_dst);
     commands.push_back(
         MakeUnique<CopyBufferToTextureCmd>(
             _dst.texture->GetFormat(),
@@ -1026,6 +1081,7 @@ void CommandList::CopyFrom(BufferView _src, TextureView _dst, std::string_view _
 }
 
 void CommandList::CopyFrom(std::span<byte> _data, TextureView _texture, std::string_view _name) {
+    Retain(_texture);
     CopyFrom(std::span<const byte>(_data.data(), _data.size()), _texture, _name);
 }
 
@@ -1034,11 +1090,12 @@ void CommandList::CopyFrom(
     TextureView           _texture,
     std::string_view      _name
 ) {
+    Retain(_texture);
     ValidateRHICommandAccess("CommandList::CopyFrom");
     uint3 extent = uint3(
-        std::max(uint(_texture.extent.x) >> _texture.mip_level, 1u),
-        std::max(uint(_texture.extent.y) >> _texture.mip_level, 1u),
-        std::max(uint(_texture.extent.z) >> _texture.mip_level, 1u)
+        std::max(uint32(_texture.extent.x) >> _texture.mip_level, 1u),
+        std::max(uint32(_texture.extent.y) >> _texture.mip_level, 1u),
+        std::max(uint32(_texture.extent.z) >> _texture.mip_level, 1u)
     );
     Array<byte> owned_data(_data.begin(), _data.end());
     commands.push_back(
@@ -1056,6 +1113,7 @@ void CommandList::CopyFrom(
 }
 
 void CommandList::CopyFrom(std::span<byte> _data, BufferView _buffer, std::string_view _name) {
+    Retain(_buffer);
     CopyFrom(std::span<const byte>(_data.data(), _data.size()), _buffer, _name);
 }
 
@@ -1064,6 +1122,7 @@ void CommandList::CopyFrom(
     BufferView            _buffer,
     std::string_view      _name
 ) {
+    Retain(_buffer);
     ValidateRHICommandAccess("CommandList::CopyFrom");
     if (_data.size() == 0) {
         return;
@@ -1081,6 +1140,7 @@ void CommandList::CopyFrom(
 }
 
 void CommandList::CopyFrom(BufferView _src, std::span<byte> _data, std::string_view _name) {
+    Retain(_src);
     ValidateRHICommandAccess("CommandList::CopyFrom");
     commands.push_back(
         MakeUnique<CopyBackBufferCmd>(
@@ -1094,12 +1154,13 @@ void CommandList::CopyFrom(BufferView _src, std::span<byte> _data, std::string_v
 }
 
 void CommandList::CopyFrom(TextureView _src, std::span<byte> _data, std::string_view _name) {
+    Retain(_src);
     ValidateRHICommandAccess("CommandList::CopyFrom");
     bool b_valid_size = _data.size() > 0 && _src.GetTexture();
     if (!b_valid_size) {
         return;
     }
-    uint mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
+    uint32 mip_size = _src.GetTexture()->GetMipByteSize(_src.mip_level);
     b_valid_size &= mip_size <= _data.size();
 
     assert(b_valid_size && "Fatal: Copy back data size is less than texture mip size");
@@ -1126,6 +1187,7 @@ ReadbackFuture CommandList::Readback(
         return {};
     }
 
+    Retain(_src);
     GpuCompletionToken completion_token(
         NextNonZeroId(g_gpu_completion_token_id), _name
     );
@@ -1173,6 +1235,7 @@ ReadbackFuture CommandList::Readback(
         return {};
     }
 
+    Retain(_src);
     GpuCompletionToken completion_token(
         NextNonZeroId(g_gpu_completion_token_id), _name
     );
@@ -1202,6 +1265,7 @@ ReadbackFuture CommandList::Readback(
 }
 
 void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_view _name) {
+    Retain(_dst);
     ValidateRHICommandAccess("CommandList::CopyFrom");
     if (_data.size() == 0) {
         return;
@@ -1218,6 +1282,7 @@ void CommandList::CopyFrom(Array<byte>&& _data, BufferView _dst, std::string_vie
 }
 
 void CommandList::CopyFrom(Array<byte>&& _data, TextureView _dst, std::string_view _name) {
+    Retain(_dst);
     ValidateRHICommandAccess("CommandList::CopyFrom");
     if (_data.size() == 0) {
         return;
@@ -1252,6 +1317,12 @@ void CommandList::SetRenderCmds(
         );
     }
 
+    RetainResource(_handle.GetState());
+    Retain(_args);
+    Retain(_info);
+    for (const auto& draw : _mesh_data) {
+        Retain(draw);
+    }
     commands.push_back(
         MakeUnique<SetDrawStateCmd>(_handle, std::move(_args), std::move(_info), std::move(_mesh_data))
     );
@@ -1266,6 +1337,17 @@ void CommandList::SetMultiRenderCmds(
     std::string_view _name
 ) {
     ValidateRHICommandAccess("CommandList::SetMultiRenderCmds");
+    Retain(_pass_info);
+    for (const auto& draw : _batch.draw_cmds) {
+        RetainResource(draw.handle.GetState());
+        Retain(draw.args);
+        std::visit([this](const auto& draws) {
+            for (const auto& item : draws) {
+                Retain(item);
+            }
+        },
+                   draw.mesh_dispatch_data);
+    }
     commands.push_back(MakeUnique<MultiDrawCmd>(std::move(_batch), std::move(_pass_info), _name));
 }
 
@@ -1280,22 +1362,28 @@ void CommandList::SetMultiRenderCmds(
 void CommandList::UpdateBindlessArray(BindlessArrayRef _array) {
     ValidateRHICommandAccess("CommandList::UpdateBindlessArray");
     assert(_array && "Bindless array is null");
+    RetainResource(_array.Get());
 
-    commands.push_back(_array->CreateUpdateCommand());
+    if (auto update = _array->CreateUpdateCommand()) {
+        commands.push_back(std::move(update));
+    }
 }
 
-void CommandList::ClearResource(BufferView _buffer, uint _value) {
+void CommandList::ClearResource(BufferView _buffer, uint32 _value) {
     ValidateRHICommandAccess("CommandList::ClearResource");
+    Retain(_buffer);
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_buffer, _value));
 }
 
 void CommandList::ClearResource(TextureView _texture, float4 _color) {
     ValidateRHICommandAccess("CommandList::ClearResource");
+    Retain(_texture);
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _color));
 }
 
-void CommandList::ClearResource(TextureView _texture, uint _value) {
+void CommandList::ClearResource(TextureView _texture, uint32 _value) {
     ValidateRHICommandAccess("CommandList::ClearResource");
+    Retain(_texture);
     commands.emplace_back(MakeUnique<ClearResourceCmd>(_texture, _value));
 }
 
@@ -1555,6 +1643,9 @@ CommandList::SuppressLegacyGpuProfilingForGeneration() {
 
 void CommandList::BuildAccelerationStructures(Array<AccelerationStructureBuildParam>&& _geometries) {
     ValidateRHICommandAccess("CommandList::BuildAccelerationStructures");
+    for (const auto& param : _geometries) {
+        RetainResource(param.geometry.Get());
+    }
     commands.emplace_back(MakeUnique<BuildAccelerationStructuresCmd>(std::move(_geometries)));
 }
 
@@ -1565,7 +1656,7 @@ void CommandList::UpdateRaytracingScene(RaytracingSceneRef _scene) {
     }
     UniquePtr<Command> command = _scene->UpdateScene();
     if (command) {
-        commands.emplace_back(std::move(command));
+        UpdateRaytracingScene(std::move(command));
     }
 }
 
@@ -1576,6 +1667,14 @@ void CommandList::UpdateRaytracingScene(UniquePtr<Command>&& _prepared_update) {
         "Prepared ray tracing scene update must be a BuildTLAS command"
     );
     if (_prepared_update && _prepared_update->Type() == Command::EType::BuildTLAS) {
+        const auto& update = static_cast<const UpdateRaytracingSceneCmd&>(*_prepared_update);
+        RetainResource(update.Scene().Get());
+        RetainResource(update.InstanceBuffer().Get());
+        RetainResource(update.ScratchBuffer().Get());
+        RetainResource(update.Tlas().Get());
+        for (const auto& geometry : update.GeometryRefs()) {
+            RetainResource(geometry.Get());
+        }
         commands.emplace_back(std::move(_prepared_update));
     }
 }
@@ -1623,10 +1722,10 @@ void CommandList::Barriers(
         const auto& transfer = barrier.queue_transfer;
         switch (transfer.phase) {
             case EBarrierQueueTransferPhase::None:
-                if (!((transfer.src_queue == EQueueType::Ignore &&
-                       transfer.dst_queue == EQueueType::Ignore) ||
-                      (transfer.src_queue == queue_type &&
-                       transfer.dst_queue == queue_type))) {
+                if (transfer.external ||
+                    !((transfer.src_queue == EQueueType::Ignore && transfer.dst_queue == EQueueType::Ignore
+                      ) ||
+                      (transfer.src_queue == queue_type && transfer.dst_queue == queue_type))) {
                     throw std::invalid_argument(
                         "local explicit barrier endpoints must be ignored or match "
                         "the CommandList queue"
@@ -1635,6 +1734,19 @@ void CommandList::Barriers(
                 break;
             case EBarrierQueueTransferPhase::Release:
             case EBarrierQueueTransferPhase::Acquire:
+                if (transfer.external) {
+                    const bool release  = transfer.phase == EBarrierQueueTransferPhase::Release;
+                    const auto managed  = release ? transfer.src_queue : transfer.dst_queue;
+                    const auto external = release ? transfer.dst_queue : transfer.src_queue;
+                    if (resource_state_ownership != ERHIResourceStateOwnership::Compiled ||
+                        !is_supported_ownership_queue(managed) || managed != queue_type ||
+                        external != EQueueType::Ignore) {
+                        throw std::invalid_argument(
+                            "external ownership barrier requires a compiled list on its managed endpoint"
+                        );
+                    }
+                    break;
+                }
                 if (!is_supported_ownership_queue(transfer.src_queue) ||
                     !is_supported_ownership_queue(transfer.dst_queue) ||
                     transfer.src_queue == transfer.dst_queue) {
@@ -1663,11 +1775,11 @@ void CommandList::Barriers(
                 using TResource = std::decay_t<decltype(resource)>;
                 if constexpr (std::is_same_v<TResource, TextureView>) {
                     const auto* texture = resource.GetTexture();
-                    const auto aspects =
-                        static_cast<uint32_t>(barrier.texture_aspects);
+                    const auto  aspects =
+                        static_cast<uint32>(barrier.texture_aspects);
                     const auto available_aspects =
                         texture == nullptr ? 0u :
-                        static_cast<uint32_t>(texture->GetAspectFlags());
+                                             static_cast<uint32>(texture->GetAspectFlags());
                     if (texture == nullptr || resource.num_mips == 0 ||
                         resource.num_array == 0 ||
                         resource.mip_level >= texture->GetNumMips() ||
@@ -1706,15 +1818,20 @@ void CommandList::Barriers(
     }
 
     auto barrier_cmd = MakeUnique<BarrierCmd>(
-        static_cast<uint>(_barriers.size()), _src_queue, _dst_queue
+        static_cast<uint32>(_barriers.size()), _src_queue, _dst_queue
     );
     for (const BarrierCreateInfo& barrier : _barriers) {
+        std::visit([this](const auto& resource) {
+            Retain(resource);
+        },
+                   barrier.resource);
         barrier_cmd->AddExplicitBarrier(barrier);
     }
     commands.push_back(std::move(barrier_cmd));
-    // Recording an authoritative src/dst dependency opts this submit out of
-    // the backend's legacy restore-to-preferred-state epilogue.
-    resource_state_ownership = ERHIResourceStateOwnership::Explicit;
+    // Explicit barriers opt into the caller-owned dependency contract.
+    if (!HasExplicitResourceStateOwnership()) {
+        resource_state_ownership = ERHIResourceStateOwnership::Compiled;
+    }
 }
 
 void CommandList::AddCallback(std::function<void()>&& _callback) {
@@ -2039,10 +2156,10 @@ void CommandList::Signal(const FenceRef& _fence, uint64 _signal_value) {
 }
 
 void CommandList::BeginBarriers(
-    uint       _read_tex_cnt,
-    uint       _write_tex_cnt,
-    uint       _read_buf_cnt,
-    uint       _write_buf_cnt,
+    uint32     _read_tex_cnt,
+    uint32     _write_tex_cnt,
+    uint32     _read_buf_cnt,
+    uint32     _write_buf_cnt,
     EQueueType _src_queue,
     EQueueType _dst_queue
 ) {
@@ -2056,10 +2173,12 @@ void CommandList::BeginBarriers(
 }
 
 void CommandList::InnerReadBuffer(BufferView _buffer, EBufferState _state, EPassType _pass) {
+    Retain(_buffer);
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
     barrier->ReadBuffer(_buffer, _state, _pass);
 }
 void CommandList::InnerWriteBuffer(BufferView _buffer, EBufferState _state, EPassType _pass) {
+    Retain(_buffer);
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
     barrier->WriteBuffer(_buffer, _state, _pass);
 }
@@ -2070,6 +2189,7 @@ void CommandList::InnerReadTexture(
     EPassType     _pass,
     bool          _publish_external_state
 ) {
+    Retain(_texture);
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
     barrier->ReadTexture(
         _texture,
@@ -2080,6 +2200,7 @@ void CommandList::InnerReadTexture(
 }
 
 void CommandList::InnerWriteTexture(TextureView _texture, ETextureState _state, EPassType _pass) {
+    Retain(_texture);
     BarrierCmd* barrier = static_cast<BarrierCmd*>(current_barriers);
     barrier->WriteTexture(_texture, _state, _pass);
 }
@@ -2094,26 +2215,32 @@ void CommandList::ImportResourcesFromQueue(
     Array<ImportBuffer>&&  _buffers_to_import
 ) {
     ValidateRHICommandAccess("CommandList::ImportResourcesFromQueue");
+    for (const auto& resource : _textures_to_import) {
+        Retain(resource.texture);
+    }
+    for (const auto& resource : _buffers_to_import) {
+        Retain(resource.buffer);
+    }
     {
         // 空资源检测
-        for (uint i = 0; i < _textures_to_import.size(); ++i) {
+        for (uint32 i = 0; i < _textures_to_import.size(); ++i) {
             const auto& texture_to_import = _textures_to_import[i];
             if (texture_to_import.texture.GetTexture() == nullptr) {
                 LOG_WARNING(
                     "ImportResourcesFromQueue got empty texture at index {}. src_queue={}",
                     i,
-                    static_cast<uint>(_src_queue)
+                    static_cast<uint32>(_src_queue)
                 );
             }
         }
-        for (uint i = 0; i < _buffers_to_import.size(); ++i) {
+        for (uint32 i = 0; i < _buffers_to_import.size(); ++i) {
             const auto& buffer_to_import = _buffers_to_import[i];
             if (buffer_to_import.buffer.GetBuffer() == nullptr ||
                 buffer_to_import.buffer.GetByteSize() == 0) {
                 LOG_WARNING(
                     "ImportResourcesFromQueue got empty buffer at index {}. src_queue={}",
                     i,
-                    static_cast<uint>(_src_queue)
+                    static_cast<uint32>(_src_queue)
                 );
             }
         }
@@ -2133,26 +2260,32 @@ void CommandList::ExportResourcesToQueue(
     Array<ExportBuffer>&&  _buffers_to_export
 ) {
     ValidateRHICommandAccess("CommandList::ExportResourcesToQueue");
+    for (const auto& resource : _textures_to_export) {
+        Retain(resource.texture);
+    }
+    for (const auto& resource : _buffers_to_export) {
+        Retain(resource.buffer);
+    }
     {
         // 空资源检测
-        for (uint i = 0; i < _textures_to_export.size(); ++i) {
+        for (uint32 i = 0; i < _textures_to_export.size(); ++i) {
             const auto& texture_to_export = _textures_to_export[i];
             if (texture_to_export.texture.GetTexture() == nullptr) {
                 LOG_WARNING(
                     "ExportResourcesToQueue got empty texture at index {}. dst_queue={}",
                     i,
-                    static_cast<uint>(_dst_queue)
+                    static_cast<uint32>(_dst_queue)
                 );
             }
         }
-        for (uint i = 0; i < _buffers_to_export.size(); ++i) {
+        for (uint32 i = 0; i < _buffers_to_export.size(); ++i) {
             const auto& buffer_to_export = _buffers_to_export[i];
             if (buffer_to_export.buffer.GetBuffer() == nullptr ||
                 buffer_to_export.buffer.GetByteSize() == 0) {
                 LOG_WARNING(
                     "ExportResourcesToQueue got empty buffer at index {}. dst_queue={}",
                     i,
-                    static_cast<uint>(_dst_queue)
+                    static_cast<uint32>(_dst_queue)
                 );
             }
         }
@@ -2165,8 +2298,88 @@ void CommandList::ExportResourcesToQueue(
     );
 }
 
+void CommandList::RetainResource(RHIResource* _resource) {
+    ValidateRHICommandAccess("CommandList::RetainResource");
+    if (!_resource) {
+        return;
+    }
+    if (!lifetime) {
+        lifetime = std::make_shared<RHICommandLifetime>();
+    }
+    lifetime->resources.try_emplace(_resource, _resource);
+}
+
+void CommandList::KeepAlive(std::shared_ptr<const void> _owner) {
+    ValidateRHICommandAccess("CommandList::KeepAlive");
+    if (!_owner) {
+        return;
+    }
+    if (!lifetime) {
+        lifetime = std::make_shared<RHICommandLifetime>();
+    }
+    lifetime->owners.emplace_back(std::move(_owner));
+}
+
+void CommandList::Retain(const ArrayArguments& _args) {
+    for (const auto& arg : _args.args) {
+        std::visit([this](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, BufferView> || std::is_same_v<T, TextureView>) {
+                Retain(value);
+            } else if constexpr (std::is_same_v<T, BufferViewArray> || std::is_same_v<T, TextureViewArray>) {
+                for (const auto& view : value) {
+                    Retain(view);
+                }
+            } else if constexpr (std::is_same_v<T, BindlessArrayRef> || std::is_same_v<T, RaytracingTlasRef>) {
+                RetainResource(value.Get());
+            }
+        },
+                   arg);
+    }
+}
+
+void CommandList::Retain(const TShaderArgArray& _args) {
+    if (const auto* args = std::get_if<ArrayArguments>(&_args)) {
+        Retain(*args);
+    }
+    // ArrayArgReference resources were retained by RegisterArgs().
+}
+
+void CommandList::Retain(const RenderPassInfo& _pass) {
+    for (const auto& attachment : _pass.color_attachments) {
+        RetainResource(attachment.target);
+    }
+    RetainResource(_pass.depth_attachment.target);
+}
+
+void CommandList::Retain(const IndirectDrawParam& _draw) {
+    Retain(_draw.buffer);
+    if (_draw.count_buffer) {
+        Retain(*_draw.count_buffer);
+    }
+}
+
+void CommandList::Retain(const MeshDrawData& _draw) {
+    for (const auto& vertex : _draw.vtx_views) {
+        RetainResource(vertex.buffer);
+    }
+    if (const auto* index = std::get_if<IndexBuffer>(&_draw.idx_view)) {
+        Retain(index->buffer);
+    }
+    if (_draw.indirect_draw_param) {
+        Retain(*_draw.indirect_draw_param);
+    }
+}
+
+void CommandList::Retain(const DispatchMeshData& _draw) {
+    if (const auto* indirect = std::get_if<IndirectDrawParam>(&_draw.draw_param)) {
+        Retain(*indirect);
+    }
+}
+
 ArrayArgReference CommandList::RegisterArgs(ArrayArguments&& _args) {
     ValidateRHICommandAccess("CommandList::RegisterArgs");
+    Retain(_args);
     cached_args.push_back(std::move(_args));
     return ArrayArgReference(cached_args.size() - 1);
 }

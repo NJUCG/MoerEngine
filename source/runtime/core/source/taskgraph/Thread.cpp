@@ -1,12 +1,13 @@
 #include "taskgraph/Thread.h"
+#include "misc/Types.h"
 #include "platform/Platform.h"
 #include "taskgraph/GraphTask.h"
 #include "taskgraph/TaskGraph.h"
 
-uint32_t TaskThreadAnyThread::Run() {
+Moer::uint32 TaskThreadAnyThread::Run() {
     TaskGraph::SetCurrentWorkerThread(m_thread_type);
     try {
-        const uint32_t result = TaskThreadBase::Run();
+        const Moer::uint32 result = TaskThreadBase::Run();
         TaskGraph::ClearCurrentWorkerThread();
         return result;
     } catch (...) {
@@ -20,7 +21,7 @@ BaseGraphTask* TaskThreadAnyThread::FindTaskToDo() {
     return TaskGraph::GetInterface().DequeueTask(EThread::GetThreadIndex(m_thread_type));
 }
 
-uint32_t TaskThreadAnyThread::ProcessTasks() {
+Moer::uint32 TaskThreadAnyThread::ProcessTasks() {
     assert(++m_queue.call_amount == 1);
     while (true) {
         BaseGraphTask* task = FindTaskToDo();
@@ -38,7 +39,7 @@ uint32_t TaskThreadAnyThread::ProcessTasks() {
     return 0;
 }
 
-uint32_t NamedThread::ProcessTasks(QueueIndex queueIndex, bool allowHang) {
+Moer::uint32 NamedThread::ProcessTasks(QueueIndex queueIndex, bool allowHang) {
     assert(++m_queue[queueIndex].call_amount == 1);
     // bool isRenderQueue = (m_threadType & EThread::INDEX_MASK) == EThread::ERenderThread;
     while (!m_queue[queueIndex].m_should_return) {

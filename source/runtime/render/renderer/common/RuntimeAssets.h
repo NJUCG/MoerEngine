@@ -25,7 +25,6 @@ public:
 
 private:
     void LoadTextures();
-    void CompleteAndImportResources();
 
 private:
     std::filesystem::path assets_path;

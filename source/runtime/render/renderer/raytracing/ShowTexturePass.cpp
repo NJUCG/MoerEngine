@@ -131,8 +131,8 @@ bool ShowTexturePass::AddPass(
 
     const PreparedCommand command   = Prepare(params, source, target);
     const RecordResources resources = CaptureResources(source, target);
-    constexpr RenderGraph::TextureState source_state =
-        RenderGraph::TextureState::Sampled;
+    constexpr RenderGraph::TextureAccessType source_state =
+        RenderGraph::TextureAccessType::Sampled;
 
     graph.SetInitialState(
         source_handle,
@@ -146,12 +146,12 @@ bool ShowTexturePass::AddPass(
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
-                    RenderGraph::PipelineType::Graphics
+                    RenderGraph::GpuWorkType::Graphics
                 )
                 .Read(frame_setup_ready)
                 .ReadWrite(presentation_ready)
-                .Read(source_handle, RenderGraph::TextureState::Sampled)
-                .Write(target_handle, RenderGraph::TextureState::RenderTarget);
+                .Read(source_handle, RenderGraph::TextureAccessType::Sampled)
+                .Write(target_handle, RenderGraph::TextureAccessType::ColorAttachment);
         },
         [owner, command, resources](CommandList& cmd_list) {
             ScopedGpuMarker marker(
@@ -162,7 +162,7 @@ bool ShowTexturePass::AddPass(
             );
             Record(cmd_list, *owner, command, resources);
         },
-        RenderGraph::PassExecutionClass::ParallelRecordEligible
+        RenderGraph::PassRecordPolicy::ParallelAllowed
     );
 
     graph.Export(
@@ -173,7 +173,7 @@ bool ShowTexturePass::AddPass(
     );
     graph.Export(
         target_handle,
-        RenderGraph::TextureState::Sampled,
+        RenderGraph::TextureAccessType::Sampled,
         RenderGraph::QueueRole::Graphics,
         RenderGraph::AccessMode::Read
     );

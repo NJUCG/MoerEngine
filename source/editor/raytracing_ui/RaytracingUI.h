@@ -1,5 +1,7 @@
 #pragma once
 
+#include "misc/Types.h"
+
 // 通过 ImGui 面板提供 Raytracing 渲染器的运行时配置。
 
 #include "renderer/raytracing/RaytracingConfig.h"
@@ -27,7 +29,7 @@ public:
 
 private:
     RaytracingConfig&               m_config;
-    UnorderedMap<std::string, uint> m_final_color_options;
+    UnorderedMap<std::string, uint32> m_final_color_options;
 };
 
 } // namespace Moer

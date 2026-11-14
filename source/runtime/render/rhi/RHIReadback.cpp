@@ -1,5 +1,5 @@
 #include "rhi/RHIReadback.h"
-
+#include "misc/Types.h"
 #include "rhi/RHIThreadOwnership.h"
 
 #include <condition_variable>
@@ -10,7 +10,7 @@
 namespace Moer::Render {
 namespace {
 
-enum class ReadbackPayloadStatus : std::uint8_t {
+enum class ReadbackPayloadStatus : uint8 {
     Pending = 0,
     Ready   = 1,
     Error   = 2,
@@ -84,7 +84,7 @@ struct ReadbackProducerLease {
 };
 
 ReadbackFuture::ReadbackFuture(
-    std::uint64_t                         _readback_id,
+    uint64                                _readback_id,
     std::shared_ptr<const std::string>    _name,
     std::shared_ptr<ReadbackPayloadState> _state,
     GpuCompletionFuture                   _completion
@@ -294,7 +294,7 @@ void ReadbackFuture::Then(Callback _callback) const {
 }
 
 ReadbackToken::ReadbackToken(
-    std::uint64_t       _readback_id,
+    uint64              _readback_id,
     std::size_t         _byte_size,
     std::string_view    _name,
     GpuCompletionFuture _completion
@@ -344,7 +344,7 @@ bool ReadbackToken::Valid() const noexcept {
            completion_.Valid();
 }
 
-std::uint64_t ReadbackToken::Id() const noexcept {
+uint64 ReadbackToken::Id() const noexcept {
     return readback_id_;
 }
 
@@ -367,7 +367,7 @@ ReadbackFuture ReadbackToken::GetFuture() const noexcept {
 }
 
 ReadbackToken ReadbackBackendAccess::Create(
-    std::uint64_t       _readback_id,
+    uint64              _readback_id,
     std::size_t         _byte_size,
     std::string_view    _name,
     GpuCompletionFuture _completion

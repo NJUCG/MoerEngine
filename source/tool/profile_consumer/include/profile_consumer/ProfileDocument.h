@@ -4,26 +4,26 @@
 #include "profile_consumer/ProfileSession.h"
 #include "profile_consumer/ProfileTimelineIndex.h"
 
-#include <cstdint>
+#include "misc/Types.h"
 #include <filesystem>
 #include <memory>
 
 namespace Moer::ProfileDump {
 
-inline constexpr std::uint64_t kInvalidProfileDocumentGeneration = 0;
+inline constexpr uint64 kInvalidProfileDocumentGeneration = 0;
 
 // One immutable, self-contained publication unit. Field order is intentional:
 // timeline_index is destroyed before session, whose immutable model it indexes.
 struct ProfileDocument final {
     std::filesystem::path source_path{};
-    std::uint64_t         request_generation{kInvalidProfileDocumentGeneration};
+    uint64                request_generation{kInvalidProfileDocumentGeneration};
     SessionLoadResult     load_result{};
     ProfileSession        session{};
     ProfileTimelineIndex  timeline_index{};
 
     ProfileDocument(
         std::filesystem::path _source_path,
-        std::uint64_t         _request_generation,
+        uint64                _request_generation,
         SessionLoadResult     _load_result,
         ProfileSession        _session,
         ProfileTimelineIndex  _timeline_index
@@ -37,7 +37,7 @@ struct ProfileDocument final {
     [[nodiscard]] bool Valid() const noexcept;
 };
 
-enum class ProfileDocumentLoadPhase : std::uint8_t {
+enum class ProfileDocumentLoadPhase : uint8 {
     Idle = 0,
     Opening,
     Reading,
@@ -51,7 +51,7 @@ enum class ProfileDocumentLoadPhase : std::uint8_t {
     Shutdown,
 };
 
-enum class ProfileDocumentLoadDiagnostic : std::uint8_t {
+enum class ProfileDocumentLoadDiagnostic : uint8 {
     None = 0,
     WorkerUnavailable,
     Cancelled,
@@ -71,7 +71,7 @@ struct ProfileDocumentLoaderSnapshot {
     // Every progress/result field in this snapshot belongs to this generation.
     // The last-good document may intentionally have an older generation after
     // the latest attempt fails, is cancelled, or is still in progress.
-    std::uint64_t            request_generation{kInvalidProfileDocumentGeneration};
+    uint64                   request_generation{kInvalidProfileDocumentGeneration};
     ProfileDocumentLoadPhase phase{ProfileDocumentLoadPhase::Idle};
     std::filesystem::path    latest_attempt_path{};
 
@@ -85,8 +85,8 @@ struct ProfileDocumentLoaderSnapshot {
     // Consumers must render Reading as indeterminate rather than deriving a
     // percentage from the observation.
     bool          observed_total_bytes_available{false};
-    std::uint64_t observed_total_bytes{0};
-    std::uint64_t reported_input_bytes{0};
+    uint64        observed_total_bytes{0};
+    uint64        reported_input_bytes{0};
     bool          reported_input_bytes_final{false};
 
     // Worker/admission lifecycle only. Generation exhaustion is reported
@@ -95,16 +95,16 @@ struct ProfileDocumentLoaderSnapshot {
     bool          generation_exhausted{false};
     bool          cancel_requested{false};
     bool          active_request{false};
-    std::uint64_t active_generation{kInvalidProfileDocumentGeneration};
-    std::uint32_t pending_request_count{0};
-    std::uint32_t maximum_pending_request_count_observed{0};
-    std::uint64_t superseded_request_count{0};
+    uint64        active_generation{kInvalidProfileDocumentGeneration};
+    uint32        pending_request_count{0};
+    uint32        maximum_pending_request_count_observed{0};
+    uint64        superseded_request_count{0};
 
     SessionLoadResult             session_result{};
     TimelineIndexBuildResult      timeline_result{};
     ProfileDocumentLoadDiagnostic diagnostic{ProfileDocumentLoadDiagnostic::None};
 
-    std::uint64_t                          published_generation{kInvalidProfileDocumentGeneration};
+    uint64                                 published_generation{kInvalidProfileDocumentGeneration};
     std::shared_ptr<const ProfileDocument> document{};
 };
 
@@ -124,7 +124,7 @@ public:
     // Returns zero after admission has closed or generation space is exhausted.
     // A newer accepted request cooperatively cancels active work and replaces
     // the single pending slot.
-    [[nodiscard]] std::uint64_t
+    [[nodiscard]] uint64
     RequestLoad(const std::filesystem::path& _path, const ProfileDocumentLoadOptions& _options = {});
 
     // Requests cancellation of the latest non-terminal attempt. Cancellation

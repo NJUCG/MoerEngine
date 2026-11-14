@@ -1,11 +1,13 @@
 #include "GaussianGpuScene.h"
 
 #include "log/LogSystem.h"
+#include "rendergraph/RenderGraphUpload.h"
 #include "rhi/RHI.h"
 #include "rhi/RHICommand.h"
 
 #include <algorithm>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -77,12 +79,12 @@ void GaussianGpuScene::ApplyUpdate(
         // New immutable storage for changed data. RHI commands retain resource refs for in-flight use.
         out_buffer = RenderDevice::Get().CreateBuffer<byte>(
             name,
-            static_cast<uint>(byte_count),
+            static_cast<uint32>(byte_count),
             EBufferUsageFlags::UNORDERED_ACCESS | EBufferUsageFlags::TRANSFER_DST |
                 EBufferUsageFlags::TRANSFER_SRC
         );
-        commands.CopyFrom(
-            std::span<byte>(reinterpret_cast<byte*>(data.data()), byte_count), out_buffer->GetView(), name
+        RecordGraphicsBufferUpload(
+            commands, std::as_bytes(std::span(data)), out_buffer->GetView(), name
         );
     };
     if (has_geometry_changed)
