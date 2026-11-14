@@ -1,3 +1,4 @@
+#include <core/common/Histogram.hlsli>
 #include <core/math/STL.hlsli>
 #include <shared/postprocess/ShaderParameters.h>
 
@@ -38,15 +39,14 @@ groupshared uint s_histogram[HISTOGRAM_BINS];
     uint left_bin = uint(floor(histogram_bin));
     uint right_bin = left_bin + 1;
 
-    uint right_weight = uint(frac(histogram_bin) * POINT_FRAC_MULTIPLIER);
-    uint left_weight = POINT_FRAC_MULTIPLIER - right_weight;
+    uint2 weights = Moer::GetHistogramBinWeights(histogram_bin, POINT_FRAC_MULTIPLIER);
 
-    if (left_weight != 0 && left_bin < HISTOGRAM_BINS) {
-      InterlockedAdd(s_histogram[left_bin], left_weight);
+    if (weights.x != 0 && left_bin < HISTOGRAM_BINS) {
+      InterlockedAdd(s_histogram[left_bin], weights.x);
     }
 
-    if (right_weight != 0 && right_bin < HISTOGRAM_BINS) {
-      InterlockedAdd(s_histogram[right_bin], right_weight);
+    if (weights.y != 0 && right_bin < HISTOGRAM_BINS) {
+      InterlockedAdd(s_histogram[right_bin], weights.y);
     }
   }
 

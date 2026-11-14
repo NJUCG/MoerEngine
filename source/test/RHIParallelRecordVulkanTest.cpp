@@ -5,6 +5,7 @@
 #include "renderer/raster/BloomPass.h"
 #include "renderer/raster/TonemappingPass.h"
 #include "renderer/raytracing/RaytracingExportSubmission.h"
+#include "renderer/raytracing/AntiAliasPass.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rendergraph/RenderGraphPassParameters.h"
@@ -181,6 +182,23 @@ public:
     DEFINE_SHADER_CONSTANT(uint32, index);
     DEFINE_SHADER_CONSTANT(float, scale);
     DEFINE_SHADER_ARGS(result, bdls, index, scale);
+};
+
+class SsrTraceRegressionPipeline final : public RasterPipeline {
+public:
+    DEFINE_RASTER_PIPELINE_CLASS(SsrTraceRegressionPipeline);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_CONSTANT(SsrPipelineBindlessParam, param);
+    DEFINE_SHADER_ARGS(bdls, param);
+};
+
+class AoCompositeRegressionPipeline final : public ComputePipeline {
+public:
+    DEFINE_COMPUTE_PIPELINE_CLASS(AoCompositeRegressionPipeline);
+    DEFINE_SHADER_CONSTANT(AoCompositeParam, param);
+    DEFINE_SHADER_TEX(rw_output);
+    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
+    DEFINE_SHADER_ARGS(param, rw_output, bdls);
 };
 
 struct CompiledBindlessParameters {
@@ -1507,7 +1525,8 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--timestamp-query-mid-failure" &&
             argument != "--timestamp-query-record-failure" &&
             argument != "--gpu-scope-stream" &&
-            argument != "--multiview" && argument != "--compiled-commands") {
+            argument != "--multiview" && argument != "--compiled-commands" &&
+            argument != "--postprocess-regression") {
             throw std::invalid_argument("unsupported argument: " + std::string(argument));
         }
     }
@@ -2124,6 +2143,369 @@ void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
     discard.UpdateBindlessArray(table);
     LOG_INFO("[TESTCASE][PASS] name=CompiledBindlessCandidates graphs=2 gpu-indexed=true "
              "results=86,88 slots=recycled");
+}
+
+void ExecutePostprocessRegressionGraph(RenderGraph& graph) {
+    CommandList commands;
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(commands, false)) {
+        throw std::runtime_error("postprocess regression graph failed: " + graph.GetCompileError());
+    }
+    RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+}
+
+void RunTaaNeighborhoodMotionRegression(ShaderManager& manager) {
+    using Raytracing::TAAPipeline;
+    auto& device = RenderDevice::Get();
+    auto pipeline = manager.Compute<TAAPipeline>("pipelines/raytracing/postprocess/TAAPass.hlsl");
+    constexpr uint32 width = 64, height = 64;
+    constexpr uint32 target_x = 24, target_y = 24;
+    std::array<float4, width * height> colors, history;
+    colors.fill(float4(0.2f, 0.2f, 0.2f, 1.f));
+    for (uint32 y = 0; y < height; ++y) {
+        for (uint32 x = 0; x < width; ++x) {
+            history[y * width + x] = float4(0.1f + x * 0.01f, 0.1f + y * 0.01f, 0.3f, 0.f);
+        }
+    }
+    TAAParams params{};
+    params.in_view_size = params.out_view_size = float2(width, height);
+    params.in_pixel_offset = float2(0.0625f, -0.1875f); // First default MSAA jitter sample.
+    params.out_texture_size_inv = float2(1.f / width, 1.f / height);
+    params.input_over_output_size = params.output_over_input_size = float2(1.f);
+    params.clamping_factor = -1.f;
+    params.new_frame_weight = 0.04f;
+    params.pqc = 200.f;
+    params.inv_pqc = 1.f / params.pqc;
+
+    auto run = [&](const std::array<float2, width * height>& motions) {
+        const auto sampled_usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST;
+        const auto output_usage = ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC;
+        auto input = device.CreateTexture("taa_input", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+        auto motion = device.CreateTexture("taa_motion", Extent3D(width, height, 1), PF_R32G32_SFLOAT, sampled_usage);
+        auto previous = device.CreateTexture("taa_history", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+        auto output = device.CreateTexture("taa_output", Extent3D(width, height, 1), PF_R16G16B16A16_SFLOAT, output_usage);
+        auto feedback = device.CreateTexture("taa_feedback", Extent3D(width, height, 1), PF_R16G16B16A16_SNORM, output_usage);
+        auto constants = device.CreateBuffer<Moer::byte>("taa_params", sizeof(params), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RenderGraph graph("TaaNeighborhoodMotionRegression");
+        const auto input_handle = graph.ImportTexture("Input", input, {});
+        const auto motion_handle = graph.ImportTexture("Motion", motion, {});
+        const auto previous_handle = graph.ImportTexture("Previous", previous, {});
+        const auto output_handle = graph.ImportTexture("Output", output, {});
+        const auto feedback_handle = graph.ImportTexture("Feedback", feedback, {});
+        const auto constants_handle = graph.ImportBuffer("Params", constants, {.byte_size = sizeof(params)});
+        for (const auto handle : {input_handle, motion_handle, previous_handle, output_handle, feedback_handle}) {
+            graph.SetInitialState(handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        }
+        graph.SetInitialState(constants_handle, RenderGraph::BufferBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        graph.AddRecordPass(
+            "Upload",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(input_handle, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(motion_handle, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(previous_handle, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(constants_handle, RenderGraph::BufferAccessType::TransferDestination);
+            },
+            [&](CommandList& commands) {
+                commands.CopyFrom(std::as_bytes(std::span(colors)), input->GetView());
+                commands.CopyFrom(std::as_bytes(std::span(motions)), motion->GetView());
+                commands.CopyFrom(std::as_bytes(std::span(history)), previous->GetView());
+                commands.CopyFrom(std::as_bytes(std::span(&params, 1)), constants->GetView());
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.AddRecordPass(
+            "TAA",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                    .Read(input_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Read(motion_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Read(previous_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Read(constants_handle, RenderGraph::BufferAccessType::ShaderRead)
+                    .Write(output_handle, RenderGraph::TextureAccessType::Storage)
+                    .Write(feedback_handle, RenderGraph::TextureAccessType::Storage);
+            },
+            [&](CommandList& commands) {
+                commands.Compute(pipeline, constants, input, motion, previous, Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE), output, feedback)
+                    .Dispatch(uint3(width / 16, height / 16, 1));
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        ReadbackFuture readback;
+        graph.AddRecordPass(
+            "Readback",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(output_handle, RenderGraph::TextureAccessType::TransferSource).SideEffect();
+            },
+            [&](CommandList& commands) { readback = commands.Readback(output->GetView()); },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.Export(output_handle, RenderGraph::TextureAccessType::TransferSource, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        for (const auto handle : {input_handle, motion_handle, previous_handle}) {
+            graph.Export(handle, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        }
+        graph.Export(feedback_handle, RenderGraph::TextureAccessType::Storage, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Write);
+        graph.Export(constants_handle, RenderGraph::BufferAccessType::ShaderRead, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        ExecutePostprocessRegressionGraph(graph);
+        const auto pixels = readback.Get().CopyAs<uint16>();
+        if (!pixels || pixels->size() != width * height * 4) {
+            throw std::runtime_error("TAA regression readback is invalid");
+        }
+        const size_t first_channel = (target_y * width + target_x) * 4;
+        return std::array<uint16, 3>{(*pixels)[first_channel], (*pixels)[first_channel + 1], (*pixels)[first_channel + 2]};
+    };
+    std::array<float2, width * height> motions{};
+    const auto stationary = run(motions);
+    // This tile's shared [0][0] is source (15,14), outside target (24,24)'s 3x3 neighborhood.
+    motions[14 * width + 15] = float2(2.f, 0.f);
+    if (run(motions) != stationary) {
+        throw std::runtime_error("TAA zero-motion neighborhood borrowed motion from the tile origin");
+    }
+    motions.fill(float2(0.f));
+    motions[target_y * width + target_x] = float2(2.f, 0.f);
+    const auto neighborhood_motion = run(motions);
+    motions.fill(float2(2.f, 0.f));
+    if (neighborhood_motion == stationary || run(motions) != neighborhood_motion) {
+        throw std::runtime_error("TAA failed to select the longest motion inside its neighborhood");
+    }
+    LOG_INFO("[TESTCASE][PASS] name=TaaNeighborhoodMotion zero=stationary outside=ignored inside=selected");
+}
+
+void RunSsrTraceExitRegression(ShaderManager& manager) {
+    auto& device = RenderDevice::Get();
+    GfxPsoCreateInfo pipeline_info(RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(PF_R32G32B32A32_SFLOAT)});
+    auto pipeline = manager.Raster().Vertex("core/utils/FullScreenQuad.hlsl")
+        .Pixel("test/ShaderSsrTraceRegression.hlsl").Build<SsrTraceRegressionPipeline>(std::move(pipeline_info));
+    struct TraceCase {
+        const char* name;
+        uint32 samples;
+        float3 origin;
+        float step;
+        float depth;
+        float clip_w;
+        bool expected_hit;
+    };
+    const TraceCase cases[] = {
+        {"zero-budget", 0, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 1.f, false},
+        {"budget-exhausted", 3, float3(0.f, 0.f, 0.5f), 0.1f, 0.f, 1.f, false},
+        {"outside-viewport", 4, float3(0.95f, 0.f, 0.5f), 0.1f, 0.52f, 1.f, false},
+        {"outside-depth", 4, float3(0.f, 0.f, 1.1f), 0.1f, 0.52f, 1.f, false},
+        {"zero-projection-w", 4, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 0.f, false},
+        {"behind-camera", 4, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, -1.f, false},
+        {"refinement-outside", 1, float3(-1.3f, 0.f, 0.5f), 0.4f, 0.52f, 1.f, false},
+        {"refined-depth-hit", 1, float3(0.f, 0.f, 0.5f), 0.1f, 0.52f, 1.f, true},
+    };
+    for (const auto& test : cases) {
+        auto depth = device.CreateTexture(
+            "ssr_depth", Extent3D(1, 1, 1), PF_R32_SFLOAT,
+            ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST
+        );
+        auto output = device.CreateTexture(
+            "ssr_trace_result", Extent3D(2, 2, 1), PF_R32G32B32A32_SFLOAT,
+            ETextureUsageFlags::COLOR_ATTACHMENT | ETextureUsageFlags::TRANSFER_SRC
+        );
+        auto table = device.CreateBindlessArray();
+        SsrPipelineBindlessParam params{};
+        params.world2clip = float4x4::Identity();
+        params.world2clip[3][3] = test.clip_w;
+        params.camera_position = test.origin;
+        params.near_clip = 0.1f;
+        params.far_clip = 10.f;
+        params.ssr_step_base = test.step;
+        params.ssr_sample_count = test.samples;
+        params.depth_tex = table->AllocateTexture(depth->GetView(), Sampler(SF_NEAREST, SAM_CLAMP_TO_EDGE));
+        CommandList publish;
+        publish.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+        publish.UpdateBindlessArray(table);
+        RHIExecutor::Get().Submit(EQueueType::Graphics, publish.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+        RenderGraph graph("SsrTraceExitRegression");
+        const auto depth_handle = graph.ImportTexture("Depth", depth, {});
+        const auto output_handle = graph.ImportTexture("Result", output, {});
+        graph.SetInitialState(depth_handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        graph.SetInitialState(output_handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        graph.AddRecordPass(
+            "UploadDepth",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(depth_handle, RenderGraph::TextureAccessType::TransferDestination);
+            },
+            [&](CommandList& commands) { commands.CopyFrom(std::as_bytes(std::span(&test.depth, 1)), depth->GetView()); },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.AddRecordPass(
+            "Trace",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
+                    .Read(depth_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Write(output_handle, RenderGraph::TextureAccessType::ColorAttachment);
+            },
+            [&](CommandList& commands) {
+                commands.Gfx(pipeline, table, params).Draw("SSR Trace Regression", Rect2D(0, 0, 2, 2),
+                    Raster::RasterTool::GetFullScreenDrawDatas(), ColorAttachment(output));
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        ReadbackFuture readback;
+        graph.AddRecordPass(
+            "Readback",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(output_handle, RenderGraph::TextureAccessType::TransferSource).SideEffect();
+            },
+            [&](CommandList& commands) { readback = commands.Readback(output->GetView()); },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.Export(depth_handle, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        graph.Export(output_handle, RenderGraph::TextureAccessType::TransferSource, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        ExecutePostprocessRegressionGraph(graph);
+        const auto result = readback.Get().CopyAs<float>();
+        if (!result || result->size() != 16) {
+            throw std::runtime_error(std::string("SSR trace exit mismatch: ") + test.name);
+        }
+        for (size_t first = 0; first < result->size(); first += 4) {
+            if ((*result)[first] != (test.expected_hit ? 1.f : 0.f)) {
+                throw std::runtime_error(std::string("SSR trace exit mismatch: ") + test.name);
+            }
+            if (test.expected_hit) {
+                // Four unchanged binary-refinement steps end at x=0.1/16, projected onto [0,1].
+                if (std::abs((*result)[first + 1] - 0.503125f) > 1e-6f || std::abs((*result)[first + 2] - 0.5f) > 1e-6f) {
+                    throw std::runtime_error("SSR refined hit UV changed");
+                }
+            } else if ((*result)[first + 1] != 0.f || (*result)[first + 2] != 0.f) {
+                throw std::runtime_error(std::string("SSR miss published a candidate UV: ") + test.name);
+            }
+        }
+        LOG_INFO("[TESTCASE][PASS] name=SsrTraceExit case={} hit={}", test.name, test.expected_hit);
+    }
+}
+
+void RunAoCompositeRgbRegression(ShaderManager& manager) {
+    auto& device = RenderDevice::Get();
+    auto pipeline = manager.Compute<AoCompositeRegressionPipeline>("pipelines/postprocess/lighting_effects/AoComposite.hlsl");
+    constexpr uint32 width = 4, height = 4;
+    struct ModeCase {
+        uint32 mode;
+        const char* name;
+        float3 expected;
+    };
+    const ModeCase modes[] = {
+        {uint32(EAoMode::SSDO), "SSDO", float3(0.625f, 1.25f, 2.f)},
+        {uint32(EAoMode::RTAO), "RTAO", float3(0.5f, 1.f, 1.5f)},
+        {uint32(EAoMode::SSDO_AO_ONLY), "SSDO_AO_ONLY", float3(0.5f)},
+    };
+    std::array<float4, width * height> colors, normals;
+    std::array<float, width * height> depths;
+    colors.fill(float4(1.f, 2.f, 3.f, 1.f));
+    normals.fill(float4(0.5f, 0.5f, 1.f, 1.f));
+    depths.fill(0.5f);
+    for (bool half_resolution : {false, true}) {
+        const uint32 ao_width = half_resolution ? width / 2 : width;
+        const uint32 ao_height = half_resolution ? height / 2 : height;
+        const Array<float> ao_values(ao_width * ao_height, 0.5f);
+        const Array<float4> indirect_values(ao_width * ao_height, float4(0.125f, 0.25f, 0.5f, 0.f));
+        for (const auto& test : modes) {
+            const auto sampled_usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST;
+            auto color = device.CreateTexture("ao_color", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+            auto normal = device.CreateTexture("ao_normal", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+            auto depth = device.CreateTexture("ao_depth", Extent3D(width, height, 1), PF_R32_SFLOAT, sampled_usage);
+            auto ao = device.CreateTexture("ao_scalar", Extent3D(ao_width, ao_height, 1), PF_R32_SFLOAT, sampled_usage);
+            auto indirect = device.CreateTexture("ao_indirect", Extent3D(ao_width, ao_height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+            auto output = device.CreateTexture("ao_composite", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT,
+                ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC);
+            auto table = device.CreateBindlessArray();
+            const Sampler sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE);
+            AoCompositeParam params{};
+            params.full_resolution = float2(width, height);
+            params.inv_full_resolution = float2(1.f / width, 1.f / height);
+            params.ao_resolution = float2(ao_width, ao_height);
+            params.ao_mode = test.mode;
+            params.is_half_resolution = half_resolution;
+            params.color_tex = table->AllocateTexture(color->GetView(), sampler);
+            params.ao_tex = table->AllocateTexture(ao->GetView(), sampler);
+            params.indirect_tex = table->AllocateTexture(indirect->GetView(), sampler);
+            params.depth_tex = table->AllocateTexture(depth->GetView(), sampler);
+            params.normal_tex = table->AllocateTexture(normal->GetView(), sampler);
+            CommandList publish;
+            publish.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+            publish.UpdateBindlessArray(table);
+            RHIExecutor::Get().Submit(EQueueType::Graphics, publish.Submit(), ERHIExecSubmitFlags::FlushGPU);
+            RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+
+            RenderGraph graph("AoCompositeRgbRegression");
+            const auto color_handle = graph.ImportTexture("Color", color, {});
+            const auto normal_handle = graph.ImportTexture("Normal", normal, {});
+            const auto depth_handle = graph.ImportTexture("Depth", depth, {});
+            const auto ao_handle = graph.ImportTexture("AO", ao, {});
+            const auto indirect_handle = graph.ImportTexture("Indirect", indirect, {});
+            const auto output_handle = graph.ImportTexture("Result", output, {});
+            const std::array inputs{color_handle, normal_handle, depth_handle, ao_handle, indirect_handle};
+            for (const auto handle : inputs) {
+                graph.SetInitialState(handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+            }
+            graph.SetInitialState(output_handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+            graph.AddRecordPass(
+                "Upload",
+                [=](RenderGraph::PassBuilder& builder) {
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer);
+                    for (const auto handle : inputs) {
+                        builder.Write(handle, RenderGraph::TextureAccessType::TransferDestination);
+                    }
+                },
+                [&](CommandList& commands) {
+                    commands.CopyFrom(std::as_bytes(std::span(colors)), color->GetView());
+                    commands.CopyFrom(std::as_bytes(std::span(normals)), normal->GetView());
+                    commands.CopyFrom(std::as_bytes(std::span(depths)), depth->GetView());
+                    commands.CopyFrom(std::as_bytes(std::span(ao_values)), ao->GetView());
+                    commands.CopyFrom(std::as_bytes(std::span(indirect_values)), indirect->GetView());
+                },
+                RenderGraph::PassRecordPolicy::ParallelAllowed
+            );
+            graph.AddRecordPass(
+                "Composite",
+                [=](RenderGraph::PassBuilder& builder) {
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute);
+                    for (const auto handle : inputs) {
+                        builder.Read(handle, RenderGraph::TextureAccessType::Sampled);
+                    }
+                    builder.Write(output_handle, RenderGraph::TextureAccessType::Storage);
+                },
+                [&](CommandList& commands) { commands.Compute(pipeline, params, output, table).Dispatch(uint3(1, 1, 1)); },
+                RenderGraph::PassRecordPolicy::ParallelAllowed
+            );
+            ReadbackFuture readback;
+            graph.AddRecordPass(
+                "Readback",
+                [=](RenderGraph::PassBuilder& builder) {
+                    builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                        .Read(output_handle, RenderGraph::TextureAccessType::TransferSource).SideEffect();
+                },
+                [&](CommandList& commands) { readback = commands.Readback(output->GetView()); },
+                RenderGraph::PassRecordPolicy::ParallelAllowed
+            );
+            for (const auto handle : inputs) {
+                graph.Export(handle, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+            }
+            graph.Export(output_handle, RenderGraph::TextureAccessType::TransferSource, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+            ExecutePostprocessRegressionGraph(graph);
+            const auto pixels = readback.Get().CopyAs<float>();
+            if (!pixels || pixels->size() != width * height * 4) {
+                throw std::runtime_error("AO composite RGB readback is invalid");
+            }
+            for (size_t first = 0; first < pixels->size(); first += 4) {
+                if (std::abs((*pixels)[first] - test.expected.x) > 1e-5f ||
+                    std::abs((*pixels)[first + 1] - test.expected.y) > 1e-5f ||
+                    std::abs((*pixels)[first + 2] - test.expected.z) > 1e-5f || (*pixels)[first + 3] != 1.f) {
+                    throw std::runtime_error(std::string("AO composite RGB mismatch: ") + test.name +
+                        (half_resolution ? " half-resolution" : " full-resolution"));
+                }
+            }
+            LOG_INFO("[TESTCASE][PASS] name=AoCompositeRgb mode={} half_resolution={}", test.name, half_resolution);
+        }
+    }
 }
 
 void RunCompiledBloom(ShaderManager& manager, bool parallel) {
@@ -14789,6 +15171,21 @@ int main(int argc, const char** argv) {
             .submission_batch_window = submission_batch_window,
         });
         render_device_initialized = true;
+
+        if (HasArgument(argc, argv, "--postprocess-regression")) {
+            ShaderManager& manager = ShaderManager::Get();
+            shader_manager_initialized = true;
+            RunTaaNeighborhoodMotionRegression(manager);
+            RunSsrTraceExitRegression(manager);
+            RunAoCompositeRgbRegression(manager);
+            ShaderManager::ShutDown();
+            shader_manager_initialized = false;
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
 
         if (HasArgument(argc, argv, "--compiled-commands")) {
             RunCompiledSubmissionContract();

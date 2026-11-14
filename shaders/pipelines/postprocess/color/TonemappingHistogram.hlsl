@@ -1,4 +1,4 @@
-// Reference: 隔壁Raytracing的Histogram.hlsl
+#include "core/common/Histogram.hlsli"
 #include "core/math/STL.hlsli"
 #include "shared/raster/ShaderParameters.h"
 
@@ -30,17 +30,16 @@ main(uint gid : SV_GroupIndex, uint2 thread_id : SV_DispatchThreadId) {
         uint left_bin  = uint(floor(histogram_bin));
         uint right_bin = left_bin + 1;
 
-        // 这里相当于总计给直方图贡献1.0的权重，通过将float向上放大为整数来避免精度问题
-        // => left + right == 1.0
-        uint left_weight  = uint((frac(histogram_bin)) * Moer::TONEMAPPING_HISTOGRAM_POINT_FRAC_MULTIPLIER);
-        uint right_weight = Moer::TONEMAPPING_HISTOGRAM_POINT_FRAC_MULTIPLIER - left_weight;
+        uint2 weights = Moer::GetHistogramBinWeights(
+            histogram_bin, Moer::TONEMAPPING_HISTOGRAM_POINT_FRAC_MULTIPLIER
+        );
 
-        if (left_weight != 0 && left_bin < Moer::TONEMAPPING_HISTOGRAM_BIN_COUNT) {
-            InterlockedAdd(s_histogram[left_bin], left_weight);
+        if (weights.x != 0 && left_bin < Moer::TONEMAPPING_HISTOGRAM_BIN_COUNT) {
+            InterlockedAdd(s_histogram[left_bin], weights.x);
         }
 
-        if (right_weight != 0 && right_bin < Moer::TONEMAPPING_HISTOGRAM_BIN_COUNT) {
-            InterlockedAdd(s_histogram[right_bin], right_weight);
+        if (weights.y != 0 && right_bin < Moer::TONEMAPPING_HISTOGRAM_BIN_COUNT) {
+            InterlockedAdd(s_histogram[right_bin], weights.y);
         }
     }
 

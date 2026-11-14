@@ -942,8 +942,11 @@ void RasterUI::ShowConfig() {
             // 启用 Validation 后的额外选项
             if (m_config.rtao_denoiser_validation_enable) {
                 ImGui::SliderFloat(
-                    "Validation Depth Threshold", &m_config.rtao_denoiser_valid_depth_threshold, 0.0f, 0.1f
+                    "Relative Position Threshold", &m_config.rtao_denoiser_valid_position_threshold, 0.0f, 0.1f
                 );
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("World-space distance / camera distance, with a minimum tolerance of 1.5 surface pixels.");
+                }
                 ImGui::SliderFloat(
                     "Validation Normal Threshold", &m_config.rtao_denoiser_valid_normal_threshold, 0.0f, 1.0f
                 );

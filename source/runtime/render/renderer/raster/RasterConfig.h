@@ -336,7 +336,7 @@ struct RasterConfig {
     bool  rtao_denoiser_history_clamp_enable    = true;
     bool  rtao_denoiser_motion_weighting_enable = true;
     float rtao_denoiser_history_ratio           = 0.9f;
-    float rtao_denoiser_valid_depth_threshold   = 0.01f;
+    float rtao_denoiser_valid_position_threshold = 0.01f; // Fraction of camera distance; at least 1.5 surface pixels.
     float rtao_denoiser_valid_normal_threshold  = 0.8f;
 
     float ssdo_depth_bias         = 0.001f;

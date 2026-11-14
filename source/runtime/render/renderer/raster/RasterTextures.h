@@ -107,6 +107,14 @@ namespace Moer::Render::Raster {
 // Textures that also have a half-resolution (size/2) variant (NAME_half)
 // Used for AO half-resolution mode
 #define RASTER_TEXTURES_TABLE_DOWNSAMPLED                                                          \
+    X(TexHandle, ao_indirect, Tex2DTag,                                                            \
+      TexConfig::Default(PF_R16G16B16A16_SFLOAT).Usage(E_SAMPLED_COLOR))                             \
+    X(TexHandle, ao_history_geometry, Tex2DTag,                                                    \
+      TexConfig::Default(PF_R32G32B32A32_UINT)                                                     \
+          .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS))               \
+    X(TexHandle, ao_history_geometry_1, Tex2DTag,                                                  \
+      TexConfig::Default(PF_R32G32B32A32_UINT)                                                     \
+          .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS))               \
     X(TexHandle,                                                                                   \
       ao_output_ambient_only,                                                                      \
       Tex2DTag,                                                                                    \

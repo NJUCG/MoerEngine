@@ -193,10 +193,7 @@ float SharpenPcfVisibility(float shadow_visibility, float penumbra_uv, float sha
         if (stats.numBlockers < 0.1)                                                                                        \
             return 1.0;                                                                                                     \
                                                                                                                             \
-        /* 全遮挡 early-out：所有样本都是 blocker，PCF 必然返回 0，直接跳过整个 PCF 阶段 */                                 \
-        if (stats.numBlockers > (float(PCSS_SEARCH_SAMPLES) - 0.5))                                                         \
-            return 0.0;                                                                                                     \
-                                                                                                                            \
+        /* Search and filtering can cover different footprints, so full search coverage still requires PCF. */            \
         float penumbra_uv = CalculatePenumbra##SUFFIX(ctx, stats.avgDepth);                                                 \
                                                                                                                             \
         /* 原 #if PCSS_LIGHT_TYPE == 1 */                                                                                   \

@@ -39,12 +39,12 @@ public:
 class RtaoDenoiserPass {
 public:
     struct GraphResources {
-        RenderGraph::TextureHandle normal{};
-        RenderGraph::TextureHandle depth{};
         RenderGraph::TextureHandle camera_motion_vector{};
         RenderGraph::TextureHandle ao_only{};
         RenderGraph::TextureHandle history_read{};
         RenderGraph::TextureHandle history_write{};
+        RenderGraph::TextureHandle current_geometry{};
+        RenderGraph::TextureHandle history_geometry{};
     };
 
     struct RecordParameters {
@@ -85,12 +85,12 @@ public:
 
     void ResetHistory() {
         history_valid               = false;
-        history_configuration_valid = false;
     }
 
     [[nodiscard]] RecordParameters Prepare(
         RasterContext&      context,
         const RasterConfig& ui_config,
+        const Camera&       camera,
         uint32              ao_only_idx
     ) const {
         RecordParameters parameters{};
@@ -105,7 +105,7 @@ public:
         }
 
         const bool configuration_matches =
-            history_configuration_valid &&
+            history_valid &&
             history_half_resolution == parameters.half_resolution;
         TextureWithHandle history_read{};
         if (ao_only_idx == 0) {
@@ -139,14 +139,19 @@ public:
         param.history_ao_tex    = history_read.hdl;
         param.curr_ao_tex       = parameters.ao_only.hdl;
         param.motion_vector_tex = camera_mv_target.hdl;
-        param.depth_tex         = context.textures.depth_nearest_sampler.hdl;
-        param.normal_tex        = context.textures.normal.hdl;
+        const auto geometry_0 = parameters.half_resolution ? context.textures.ao_history_geometry_half :
+                                                            context.textures.ao_history_geometry;
+        const auto geometry_1 = parameters.half_resolution ? context.textures.ao_history_geometry_1_half :
+                                                            context.textures.ao_history_geometry_1;
+        param.current_geometry_tex = (ao_only_idx == 0 ? geometry_0 : geometry_1).hdl;
+        param.history_geometry_tex = (ao_only_idx == 0 ? geometry_1 : geometry_0).hdl;
+        param.camera_position = camera.GetPosition();
         param.inv_resolution    = float2(1.0f) / float2(parameters.ao_only.GetSize());
 
         param.history_ratio = configuration_matches && history_valid ?
                                   ui_config.rtao_denoiser_history_ratio :
                                   0.f;
-        param.valid_depth_threshold  = ui_config.rtao_denoiser_valid_depth_threshold;
+        param.valid_position_threshold = ui_config.rtao_denoiser_valid_position_threshold;
         param.valid_normal_threshold = ui_config.rtao_denoiser_valid_normal_threshold;
 
         param.is_reprojection_enable     = ui_config.rtao_denoiser_reprojection_enable;
@@ -193,13 +198,13 @@ public:
         RenderGraph&        graph,
         RasterContext&      context,
         const RasterConfig& ui_config,
+        const Camera&       camera,
         uint32              ao_only_index,
         GraphResources      resources
     );
 
     void CommitFrame(const RecordParameters& parameters) {
         history_valid               = parameters.enabled;
-        history_configuration_valid = parameters.enabled;
         if (parameters.enabled) {
             history_half_resolution = parameters.half_resolution;
         }
@@ -211,14 +216,13 @@ public:
              ui_config.ao_mode == EAoMode::RTAO_AO_ONLY) &&
             ui_config.rtao_denoiser_enable;
         history_valid               = enabled;
-        history_configuration_valid = enabled;
         if (enabled) {
             history_half_resolution = ui_config.ao_half_resolution;
         }
     }
 
-    uint32 ProcessInPlace(RasterContext& context, const RasterConfig& ui_config, uint32 ao_only_idx) {
-        const RecordParameters parameters = Prepare(context, ui_config, ao_only_idx);
+    uint32 ProcessInPlace(RasterContext& context, const RasterConfig& ui_config, const Camera& camera, uint32 ao_only_idx) {
+        const RecordParameters parameters = Prepare(context, ui_config, camera, ao_only_idx);
         Record(context.cmd_list, parameters);
         CommitFrame(parameters);
         return parameters.enabled ? ao_only_idx ^ 1u : ao_only_idx;
@@ -230,7 +234,6 @@ private:
     TextureWithHandle        img_denoiser_history_write;
     TextureWithHandle        img_ao_only;
     bool                     history_valid               = false;
-    bool                     history_configuration_valid = false;
     bool                     history_half_resolution     = false;
 };
 

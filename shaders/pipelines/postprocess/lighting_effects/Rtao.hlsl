@@ -11,9 +11,11 @@ DEFINE_SHADER_CONSTANT(Moer::RtaoPipelineBindlessParam, param)
 [[vk::binding(0, 0)]] RWTexture2D<float>              rw_ao_only;
 [[vk::binding(1, 0)]] RWTexture2D<float2>             rw_camera_mv;
 [[vk::binding(2, 0)]] RaytracingAccelerationStructure tlas;
+[[vk::binding(3, 0)]] RWTexture2D<uint4>             rw_geometry;
 
 // 定义了AoOutput、CameraMotionVector等函数
 #include "pipelines/postprocess/lighting_effects/AoCommon.hlsl"
+#include "pipelines/postprocess/lighting_effects/AoHistory.hlsli"
 
 // R2 quasi-random sequence offsets (generalized golden ratio for 2D)
 // phi_2 = 1.32471795724..., alpha1 = 1/phi_2, alpha2 = 1/phi_2^2
@@ -76,21 +78,16 @@ bool CastVisibilityRay(
 
     float2 uv = (float2(pixel_pos) + 0.5) * moer_constants.param.inv_resolution;
 
-    // Snap UV to the full-res depth texel center so that WorldPosFromDepth
-    // reconstructs along the same view ray the depth was measured on.
-    float2 snapped_uv = (floor(uv * moer_constants.param.depth_tex_resolution) + 0.5) / moer_constants.param.depth_tex_resolution;
-
-    float3 frag_normal = TextureHandle(moer_constants.param.normal_tex).SampleLevel<float3>(snapped_uv);
-
-    if (abs(frag_normal.x) < Epsilon && abs(frag_normal.y) < Epsilon && abs(frag_normal.z) < Epsilon) {
+    AoSurface surface = LoadAoSurface(uv, moer_constants.param.depth_tex, moer_constants.param.normal_tex);
+    if (!IsAoSurfaceValid(surface)) {
         rw_ao_only[pixel_pos]   = 1.f;
-        rw_camera_mv[pixel_pos] = GetCameraMotionVector(snapped_uv);
+        rw_camera_mv[pixel_pos] = float2(0, 0);
+        rw_geometry[pixel_pos] = uint4(0, 0, 0, 0);
         return;
     }
-    frag_normal = Raster::UnpackNormal(frag_normal);
-
-    float  depth         = TextureHandle(moer_constants.param.depth_tex).SampleLevel<float>(snapped_uv);
-    float3 frag_position = WorldPosFromDepth(depth, snapped_uv, moer_constants.param.clip2world);
+    float3 frag_normal = surface.normal;
+    float3 frag_position = WorldPosFromDepth(surface.depth, surface.uv, moer_constants.param.clip2world);
+    rw_geometry[pixel_pos] = PackAoGeometry(frag_position, frag_normal);
 
     // Blue noise base value — spatially coherent across neighboring pixels
     float2 noise_uv        = uv * moer_constants.param.resolution / 256.0;
@@ -121,5 +118,5 @@ bool CastVisibilityRay(
     float ao = visible_ray_contrib / total_ray_contrib;
 
     rw_ao_only[pixel_pos]   = ao;
-    rw_camera_mv[pixel_pos] = GetCameraMotionVector(snapped_uv);
+    rw_camera_mv[pixel_pos] = GetCameraMotionVector(uv);
 }

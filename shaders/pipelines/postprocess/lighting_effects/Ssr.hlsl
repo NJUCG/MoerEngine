@@ -1,5 +1,5 @@
 /**
-  * SSAO implementation
+  * Screen-space reflections
   * Reference: GAMES202
   */
 
@@ -33,13 +33,16 @@ bool should_apply_ssr(float2 uv) { // the performance cost is so high
     return true;
 }
 
-float3 apply_view_projection(float3 position) {
+bool TryProjectSsrPointToScreen(float3 position, out float3 uvd) {
+    uvd = 0.f;
     float4 p = mul(moer_constants.param.world2clip, float4(position, 1.0));
+    if (!all(isfinite(p)) || p.w <= 0.f) {
+        return false;
+    }
     p /= p.w;
-    // 两个究极大坑�?
-    // p.z is not needed to apply f(x) = x * 0.5 + 0.5;
-    // p.y is need to clip y;
-    return float3(p.x * 0.5 + 0.5, -p.y * 0.5 + 0.5, p.z);
+    // Reverse-Z depth already occupies [0,1]; only xy need the viewport transform.
+    uvd = float3(p.x * 0.5 + 0.5, -p.y * 0.5 + 0.5, p.z);
+    return all(isfinite(uvd)) && all(uvd >= 0.f) && all(uvd <= 1.f);
 }
 
 // to approximate sqrt(x) when x is in [0, 1]
@@ -54,35 +57,24 @@ float4 ssr_sample_color(float2 uv) {
     );
 }
 
-float3 ssr_ray_tracing(float3 color, float3 test_point, float3 direction, float fresnel, float jitter) {
-    bool hit = false;
-    float4 hit_color = float4(0, 0, 0, 0);
+bool TraceScreenSpaceReflection(float3 test_point, float3 direction, float jitter, out float2 hit_uv) {
+    hit_uv = 0.f;
     float3 uvd;
 
     for (uint i = 0; i < moer_constants.param.ssr_sample_count; i++) {
         float3 last_point = test_point;
         test_point += direction * pow(float(i + 1) + jitter, 1.46); // 使得每次采样步长增加
         // uvd <=> test point in clip space <=> uv + depth
-        uvd = apply_view_projection(test_point);
-
-        if (
-            uvd.x < 0
-            || uvd.x > 1
-            || uvd.y < 0
-            || uvd.y > 1
-            || uvd.z < 0
-            || uvd.z > 1
-        ) {
-            hit = true;
-            break;
+        if (!TryProjectSsrPointToScreen(test_point, uvd)) {
+            return false;
         }
 
         float sample_depth = linearize_depth(get_depth(uvd.xy));
         float test_depth = linearize_depth(uvd.z);
 
-        bool magic_formula = (test_depth - sample_depth) < 0.001 * (1.0 + test_depth * 200.0 + float(i)); // 去除锯齿/波纹
+        bool within_depth_thickness = (test_depth - sample_depth) < 0.001 * (1.0 + test_depth * 200.0 + float(i)); // 去除锯齿/波纹
 
-        if (sample_depth < test_depth && magic_formula) {
+        if (sample_depth < test_depth && within_depth_thickness) {
             direction = test_point - last_point;
             test_point = last_point;
             float s = 1.0;
@@ -92,23 +84,21 @@ float3 ssr_ray_tracing(float3 color, float3 test_point, float3 direction, float 
             for (uint j = 0; j < 4; j++) {
                 direction *= 0.5;
                 test_point += direction * s;
-                uvd = apply_view_projection(test_point);
+                if (!TryProjectSsrPointToScreen(test_point, uvd)) {
+                    return false;
+                }
                 sample_depth = linearize_depth(get_depth(uvd.xy));
                 test_depth = linearize_depth(uvd.z);
                 s = (sample_depth < test_depth) ? -1.0 : 1.0;
             }
 
-            hit = true;
-            hit_color = ssr_sample_color(uvd.xy);
-            break;
+            hit_uv = uvd.xy;
+            return true;
         }
     }
 
-    if (!hit) {
-        hit_color = ssr_sample_color(uvd.xy);
-    }
-
-    return lerp(color, hit_color.rgb, hit_color.a * fresnel);
+    // Exhausting the sample budget does not establish an intersection.
+    return false;
 }
 
 float3 ssr(float3 color, float2 uv) {
@@ -124,7 +114,12 @@ float3 ssr(float3 color, float2 uv) {
         ? fmod(uv.x * moer_constants.param.resolution.x + uv.y * moer_constants.param.resolution.y, 4.0) * 0.25
         : 0.0f;
 
-    return ssr_ray_tracing(color, position + normal * 0.1, reflect_dir * moer_constants.param.ssr_step_base, fresnel, jitter);
+    float2 hit_uv;
+    if (!TraceScreenSpaceReflection(position + normal * 0.1, reflect_dir * moer_constants.param.ssr_step_base, jitter, hit_uv)) {
+        return color;
+    }
+    float4 reflected_color = ssr_sample_color(hit_uv);
+    return lerp(color, reflected_color.rgb, reflected_color.a * fresnel);
 }
 
 float4 main(float2 uv : TEXCOORD0) : SV_TARGET {
