@@ -1040,16 +1040,16 @@ public:
      * import/export boundaries, and bypasses backend dependency inference.
      * BackendTracked remains available only for unmigrated callers.
      *
-     * This is the direct path for Graphics passes backed by
-     * already-created resources. It uses the compiler's frontend dispatch
-     * groups and never publishes per-pass RHIRecordingSources. Active transient
-     * lowering and multi-queue execution remain on
-     * ExecuteFrontendRecordingPlan's RHI handoff path.
+     * Compiled recording also materializes transient slots from the existing
+     * completion-safe allocator. Their graph bindings are released after recording;
+     * the appended stream retains their owners until completion. Multi-queue
+     * execution remains on ExecuteFrontendRecordingPlan's RHI handoff path.
      */
     bool RecordAndMergeFrontendCommands(
         CommandList&               command_list,
         bool                       parallel_recording_enabled = true,
-        const GpuProfilingOptions& gpu_profiling = DefaultGpuProfilingOptions()
+        const GpuProfilingOptions& gpu_profiling = DefaultGpuProfilingOptions(),
+        RenderGraphTransientAllocator* transient_allocator = nullptr
     );
 
     [[nodiscard]] bool IsCompiled() const {
