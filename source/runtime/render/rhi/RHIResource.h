@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <compare>
 #include <initializer_list>
 #include <optional>
 #include <span>
@@ -556,10 +557,7 @@ struct TextureSubresourceKeyT {
     uint8     array_layer{0};
     uint8     array_count{1};
 
-    bool operator==(const TextureSubresourceKeyT& _other) const {
-        return texture == _other.texture && mip_level == _other.mip_level && mip_count == _other.mip_count &&
-               array_layer == _other.array_layer && array_count == _other.array_count;
-    }
+    bool operator==(const TextureSubresourceKeyT&) const = default;
 };
 
 template<typename TTexture>
@@ -888,24 +886,8 @@ struct ArrayArgReference {
         return handle;
     }
 
-    bool operator==(const ArrayArgReference& _other) const {
-        return handle == _other.handle;
-    }
-    bool operator!=(const ArrayArgReference& _other) const {
-        return handle != _other.handle;
-    }
-    bool operator<(const ArrayArgReference& _other) const {
-        return handle < _other.handle;
-    }
-    bool operator>(const ArrayArgReference& _other) const {
-        return handle > _other.handle;
-    }
-    bool operator<=(const ArrayArgReference& _other) const {
-        return handle <= _other.handle;
-    }
-    bool operator>=(const ArrayArgReference& _other) const {
-        return handle >= _other.handle;
-    }
+    bool operator==(const ArrayArgReference&) const = default;
+    auto operator<=>(const ArrayArgReference&) const = default;
 
     ArrayArgReference() = default;
     ArrayArgReference(uint32 _handle) : handle(_handle) {}
@@ -1130,10 +1112,7 @@ struct RHIColorAttachmentInfo {
         return *this;
     }
 
-    bool operator==(const RHIColorAttachmentInfo& other) const {
-        return blend_state_info == other.blend_state_info && clear_attachment == other.clear_attachment &&
-               pixel_format == other.pixel_format && usage_flags == other.usage_flags;
-    }
+    bool operator==(const RHIColorAttachmentInfo&) const = default;
 };
 
 namespace Moer::Render {

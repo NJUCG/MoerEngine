@@ -656,30 +656,12 @@ struct RHISubresourceRange : public RHISubresourceSlice {
         return num_mips == s_all;
     }
 
-    inline bool IsAllArraySlices() const {
-        return array_count == s_all;
-    }
-    //usually set to zero
-    inline bool IsAllPlaneSlices() const {
-        return plane_count == s_all;
-    }
-
     inline bool IsWholeResource() const {
         return IsAllMips() && IsAllArraySlices() && IsAllPlaneSlices();
     }
 
-    inline bool IgnoreDepthPlane() const {
-        return aspect == ETextureAspectFlags::STENCIL_SLICE;
-    }
-
-    inline bool IgnoreStencilPlane() const {
-        return aspect == ETextureAspectFlags::DEPTH_SLICE;
-    }
-
     inline bool operator==(RHISubresourceRange const& rhs) const {
-        return mip_index == rhs.mip_index && num_mips == rhs.num_mips && array_index == rhs.array_index &&
-               array_count == rhs.array_count && plane_index == rhs.plane_index &&
-               plane_count == rhs.plane_count;
+        return RHISubresourceSlice::operator==(rhs) && num_mips == rhs.num_mips;
     }
 
     inline bool operator!=(RHISubresourceRange const& rhs) const {
