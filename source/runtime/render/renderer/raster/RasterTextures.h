@@ -125,14 +125,9 @@ namespace Moer::Render::Raster {
       Tex2DTag,                                                                                    \
       TexConfig::Default(PF_R8_UNORM)                                                              \
           .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                          \
-    X(TexHandle,                                                                                   \
-      ao_denoiser_accumulate,                                                                      \
-      Tex2DTag,                                                                                    \
-      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR))                                      \
-    X(TexHandle,                                                                                   \
-      ao_denoiser_accumulate_1,                                                                    \
-      Tex2DTag,                                                                                    \
-      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR))                                      \
+    X(TexHandle, ao_noisy, Tex2DTag,                                                           \
+      TexConfig::Default(PF_R8_UNORM)                                                        \
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                     \
     X(TexHandle,                                                                                   \
       camera_motion_vector,                                                                        \
       Tex2DTag,                                                                                    \

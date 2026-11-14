@@ -7,6 +7,7 @@
 #include "shaderheaders/shared/raster/ShaderParameters.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
+#include "AoFrameResources.h"
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
@@ -22,20 +23,8 @@ public:
     DEFINE_SHADER_ARGS(bdls, param);
 };
 
-class CopyPassPipeline : public RasterPipeline {
-public:
-    DEFINE_RASTER_PIPELINE_CLASS(CopyPassPipeline);
-    DEFINE_SHADER_CONSTANT(CopyPassBindlessParam, param);
-    DEFINE_SHADER_BINDLESS_ARRAY(bdls);
-    DEFINE_SHADER_ARGS(bdls, param);
-};
-
-/**
- * MARK: RtaoDenoiser Pass
- * 
- * 时序降噪：读取当前帧 ao_only 和历史 accumulate，
- * 输出降噪后的 accumulate，再通过 Copy Pass 写回 ao_only。
- */
+// Reads noisy AO and the last accepted final output, then writes this frame's
+// final output directly. AoPass owns temporal acceptance and resource selection.
 class RtaoDenoiserPass {
 public:
     struct GraphResources {
@@ -48,149 +37,55 @@ public:
     };
 
     struct RecordParameters {
-        bool                           enabled{false};
-        bool                           half_resolution{false};
-        BindlessArrayRef               bindless{};
-        TextureWithHandle              history_write{};
-        TextureWithHandle              ao_only{};
-        RtaoDenoiserPassBindlessParam  denoise{};
-        CopyPassBindlessParam          copy{};
+        BindlessArrayRef              bindless{};
+        TextureWithHandle             output{};
+        RtaoDenoiserPassBindlessParam denoise{};
     };
 
-    RtaoDenoiserPass(RasterContext& context) :
-        img_denoiser_history_write(context.textures.ao_denoiser_accumulate),
-        img_ao_only(context.textures.ao_output_ambient_only) {
-        {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(),
-                {},
-                {RHIColorAttachmentInfo::Preset(img_denoiser_history_write.tex->GetFormat())}
-            );
-
-            rtao_denoiser_pso = context.manager.Raster()
-                                    .Vertex("core/utils/FullScreenQuad.hlsl")
-                                    .Pixel("pipelines/postprocess/denoise/RtaoDenoiser.hlsl")
-                                    .Build<RtaoDenoiserPassPipeline>(std::move(pso_full_screen_info));
-        }
-        {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(img_ao_only.tex->GetFormat())}
-            );
-            copy_pso = context.manager.Raster()
-                           .Vertex("core/utils/FullScreenQuad.hlsl")
-                           .Pixel("pipelines/postprocess/common/CopyPass.hlsl")
-                           .Build<CopyPassPipeline>(std::move(pso_full_screen_info));
-        }
-    }
-
-    void ResetHistory() {
-        history_valid               = false;
+    RtaoDenoiserPass(RasterContext& context) {
+        GfxPsoCreateInfo info(
+            RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(context.textures.ao_output_ambient_only.tex->GetFormat())}
+        );
+        rtao_denoiser_pso = context.manager.Raster()
+                                .Vertex("core/utils/FullScreenQuad.hlsl")
+                                .Pixel("pipelines/postprocess/denoise/RtaoDenoiser.hlsl")
+                                .Build<RtaoDenoiserPassPipeline>(std::move(info));
     }
 
     [[nodiscard]] RecordParameters Prepare(
-        RasterContext&      context,
-        const RasterConfig& ui_config,
-        const Camera&       camera,
-        uint32              ao_only_idx
+        const RasterContext&    context,
+        const RasterConfig&     config,
+        const Camera&           camera,
+        const AoFrameResources& frame
     ) const {
         RecordParameters parameters{};
-        parameters.enabled =
-            (ui_config.ao_mode == EAoMode::RTAO ||
-             ui_config.ao_mode == EAoMode::RTAO_AO_ONLY) &&
-            ui_config.rtao_denoiser_enable;
-        parameters.half_resolution = ui_config.ao_half_resolution;
-        parameters.bindless        = context.bdls;
-        if (!parameters.enabled) {
-            return parameters;
-        }
-
-        const bool configuration_matches =
-            history_valid &&
-            history_half_resolution == parameters.half_resolution;
-        TextureWithHandle history_read{};
-        if (ao_only_idx == 0) {
-            history_read = parameters.half_resolution ?
-                               context.textures.ao_denoiser_accumulate_1_half :
-                               context.textures.ao_denoiser_accumulate_1;
-            parameters.history_write = parameters.half_resolution ?
-                                           context.textures.ao_denoiser_accumulate_half :
-                                           context.textures.ao_denoiser_accumulate;
-            parameters.ao_only = parameters.half_resolution ?
-                                     context.textures.ao_output_ambient_only_half :
-                                     context.textures.ao_output_ambient_only;
-        } else {
-            history_read = parameters.half_resolution ?
-                               context.textures.ao_denoiser_accumulate_half :
-                               context.textures.ao_denoiser_accumulate;
-            parameters.history_write = parameters.half_resolution ?
-                                           context.textures.ao_denoiser_accumulate_1_half :
-                                           context.textures.ao_denoiser_accumulate_1;
-            parameters.ao_only = parameters.half_resolution ?
-                                     context.textures.ao_output_ambient_only_1_half :
-                                     context.textures.ao_output_ambient_only_1;
-        }
-
-        TextureWithHandle camera_mv_target =
-            parameters.half_resolution ?
-                context.textures.camera_motion_vector_half :
-                context.textures.camera_motion_vector;
-
-        auto& param = parameters.denoise;
-        param.history_ao_tex    = history_read.hdl;
-        param.curr_ao_tex       = parameters.ao_only.hdl;
-        param.motion_vector_tex = camera_mv_target.hdl;
-        const auto geometry_0 = parameters.half_resolution ? context.textures.ao_history_geometry_half :
-                                                            context.textures.ao_history_geometry;
-        const auto geometry_1 = parameters.half_resolution ? context.textures.ao_history_geometry_1_half :
-                                                            context.textures.ao_history_geometry_1;
-        param.current_geometry_tex = (ao_only_idx == 0 ? geometry_0 : geometry_1).hdl;
-        param.history_geometry_tex = (ao_only_idx == 0 ? geometry_1 : geometry_0).hdl;
-        param.camera_position = camera.GetPosition();
-        param.inv_resolution    = float2(1.0f) / float2(parameters.ao_only.GetSize());
-
-        param.history_ratio = configuration_matches && history_valid ?
-                                  ui_config.rtao_denoiser_history_ratio :
-                                  0.f;
-        param.valid_position_threshold = ui_config.rtao_denoiser_valid_position_threshold;
-        param.valid_normal_threshold = ui_config.rtao_denoiser_valid_normal_threshold;
-
-        param.is_reprojection_enable     = ui_config.rtao_denoiser_reprojection_enable;
-        param.is_validation_enable       = ui_config.rtao_denoiser_validation_enable;
-        param.is_history_clamp_enable    = ui_config.rtao_denoiser_history_clamp_enable;
-        param.is_motion_weighting_enable = ui_config.rtao_denoiser_motion_weighting_enable;
-
-        parameters.copy.input_image = parameters.history_write.hdl;
+        parameters.bindless              = context.bdls;
+        parameters.output                = frame.Output();
+        auto& param                      = parameters.denoise;
+        param.history_ao_tex             = frame.PreviousOutput().hdl;
+        param.curr_ao_tex                = frame.EvaluationOutput().hdl;
+        param.motion_vector_tex          = frame.camera_motion.hdl;
+        param.current_geometry_tex       = frame.CurrentGeometry().hdl;
+        param.history_geometry_tex       = frame.PreviousGeometry().hdl;
+        param.camera_position            = camera.GetPosition();
+        param.inv_resolution             = float2(1.0f) / float2(frame.Output().GetSize());
+        param.history_ratio              = frame.has_denoised_history ? config.rtao_denoiser_history_ratio : 0.f;
+        param.valid_position_threshold   = config.rtao_denoiser_valid_position_threshold;
+        param.valid_normal_threshold     = config.rtao_denoiser_valid_normal_threshold;
+        param.is_reprojection_enable     = config.rtao_denoiser_reprojection_enable;
+        param.is_validation_enable       = config.rtao_denoiser_validation_enable;
+        param.is_history_clamp_enable    = config.rtao_denoiser_history_clamp_enable;
+        param.is_motion_weighting_enable = config.rtao_denoiser_motion_weighting_enable;
         return parameters;
     }
 
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
-        RecordDenoise(cmd_list, parameters);
-        RecordCopy(cmd_list, parameters);
-    }
-
     void RecordDenoise(CommandList& cmd_list, const RecordParameters& parameters) {
-        if (!parameters.enabled) {
-            return;
-        }
         cmd_list.Gfx(rtao_denoiser_pso, parameters.bindless, parameters.denoise)
             .Draw(
                 "RtaoDenoiser Pass",
-                parameters.history_write.GetRect2D(),
+                parameters.output.GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(parameters.history_write.tex)
-            );
-    }
-
-    void RecordCopy(CommandList& cmd_list, const RecordParameters& parameters) {
-        if (!parameters.enabled) {
-            return;
-        }
-        cmd_list.Gfx(copy_pso, parameters.bindless, parameters.copy)
-            .Draw(
-                "RtaoDenoiser Copy Pass",
-                parameters.ao_only.GetRect2D(),
-                std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(parameters.ao_only.tex)
+                ColorAttachment(parameters.output.tex)
             );
     }
 
@@ -199,42 +94,12 @@ public:
         RasterContext&      context,
         const RasterConfig& ui_config,
         const Camera&       camera,
-        uint32              ao_only_index,
+        AoFrameResources    frame,
         GraphResources      resources
     );
 
-    void CommitFrame(const RecordParameters& parameters) {
-        history_valid               = parameters.enabled;
-        if (parameters.enabled) {
-            history_half_resolution = parameters.half_resolution;
-        }
-    }
-
-    void CommitFrame(const RasterConfig& ui_config) {
-        const bool enabled =
-            (ui_config.ao_mode == EAoMode::RTAO ||
-             ui_config.ao_mode == EAoMode::RTAO_AO_ONLY) &&
-            ui_config.rtao_denoiser_enable;
-        history_valid               = enabled;
-        if (enabled) {
-            history_half_resolution = ui_config.ao_half_resolution;
-        }
-    }
-
-    uint32 ProcessInPlace(RasterContext& context, const RasterConfig& ui_config, const Camera& camera, uint32 ao_only_idx) {
-        const RecordParameters parameters = Prepare(context, ui_config, camera, ao_only_idx);
-        Record(context.cmd_list, parameters);
-        CommitFrame(parameters);
-        return parameters.enabled ? ao_only_idx ^ 1u : ao_only_idx;
-    }
-
 private:
     RtaoDenoiserPassPipeline rtao_denoiser_pso;
-    CopyPassPipeline         copy_pso;
-    TextureWithHandle        img_denoiser_history_write;
-    TextureWithHandle        img_ao_only;
-    bool                     history_valid               = false;
-    bool                     history_half_resolution     = false;
 };
 
 } // namespace Moer::Render::Raster

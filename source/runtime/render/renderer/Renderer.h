@@ -46,10 +46,6 @@ struct EngineHooks {
     std::function<UiCompositionFrameData()> on_capture_ui_composition;
     std::function<UiDrawFramePacket()>      on_capture_ui_draw_frame;
 
-    std::function<void(std::string, std::function<void()>)> on_register_ui_func;
-
-    std::function<void(std::string)> on_unregister_ui_func;
-
     std::function<void()> on_show_config_sub_ui;
 
     // Reports coarse startup stages without coupling Runtime to an editor UI.

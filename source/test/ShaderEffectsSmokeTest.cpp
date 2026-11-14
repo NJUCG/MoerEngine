@@ -1,8 +1,10 @@
 #include "Engine.h"
 
 #include <array>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 
 using namespace Moer;
 using namespace Moer::Render;
@@ -43,6 +45,17 @@ int main(int argc, const char** argv) {
         raster.ssr_is_ssr_enabled = true;
         raster.shadow_pcss_enabled = true;
         raster.tonemapping_ae.enabled = true;
+        // Opt in when TensorRT models and CUDA are available. The same mode
+        // transitions then also exercise stable AO imports and missing history.
+        if (const char* cuda_smoke = std::getenv("MOER_SHADER_SMOKE_CUDA");
+            cuda_smoke && std::string_view(cuda_smoke) == "1") {
+#if WITH_CUDA
+            raster.ai_is_cuda_enabled = true;
+            std::cout << "[ShaderEffectsSmoke] CUDA inference enabled" << std::endl;
+#else
+            throw std::runtime_error("CUDA smoke requested without CUDA support");
+#endif
+        }
         uint32 ready_frames = 0;
         engine.Run(EngineHooks{.on_tick_test = [&](Scene& scene) {
             if (!scene.IsReady()) {

@@ -7,56 +7,32 @@
 // 数据结构定义
 // =================================================================================================
 
-// 统一的阴影计算上下文
-struct ShadowContext {
-    // =========================================================
-    // 资源 (Common)
-    // =========================================================
-    uint   shadowMapHandle; // Bindless Texture ID
+// Shader-local state only; CPU upload layouts remain in LightingData.
+struct DirectionalShadowContext {
+    uint   shadowMapHandle;
+    float2 shadowUV;
+    float  receiverDepthNdc; // Orthographic reverse-Z depth.
+    float2 screenUV;
+    float3 normal;
+    float3 lightDir;
+    float  lightAngleTangent; // tan(light angular radius), not a world-space size.
+    float  shadowMapSize;
+    float  orthographicWidth;
+    float  depthRangeWorld;
+};
 
-    // =========================================================
-    // 坐标与采样 (Multiplexed)
-    // =========================================================
-    // [CSM]: 当前像素在 ShadowMap 上的 2D UV
-    // [Point]: 未使用 (Point 使用 lightDir 进行 3D 采样)
-    float2 shadowUV;        
-
-    // [CSM]: 当前像素的 NDC 深度 (非线性)
-    // [Point]: 当前像素到光源的 **线性距离** (World Distance) -> PCSS 比较需要线性空间
-    float  fragmentDepth;   
-
-    // [Common]: 屏幕空间 UV (用于随机数旋转)
-    float2 screenUV;  
-
-    // =========================================================
-    // 几何与方向 (Common / Point)
-    // =========================================================
-    // [CSM]: 世界空间法线
-    // [Point]: 世界空间法线 (用于 Bias)
-    float3 normal;    
-
-    // [CSM]: 平行光方向 (统一方向)
-    // [Point]: 从光源指向像素的方向 (normalize(worldPos - lightPos))
-    float3 lightDir;  
-
-    // [Point Only]: 切线空间基向量 (用于扰动采样方向)
-    // [CSM]: 未使用
-    float3 Tangent;        
-    float3 Bitangent;    
-
-    // =========================================================
-    // 光源与投影参数 (Common / Multiplexed)
-    // =========================================================
-    // [Common]: 光源物理大小 (CSM: World Size, Point: UV Size or World Radius?) 
-    // 建议统一为 World Size，在 Penumbra 计算时转换
-    float  lightSizeWorld;  
-
-    // [Common]: ShadowMap 分辨率
-    float  shadowMapSize;   
-
-    // [CSM]: (OrthoWidth, OrthoHeight, ZRange, Near)
-    // [Point]: (NearPlane, FarPlane, 0, 0) -> 用于 Reverse-Z 线性化
-    float4 scaleData;  
+struct PointShadowContext {
+    uint   shadowMapHandle;
+    float  receiverFaceDepthWorld; // max(abs(worldPos - lightPos)), not radial distance.
+    float2 screenUV;
+    float3 normal;
+    float3 lightDir;
+    float3 tangent;
+    float3 bitangent;
+    float  lightRadiusWorld;
+    float  shadowMapSize;
+    float  nearPlaneWorld;
+    float  farPlaneWorld;
 };
 
 struct BlockerStats {

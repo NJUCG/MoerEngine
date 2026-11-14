@@ -1,7 +1,7 @@
 // 提供 Raster 共用绘制数据、profiling 标签、限频日志和场景命令提交。
 #pragma once
 
-#include "RasterConfig.h"
+#include "RasterCompileTimeConstants.h"
 #include "misc/STL.h"
 #include "misc/Types.h"
 #include "rhi/RHICommandDrawData.h"
@@ -45,8 +45,6 @@ public:
         double                seconds,
         std::source_location  location = std::source_location::current()
     );
-
-    static void TickAndLogProfiling(CommandQueue& gfx_queue, const RasterConfig& raster_config);
 
     static void ExecuteScenePendingCommands(
         GpuScene::PendingCommandList&& commands,

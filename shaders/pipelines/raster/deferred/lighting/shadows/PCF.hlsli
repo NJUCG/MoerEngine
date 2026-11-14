@@ -4,8 +4,8 @@
 #include "core/common/Bindless.hlsl"
 #include "pipelines/raster/deferred/lighting/shadows/ShadowSampling.hlsli"
 
-#define DEFINE_CALCULATE_PCF(SUFFIX)                                                                  \
-    float CalculatePcf##SUFFIX(ShadowContext ctx, float penumbra_uv, float2x2 pcf_transform_matrix) { \
+#define DEFINE_CALCULATE_PCF(SUFFIX, CONTEXT_TYPE)                                                     \
+    float CalculatePcf##SUFFIX(CONTEXT_TYPE ctx, float penumbra_uv, float2x2 pcf_transform_matrix) { \
         float    visibility     = 0.0;                                                                \
         float2x2 rotation       = GetRandomRotation(ctx.screenUV);                                    \
         float    receiver_depth = GetFragmentDepth##SUFFIX(ctx);                                      \
@@ -28,7 +28,7 @@
         visibility /= float(PCSS_SAMPLES);                                                            \
                                                                                                       \
         if (PCSS_SHARE_PER_PIXEL_QUAD == 2) {                                                         \
-            float2 deriv       = max(abs(ddx(ctx.fragmentDepth)), abs(ddy(ctx.fragmentDepth)));       \
+            float2 deriv       = max(abs(ddx(GetFragmentDepth##SUFFIX(ctx))), abs(ddy(GetFragmentDepth##SUFFIX(ctx)))); \
             float  flat_factor = 1.0 - saturate(max(deriv.x, deriv.y) * 100.0);                       \
                                                                                                       \
             if (flat_factor > 0.0) {                                                                  \

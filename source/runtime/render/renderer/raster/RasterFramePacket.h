@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RasterConfig.h"
+#include "RasterFrameStatus.h"
 #include "renderer/EditorConfig.h"
 #include "renderer/Renderer.h"
 #include "renderer/SceneRenderExtent.h"
@@ -8,6 +9,7 @@
 #include "scene/camera/Camera.h"
 
 #include "misc/Types.h"
+#include <optional>
 #include <string>
 #include <type_traits>
 
@@ -36,13 +38,13 @@ static_assert(std::is_move_constructible_v<RasterFramePacket>);
 static_assert(!std::is_copy_constructible_v<RasterFramePacket>);
 
 struct RasterFrameFeedback {
-    GaussianRasterStatus        gaussian_status{};
-    GaussianExportStatus        gaussian_export_status{};
-    uint64                      frame_id = 0;
-    PresentReceiptRef           main_present_receipt{};
-    RasterConfig::CullingStats  culling_stats{};
-    CooperativeOpsStatus        cooperative_ops_status{};
-    Array<std::string>          displayable_frame_buffer_names;
+    GaussianExportStatus gaussian_export_status{};
+    uint64               frame_id = 0;
+    PresentReceiptRef    main_present_receipt{};
+
+    // Empty when no raster pipeline ran; valid zero counters still replace old UI data.
+    std::optional<RasterFrameStatus> status;
+    Array<std::string>               displayable_frame_buffer_names;
 };
 
 } // namespace Moer::Render::Raster

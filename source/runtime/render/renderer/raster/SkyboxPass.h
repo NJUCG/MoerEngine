@@ -40,6 +40,7 @@ public:
 
     [[nodiscard]] RecordParameters Prepare(
         const RasterContext& context,
+        const SceneUpdateBatch& updates,
         const RasterConfig&  ui_config,
         const Camera&        camera
     ) const;
@@ -47,12 +48,12 @@ public:
     void AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
+        const SceneUpdateBatch& updates,
         const RasterConfig& config,
         const Camera& camera,
         GraphResources resources,
         bool clear_depth = false
     );
-    void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
 
 private:
     SkyboxPipeline skybox_pipeline;

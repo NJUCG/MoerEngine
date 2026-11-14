@@ -4,18 +4,20 @@
 
 #include "Core.h"
 #include "renderer/raster/RasterConfig.h"
+#include "renderer/raster/RasterFrameStatus.h"
 
 namespace Moer {
 
 class CooperativeOpsUI {
 public:
-    explicit CooperativeOpsUI(RasterConfig& config);
+    CooperativeOpsUI(RasterConfig& config, const CooperativeOpsStatus& status);
     ~CooperativeOpsUI() = default;
 
     void ShowConfig();
 
 private:
-    RasterConfig& m_config;
+    RasterConfig&               m_config;
+    const CooperativeOpsStatus& m_status;
 };
 
 } // namespace Moer

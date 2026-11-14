@@ -92,8 +92,12 @@ public:
                        .Build<GeometryPassPipeline>(std::move(pipeline_info));
     }
 
-    [[nodiscard]] RecordParameters
-    Prepare(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {
+    [[nodiscard]] RecordParameters Prepare(
+        RasterContext&      context,
+        const RasterConfig& raster_config,
+        const Camera&       camera,
+        CullingStats&       out_stats
+    ) {
         MOER_PROFILE_SCOPE("Raster.Prepare.Geometry");
         const auto& gpu_scene_res = context.GetGpuSceneRes();
 
@@ -103,7 +107,6 @@ public:
                                            context.hiz_data.mip_count > 0;
 
         // 剔除阶段始终运行以选择 LOD；视锥和 Hi-Z 剔除仍可配置。
-        CullingPass::CullStatistics culling_stats;
         CullingPass::CullingOptions culling_options{
             raster_config.enable_frustum_culling,
             use_occlusion_culling,
@@ -116,20 +119,10 @@ public:
             camera,
             gpu_scene_res,
             context.gpu_culling_buffers.geometry,
-            &culling_stats,
+            &out_stats,
             RasterTool::GetGeometryCullingProfileScopeName(),
             culling_options
         );
-
-        raster_config.culling_stats.total_instances_before = culling_stats.total_instances_before;
-        raster_config.culling_stats.total_instances_after  = culling_stats.total_instances_after;
-        raster_config.culling_stats.visible_draws          = culling_stats.visible_draws;
-        raster_config.culling_stats.total_draws            = culling_stats.total_draws;
-        raster_config.culling_stats.frustum_culled_instances =
-            culling_stats.frustum_culled_instances;
-        raster_config.culling_stats.occlusion_culled_instances =
-            culling_stats.occlusion_culled_instances;
-        raster_config.culling_stats.lod_culled_instances = culling_stats.lod_culled_instances;
 
         GeometryPassBindlessParam param{};
         param.world2clip = Transpose(camera.GetViewProjectionMatrix());
@@ -200,15 +193,21 @@ public:
     }
 
     RenderGraph::PassHandle AddToGraph(
-        RenderGraph&   graph,
-        RasterContext& context,
-        RasterConfig&  raster_config,
-        const Camera&  camera,
-        GraphResources resources
+        RenderGraph&        graph,
+        RasterContext&      context,
+        const RasterConfig& raster_config,
+        const Camera&       camera,
+        GraphResources      resources,
+        CullingStats&       out_stats
     );
 
-    void Process(RasterContext& context, RasterConfig& raster_config, const Camera& camera) {
-        const auto parameters = Prepare(context, raster_config, camera);
+    void Process(
+        RasterContext&      context,
+        const RasterConfig& raster_config,
+        const Camera&       camera,
+        CullingStats&       out_stats
+    ) {
+        const auto parameters = Prepare(context, raster_config, camera, out_stats);
         Record(context.cmd_list, parameters);
     }
 

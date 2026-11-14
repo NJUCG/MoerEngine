@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RaytracingConfig.h"
+#include "RaytracingDebugState.h"
 #include "RaytracingSceneFrameSnapshot.h"
 #include "misc/Types.h"
 #include "renderer/Renderer.h"
@@ -8,13 +9,6 @@
 #include "rhi/RHICommand.h"
 
 namespace Moer::Render::Raytracing {
-
-struct RaytracingDebugFrameInput {
-    bool        show_final_texture = false;
-    bool        use_bindless       = true;
-    int         mip_level          = 0;
-    std::string selected_material_texture_name;
-};
 
 struct RaytracingFramePacket {
     RaytracingFramePacket() = default;

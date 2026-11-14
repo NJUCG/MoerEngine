@@ -25,13 +25,14 @@ SkyboxPass::SkyboxPass(RasterContext& context) {
 
 SkyboxPass::RecordParameters SkyboxPass::Prepare(
     const RasterContext& context,
+    const SceneUpdateBatch& updates,
     const RasterConfig&  ui_config,
     const Camera&        camera
 ) const {
     RecordParameters parameters{};
     auto&            skybox_param = parameters.pass_param;
     skybox_param.cubemap_handle = context.textures.cubemap_tex.hdl;
-    const auto& directional_light = context.GetSceneUpdates().main_directional_light;
+    const auto& directional_light = updates.main_directional_light;
     if (directional_light && ui_config.skybox_exposure_correct_enabled) {
         skybox_param.exposure_factor = directional_light->color * directional_light->intensity *
                                        powf(10.0f, ui_config.skybox_exposure_correct_factor_log10);
@@ -64,10 +65,6 @@ void SkyboxPass::Record(CommandList& cmd_list, const RecordParameters& parameter
                 parameters.output, EAttachmentAction::AC_LOAD_STORE, float4(0, 0, 0, 0)
             }
         );
-}
-
-void SkyboxPass::Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera) {
-    Record(context.cmd_list, Prepare(context, ui_config, camera));
 }
 
 } // namespace Moer::Render::Raster

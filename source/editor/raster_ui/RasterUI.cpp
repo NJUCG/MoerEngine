@@ -10,7 +10,10 @@
 
 namespace Moer {
 
-RasterUI::RasterUI(RasterConfig& config) : m_cooperative_ops_ui(config), m_config(config) {
+RasterUI::RasterUI(RasterConfig& config, const RasterFrameStatus& status) :
+    m_cooperative_ops_ui(config, status.cooperative_ops_status),
+    m_config(config),
+    m_status(status) {
     if (ConfigManager::GetInstance().GetConfig().engine.render.raster.low_quality_mode) {
         m_config.ao_mode = EAoMode::SSAO;
 
@@ -100,11 +103,11 @@ void RasterUI::ShowConfig() {
             ImGui::Text("Culling Statistics:");
             ImGui::Indent();
 
-            if (m_config.culling_stats.total_instances_before == 0 &&
-                m_config.culling_stats.lod_culled_instances == 0) {
+            if (m_status.culling_stats.total_instances_before == 0 &&
+                m_status.culling_stats.lod_culled_instances == 0) {
                 ImGui::TextDisabled("  Waiting for data...");
             } else {
-                const auto& stats = m_config.culling_stats;
+                const auto& stats = m_status.culling_stats;
 
                 // LOD 信息（独立展示，不混入剔除条形图）
                 const uint32 lod_active = stats.total_instances_before;

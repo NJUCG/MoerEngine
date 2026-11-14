@@ -35,9 +35,6 @@
 #include "ToneMappingPass.h"
 #include "VisualizePass.h"
 
-// 3rd party
-#include <imgui.h>
-
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -391,13 +388,15 @@ void RaytracingRenderer::Run(const SharedPtr<EditorConfig> editor_config, const 
             break;
         }
     }
-    Shutdown(hooks);
 }
 
 RaytracingFramePacket
 RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     assert(IsCurrentlyGameThread());
     assert(editor_config);
+    if (next_frame_id == 0) {
+        editor_config->raytracing_debug_state = {};
+    }
     if (hooks.on_tick_engine_control) {
         hooks.on_tick_engine_control();
     }
@@ -443,7 +442,7 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
         ScopedFramePrepareProfileTimer timer(profile_logging, prepare_profile.config_snapshot_ms);
         frame_packet.config               = editor_config->raytracing_config;
         frame_packet.runtime_assets_ready = runtime_assets.IsReady();
-        frame_packet.debug_input          = debug_ui_frame_input;
+        frame_packet.debug_input          = editor_config->raytracing_debug_state.input;
     }
 
     const WindowInputFrameSnapshot window_input =
@@ -517,9 +516,6 @@ RaytracingRenderer::PrepareFrame(const SharedPtr<EditorConfig> editor_config, co
             }
             if (frame_packet.scene_updates.geometry) {
                 capture_scene_geometry_snapshot = false;
-            }
-            if (frame_packet.scene_updates.scene_ready) {
-                EnsureDebugUiRegistered(hooks);
             }
         }
     }
@@ -1921,89 +1917,30 @@ RaytracingFrameFeedback RaytracingRenderer::RenderFrame(RaytracingFramePacket fr
 
 void RaytracingRenderer::ApplyFrameFeedback(
     RaytracingFrameFeedback feedback,
-    RaytracingConfig&       target_config
-) {
-    assert(IsCurrentlyGameThread());
-    TickAndLogProfiling(feedback);
-    if (feedback.has_grid_cell_size) {
-        target_config.grid_config.cell_size = feedback.grid_cell_size;
-    }
-    if (feedback.export_request_finished) {
-        export_request_in_flight = false;
-        if (feedback.export_consumed) {
-            target_config.export_cfg.b_export = false;
-        }
-    }
-    debug_ui_profiler_data          = std::move(feedback.profiler_data);
-    debug_ui_material_texture_names = std::move(feedback.material_texture_names);
-}
-
-void RaytracingRenderer::ApplyFrameFeedback(
-    RaytracingFrameFeedback feedback,
-    RaytracingConfig&       target_config,
+    EditorConfig&           target_config,
     const EngineHooks&      hooks
 ) {
     assert(IsCurrentlyGameThread());
     ApplyMainPresentReceipt(feedback.main_present_receipt, hooks);
-    ApplyFrameFeedback(std::move(feedback), target_config);
+    TickAndLogProfiling(feedback);
+    if (feedback.has_grid_cell_size) {
+        target_config.raytracing_config.grid_config.cell_size = feedback.grid_cell_size;
+    }
+    if (feedback.export_request_finished) {
+        export_request_in_flight = false;
+        if (feedback.export_consumed) {
+            target_config.raytracing_config.export_cfg.b_export = false;
+        }
+    }
+    target_config.raytracing_debug_state.profiler_data          = std::move(feedback.profiler_data);
+    target_config.raytracing_debug_state.material_texture_names = std::move(feedback.material_texture_names);
 }
 
 bool RaytracingRenderer::RunSingle(const SharedPtr<EditorConfig> editor_config, const EngineHooks& hooks) {
     ApplyFrameFeedback(
-        RenderFrame(PrepareFrame(editor_config, hooks)), editor_config->raytracing_config, hooks
+        RenderFrame(PrepareFrame(editor_config, hooks)), *editor_config, hooks
     );
     return !hooks.should_reload || !hooks.should_reload();
-}
-
-void RaytracingRenderer::Shutdown(const EngineHooks& hooks) {
-    assert(IsCurrentlyGameThread());
-    if (debug_ui_registered && hooks.on_unregister_ui_func) {
-        hooks.on_unregister_ui_func("Display MaterialTexture");
-    }
-    debug_ui_registered = false;
-}
-
-void RaytracingRenderer::EnsureDebugUiRegistered(const EngineHooks& hooks) {
-    assert(IsCurrentlyGameThread());
-    if (debug_ui_registered || !hooks.on_register_ui_func) {
-        return;
-    }
-
-    hooks.on_register_ui_func("Display MaterialTexture", [this]() {
-        assert(IsCurrentlyGameThread());
-        auto& debug_input = debug_ui_frame_input;
-
-        ImGui::Checkbox("Show Final Texture", &debug_input.show_final_texture);
-        ImGui::SliderInt("Mip Level", &debug_input.mip_level, 0, 12);
-        ImGui::Checkbox("Use Bindless", &debug_input.use_bindless);
-        if (ImGui::TreeNode("MaterialTexture")) {
-            for (const auto& name : debug_ui_material_texture_names) {
-                if (ImGui::Selectable(name.data(), debug_input.selected_material_texture_name == name)) {
-                    debug_input.selected_material_texture_name = name;
-                }
-            }
-            ImGui::TreePop();
-        }
-
-        const auto& entries = debug_ui_profiler_data;
-        if (!entries.cpu_entries.empty()) {
-            ImGui::Text("CPU Time:");
-            for (const auto& [name, duration] : entries.cpu_entries) {
-                if (name.ends_with("Percentage")) {
-                    ImGui::Text("%s: %.3f%%", name.c_str(), duration * 100);
-                } else {
-                    ImGui::Text("%s: %.3f ms", name.c_str(), duration);
-                }
-            }
-        }
-        if (!entries.gpu_entries.empty()) {
-            ImGui::Text("GPU Time:");
-            for (const auto& [name, duration] : entries.gpu_entries) {
-                ImGui::Text("%s: %.3f ms", name.c_str(), duration);
-            }
-        }
-    });
-    debug_ui_registered = true;
 }
 
 bool RaytracingRenderer::RefreshSceneRuntimeRefs() {

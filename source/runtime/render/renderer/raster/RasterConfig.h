@@ -1,6 +1,4 @@
 #pragma once
-#include "scene/gaussian/GaussianRenderSettings.h"
-
 #include "misc/STL.h"
 #include "misc/Traits.h"
 #include "misc/Types.h"
@@ -109,31 +107,6 @@ static const Array<std::string> s_ai_trt_visualize_buffer_array = {
     "Engine2 out_final_output",   "Engine2 out_denoised_ao",
 }; // namespace Moer
 
-struct CooperativeOpsStatus {
-    bool extension_enabled                     = false;
-    bool inference_ready                       = false;
-    bool matrix_supported                      = false;
-    bool matrix_robust_buffer_access_supported = false;
-    bool vector_supported                      = false;
-    bool vector_training_supported             = false;
-    bool low_precision_supported               = false;
-    bool storage_supported                     = false;
-    bool vulkan_memory_model_supported         = false;
-
-    uint32 matrix_mode_count       = 0;
-    uint32 vector_mode_count       = 0;
-    uint32 matrix_supported_stages = 0;
-    uint32 vector_supported_stages = 0;
-    uint32 max_vector_components   = 0;
-    uint32 frames_evaluated        = 0;
-
-    std::string overview              = "Waiting for cooperative snapshot...";
-    std::string matrix_summary        = "Waiting for cooperative snapshot...";
-    std::string matrix_runtime_status = "Idle";
-    std::string vector_summary        = "Waiting for cooperative snapshot...";
-    std::string vector_runtime_status = "Idle";
-};
-
 struct ProbeVolumeConfig {
     bool   enabled         = true;
     int    count_x         = 8;
@@ -148,7 +121,6 @@ struct ProbeVolumeConfig {
 };
 
 struct RasterConfig {
-    GaussianRasterStatus gaussian_status{};
     bool should_frame_gaussians = false;
 
     // MARK: Geometry
@@ -176,41 +148,6 @@ struct RasterConfig {
     float  tessellated_surface_height_scale        = 1.0f;
     float  tessellated_surface_detail_scale        = 1.0f;
     float  tessellated_surface_wind_angle_degrees  = 18.0f;
-
-    // MARK: Culling Statistics (只读，由GPU更新)
-    struct CullingStats {
-        uint32 total_instances_before     = 0;
-        uint32 total_instances_after      = 0;
-        uint32 visible_draws              = 0;
-        uint32 total_draws                = 0;
-        uint32 frustum_culled_instances   = 0;
-        uint32 occlusion_culled_instances = 0;
-        uint32 lod_culled_instances       = 0;
-
-        float GetCullingRatio() const {
-            if (total_instances_before == 0)
-                return 0.0f;
-            return 1.0f - (float)total_instances_after / (float)total_instances_before;
-        }
-
-        float GetFrustumCullingRatio() const {
-            if (total_instances_before == 0)
-                return 0.0f;
-            return (float)frustum_culled_instances / (float)total_instances_before;
-        }
-
-        float GetOcclusionCullingRatio() const {
-            if (total_instances_before == 0)
-                return 0.0f;
-            return (float)occlusion_culled_instances / (float)total_instances_before;
-        }
-
-        float GetRenderedRatio() const {
-            if (total_instances_before == 0)
-                return 0.0f;
-            return (float)total_instances_after / (float)total_instances_before;
-        }
-    } culling_stats;
 
     // MARK: Shading
     EShadingMode shading_mode = EShadingMode::DEFAULT_PBR;
@@ -360,8 +297,7 @@ struct RasterConfig {
     bool bloom_enabled = true;
 
     // MARK: Cooperative Ops
-    bool                 cooperative_ops_enabled = false;
-    CooperativeOpsStatus cooperative_ops_status{};
+    bool cooperative_ops_enabled = false;
 
     // MARK: Denoiser
     EDenoiserMode denoiser_mode                     = EDenoiserMode::NONE;
@@ -417,7 +353,6 @@ struct RasterConfig {
     // MARK: Others
 
     uint32 selected_frame_buffer_index = 0;
-    float frame_time                  = 1.0f / 60.0f; // default 0.0167s
 };
 
 } // namespace Moer

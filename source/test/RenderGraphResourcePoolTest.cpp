@@ -1388,7 +1388,7 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
     }
 
     constexpr std::string_view serial_test =
-        "allocation-backed transient requires active allocation";
+        "allocation-backed transient rejects a BackendTracked destination";
     {
         bool callback_ran = false;
         RenderGraph graph("SerialTransientExecute");
@@ -1414,10 +1414,10 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
         const bool executed = compiled && graph.RecordAndMergeFrontendCommands(merged, false);
         suite.Check(
             !executed && !callback_ran &&
-                graph.GetCompileError().find("active ExecuteFrontendRecordingPlan") !=
+                graph.GetCompileError().find("Compiled destination") !=
                     std::string::npos,
             serial_test,
-            "merged recording ran an allocation-backed transient callback"
+            "BackendTracked merged recording exposed an allocation-backed transient"
         );
     }
 
@@ -1470,6 +1470,150 @@ void TestTransientExecutionContractsAndRollback(TestSuite& suite) {
     }
 }
 
+
+void TestMergedTransientLifetime(TestSuite& suite, bool parallel) {
+    constexpr std::string_view test = "merged transient owners follow the destination through completion";
+    FactoryProbe probe{};
+    auto pool = probe.MakePool();
+    RenderGraphTransientAllocator allocator(pool);
+    RenderGraph graph("MergedTransientLifetime");
+    const auto first = graph.CreateTransientBuffer("First", kBufferDesc);
+    const auto second = graph.CreateTransientBuffer("Second", kBufferDesc);
+    const auto image = graph.CreateTransientTexture("Image", kTextureDesc);
+    const void* first_identity = nullptr;
+    const void* second_identity = nullptr;
+    const auto producer = graph.AddRecordPass(
+        "FirstUse",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(first, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(image, RenderGraph::TextureAccessType::TransferDestination)
+                .SideEffect();
+        },
+        [&](CommandList& commands) {
+            const auto buffer = graph.GetPhysicalBuffer(first);
+            first_identity = buffer.Get();
+            commands.ClearResource(buffer->GetView(), 1u);
+            commands.ClearResource(graph.GetPhysicalTexture(image)->GetView(), Moer::Vector4f(0));
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
+    graph.AddRecordPass(
+        "AliasAndReference",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .DependsOn(producer)
+                .Write(second, RenderGraph::BufferAccessType::TransferDestination)
+                .Reference(image)
+                .SideEffect();
+        },
+        [&](CommandList& commands) {
+            const auto buffer = graph.GetPhysicalBuffer(second);
+            second_identity = buffer.Get();
+            commands.ClearResource(buffer->GetView(), 2u);
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
+    const bool compiled = graph.Compile();
+    suite.Check(compiled, test, graph.GetCompileError());
+    CommandList destination(EQueueType::Graphics);
+    destination.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    const bool recorded = compiled && graph.RecordAndMergeFrontendCommands(destination, parallel, {}, &allocator);
+    suite.Check(recorded, test, graph.GetCompileError());
+    suite.Check(first_identity && first_identity == second_identity, test,
+        "non-overlapping logical buffers did not share their compiled transient slot");
+    suite.Check(!graph.GetPhysicalBuffer(first) && !graph.GetPhysicalBuffer(second) && !graph.GetPhysicalTexture(image),
+        test, "merged recording left non-exported physical bindings in the graph");
+    suite.Check(pool.BufferCount() == 1 && pool.TextureCount() == 1 &&
+        pool.AvailableBufferCount() == 0 && pool.AvailableTextureCount() == 0,
+        test, "an unsubmitted destination did not retain all transient owners");
+    if (!recorded) return;
+    auto submit = destination.Submit();
+    InvokeCallbacks(submit.callbacks);
+    InvokeCallbacks(submit.success_callbacks);
+    suite.Check(pool.AvailableBufferCount() == 0 && pool.AvailableTextureCount() == 0,
+        test, "ordinary/success callbacks retired resources before the completion lifetime");
+    submit.lifetime.reset();
+    suite.Check(pool.AvailableBufferCount() == 1 && pool.AvailableTextureCount() == 1,
+        test, "completion did not make transient resources reusable");
+}
+
+enum class MergedFailure { Allocation, Lowering, Recording, Commit };
+
+void TestMergedTransientRollback(TestSuite& suite, MergedFailure failure) {
+    constexpr std::string_view test = "failed merged transients leave the destination unchanged";
+    Moer::uint32 allocations = 0;
+    RenderGraphResourcePool pool(3, {},
+        [&](std::string_view, const RGTransientBufferDesc& desc) {
+            if (++allocations == 2 && failure == MergedFailure::Allocation)
+                throw std::runtime_error("injected allocation failure");
+            return BufferRef{MoerNew(FakeBuffer)(desc)};
+        });
+    RenderGraphTransientAllocator allocator(pool);
+    RenderGraph graph("MergedTransientRollback");
+    const auto first = graph.CreateTransientBuffer("First", kBufferDesc);
+    auto other_desc = kBufferDesc;
+    other_desc.element_count *= 2;
+    const auto second = graph.CreateTransientBuffer("Second", other_desc);
+    BufferRef imported_owner;
+    RenderGraph::BufferHandle imported;
+    if (failure == MergedFailure::Lowering) {
+        imported_owner = BufferRef{MoerNew(FakeBuffer)(kBufferDesc)};
+        imported = graph.ImportBuffer("MissingFinalState", imported_owner, {.byte_size = imported_owner->GetByteSize()});
+        graph.SetInitialState(imported, RenderGraph::BufferAccessType::TransferSource,
+            RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    }
+    bool callback_ran = false;
+    graph.AddRecordPass(
+        "WriteScratch",
+        [=](RenderGraph::PassBuilder& builder) {
+            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                .Write(first, RenderGraph::BufferAccessType::TransferDestination)
+                .Write(second, RenderGraph::BufferAccessType::TransferDestination)
+                .SideEffect();
+            if (imported.IsValid()) builder.Read(imported, RenderGraph::BufferAccessType::TransferSource);
+        },
+        [&](CommandList& commands) {
+            callback_ran = true;
+            commands.ClearResource(graph.GetPhysicalBuffer(first)->GetView(), 1u);
+            commands.AddCallback([] {});
+            if (failure == MergedFailure::Recording) throw std::runtime_error("injected record failure");
+            if (failure == MergedFailure::Commit) {
+                // Legal in each stream; the duplicate is detected only when
+                // the fully recorded private stream is appended to destination.
+                commands.PushScopeWithTimeScope("DuplicateMergeScope");
+                commands.PopScopeWithTimeScope();
+            }
+        },
+        RenderGraph::PassRecordPolicy::ParallelAllowed
+    );
+    const bool compiled = graph.Compile();
+    suite.Check(compiled, test, graph.GetCompileError());
+    CommandList destination(EQueueType::Graphics);
+    destination.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    int preserved = 0;
+    destination.AddCallback([&] { ++preserved; });
+    if (failure == MergedFailure::Commit) {
+        destination.PushScopeWithTimeScope("DuplicateMergeScope");
+        destination.PopScopeWithTimeScope();
+    }
+    const bool recorded = compiled && graph.RecordAndMergeFrontendCommands(destination, true, {}, &allocator);
+    suite.Check(!recorded, test, "injected failure was accepted");
+    suite.Check(callback_ran == (failure == MergedFailure::Recording || failure == MergedFailure::Commit),
+        test, "allocation/lowering failure reached recording, or recording failure never ran");
+    suite.Check(!graph.GetPhysicalBuffer(first) && !graph.GetPhysicalBuffer(second), test,
+        "failure retained a partially allocated transient graph binding");
+    suite.Check(pool.BufferCount() == (failure == MergedFailure::Allocation ? 1u : 2u) &&
+        pool.AvailableBufferCount() == pool.BufferCount(), test,
+        "failed private streams retained transient owners");
+    auto submit = destination.Submit();
+    suite.Check(submit.callbacks.size() == 1, test, "a failed graph appended its callback prefix");
+    suite.Check(submit.cmds.size() == (failure == MergedFailure::Commit ? 2u : 0u), test,
+        "a failed graph appended its command prefix");
+    InvokeCallbacks(submit.callbacks);
+    suite.Check(preserved == 1, test, "the existing destination callback was lost or duplicated");
+}
+
 } // namespace
 
 int main() {
@@ -1487,6 +1631,10 @@ int main() {
     TestAliasFollowsReverseDeclarationDependency(suite);
     TestRecordReferenceRetainsCompletionLifetime(suite);
     TestTransientExecutionContractsAndRollback(suite);
+    TestMergedTransientLifetime(suite, false);
+    TestMergedTransientLifetime(suite, true);
+    for (auto failure : {MergedFailure::Allocation, MergedFailure::Lowering, MergedFailure::Recording, MergedFailure::Commit})
+        TestMergedTransientRollback(suite, failure);
 
     if (suite.FailureCount() != 0) {
         std::cerr << suite.FailureCount()

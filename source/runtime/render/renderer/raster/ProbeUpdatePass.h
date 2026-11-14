@@ -110,6 +110,7 @@ public:
 
     [[nodiscard]] RecordParameters Prepare(
         RasterContext&      context,
+        const SceneUpdateBatch& updates,
         const RasterConfig& config,
         const Camera&       camera,
         uint64              frame_index
@@ -119,7 +120,7 @@ public:
         parameters.update = context.probe_volume.PrepareUpdate(
             config,
             context.GetGpuSceneRes(),
-            context.GetSceneUpdates(),
+            updates,
             camera.GetPosition(),
             frame_index
         );
@@ -147,22 +148,6 @@ public:
             job.param.probe_trace_config.w   = parameters.ray_query ? 1.0f : 0.0f;
         }
         return parameters;
-    }
-
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
-        if (!parameters.enabled) {
-            return;
-        }
-
-        ProbeVolumeResource::RecordSceneDataUpload(cmd_list, parameters.scene_upload);
-        if (parameters.update.job_count == 0 ||
-            parameters.update.scheduled_probe_count == 0) {
-            return;
-        }
-
-        for (uint32 job_index = 0; job_index < parameters.update.job_count; ++job_index) {
-            RecordJob(cmd_list, parameters, job_index);
-        }
     }
 
     void RecordJob(CommandList& cmd_list, const RecordParameters& parameters, uint32 job_index) {
@@ -213,22 +198,12 @@ public:
     RenderGraph::PassHandle AddToGraph(
         RenderGraph&        graph,
         RasterContext&      context,
+        const SceneUpdateBatch& updates,
         const RasterConfig& config,
         const Camera&       camera,
         uint64              frame_index,
         GraphResources      resources
     );
-
-    void Process(
-        RasterContext&      context,
-        const RasterConfig& config,
-        const Camera&       camera,
-        uint64              frame_index
-    ) {
-        const RecordParameters parameters =
-            Prepare(context, config, camera, frame_index);
-        Record(context.cmd_list, parameters);
-    }
 
 private:
     ProbeUpdatePipeline         probe_update_pipeline;

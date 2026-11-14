@@ -122,18 +122,6 @@ public:
         GraphResources resources
     );
 
-    TextureWithHandle Process(
-        RasterContext&      context,
-        const RasterConfig& ui_config,
-        const Camera&       camera,
-        TextureWithHandle   input_image
-    ) {
-        const RecordParameters parameters =
-            Prepare(context, ui_config, camera, std::move(input_image));
-        Record(context.cmd_list, parameters);
-        return parameters.output;
-    }
-
 private:
     SsrPipeline ssr_pipeline;
 };

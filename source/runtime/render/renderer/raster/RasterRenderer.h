@@ -68,7 +68,7 @@ public:
     RasterFrameFeedback RenderFrame(RasterFramePacket frame_packet);
     void ApplyFrameFeedback(
         RasterFrameFeedback feedback,
-        RasterConfig&       target_config,
+        EditorConfig&       target_config,
         const EngineHooks&  hooks
     );
 

@@ -53,7 +53,6 @@ public:
         GraphResources resources,
         std::span<const RenderGraph::SetupPassHandle> setup_dependencies = {}
     );
-    void Process(RasterContext& context);
 
 private:
     DirectionalShadowMaskPassPipeline pipeline;

@@ -192,23 +192,32 @@ public:
         RenderGraph&               graph,
         CommandList&               destination,
         bool                       parallel_recording_enabled,
-        const GpuProfilingOptions& gpu_profiling
+        const GpuProfilingOptions& gpu_profiling,
+        RenderGraphTransientAllocator* transient_allocator
     ) :
         graph(graph),
         destination(destination),
         parallel_recording_enabled(parallel_recording_enabled),
-        gpu_profiling(gpu_profiling) {
+        gpu_profiling(gpu_profiling),
+        transient_allocator(transient_allocator) {
     }
 
     [[nodiscard]] bool Execute() {
-        if (!Validate()) {
-            return false;
-        }
+        struct TransientBindingReleaseGuard {
+            RenderGraph& graph;
+            RenderGraphTransientAllocator* allocator = nullptr;
+            ~TransientBindingReleaseGuard() {
+                if (allocator) allocator->ReleaseNonExported(graph);
+            }
+        } transient_bindings{graph};
 
-        MOER_PROFILE_SCOPE("RenderGraph.RecordAndMergeFrontendCommands");
-        graph.executed = true;
-        // Only range-sized streams are retained; no per-pass CommandList slots.
         try {
+            if (!Validate(transient_bindings.allocator)) {
+                return false;
+            }
+            MOER_PROFILE_SCOPE("RenderGraph.RecordAndMergeFrontendCommands");
+            graph.executed = true;
+            // Only range-sized streams are retained; no per-pass CommandList slots.
             frontend_streams.reserve(
                 graph.compiled_plan.frontend_record_units.size()
             );
@@ -238,7 +247,7 @@ private:
         return false;
     }
 
-    [[nodiscard]] bool Validate() {
+    [[nodiscard]] bool Validate(RenderGraphTransientAllocator*& prepared_allocator) {
         ProfileDump::ScopedCpuProfile profile_scope("RenderGraph.PrepareMergedRecording", graph.name);
         if (!graph.compiled) {
             return Fail(
@@ -265,11 +274,9 @@ private:
                        resource.transient_slot != InvalidIndex;
             }
         );
-        if (has_allocation_backed_transient) {
-            return Fail(
-                "allocation-backed transient resources require active "
-                "ExecuteFrontendRecordingPlan"
-            );
+        if (has_allocation_backed_transient &&
+            destination.GetResourceStateOwnership() != ERHIResourceStateOwnership::Compiled) {
+            return Fail("allocation-backed transient resources require a Compiled destination");
         }
 
         for (const CompiledFrontendRecordUnit& unit :
@@ -280,6 +287,13 @@ private:
         }
         if (!ValidateDispatchGroups()) { return false; }
         if (destination.GetResourceStateOwnership() == ERHIResourceStateOwnership::Compiled) {
+            if (has_allocation_backed_transient) {
+                auto& allocator = transient_allocator ? *transient_allocator : RenderGraphTransientAllocator::Global();
+                if (!allocator.Prepare(graph, graph.compile_error)) { return false; }
+                // Keep bindings through all worker joins. Lowered per-pass owners
+                // then follow the private streams into the destination's lifetime.
+                prepared_allocator = &allocator;
+            }
             if (!RenderGraphLowering::Lower(graph, lowered, graph.compile_error)) { return false; }
             if (!lowered.queue_syncs.empty()) { return Fail("merged recording cannot execute queue synchronization"); }
             if (lowered.passes.size() != graph.compiled_plan.frontend_record_units.size()) {
@@ -583,6 +597,7 @@ private:
     CommandList&               destination;
     bool                       parallel_recording_enabled = true;
     const GpuProfilingOptions& gpu_profiling;
+    RenderGraphTransientAllocator* transient_allocator = nullptr;
     Array<SharedPtr<CommandList>> frontend_streams{};
     RenderGraphLowering::LoweredPlan lowered{};
     std::vector<std::vector<BarrierCreateInfo>> before{}, after{};
@@ -591,13 +606,15 @@ private:
 bool RenderGraph::RecordAndMergeFrontendCommands(
     CommandList&               command_list,
     bool                       parallel_recording_enabled,
-    const GpuProfilingOptions& gpu_profiling
+    const GpuProfilingOptions& gpu_profiling,
+    RenderGraphTransientAllocator* transient_allocator
 ) {
     return FrontendRecordMergeExecutor(
         *this,
         command_list,
         parallel_recording_enabled,
-        gpu_profiling
+        gpu_profiling,
+        transient_allocator
     ).Execute();
 }
 

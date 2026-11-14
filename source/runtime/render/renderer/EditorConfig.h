@@ -4,7 +4,9 @@
 #include "misc/Types.h"
 
 #include "raster/RasterConfig.h"
+#include "raster/RasterFrameStatus.h"
 #include "raytracing/RaytracingConfig.h"
+#include "raytracing/RaytracingDebugState.h"
 #include "scene/testcase/SceneTestCaseConfig.h"
 
 namespace Moer {
@@ -70,6 +72,10 @@ struct EditorConfig {
     RasterConfig        raster_config;
     RaytracingConfig    raytracing_config;
     SceneTestCaseConfig scene_test_case_config;
+
+    // Game Thread presentation state updated through renderer frame feedback.
+    RasterFrameStatus                      raster_status{};
+    Render::Raytracing::RaytracingDebugState raytracing_debug_state{};
 
     // 为了避免数据不一致，这里对resolution进行封装。引擎中必须优先保证该struct中的resolution是正确的
 private:

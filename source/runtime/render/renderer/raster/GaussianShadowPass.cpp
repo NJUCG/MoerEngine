@@ -60,6 +60,7 @@ GaussianShadowPass::~GaussianShadowPass() {
 }
 GaussianShadowPass::RecordParameters GaussianShadowPass::Prepare(
     RasterContext&          context,
+    const SceneUpdateBatch& updates,
     const RasterConfig&     config,
     const Camera&           camera,
     const GaussianGpuScene& scene,
@@ -85,7 +86,6 @@ GaussianShadowPass::RecordParameters GaussianShadowPass::Prepare(
     const bool cube = config.shadow_map_mode == EShadowMapMode::POINT_CUBE;
     const bool directional =
         config.shadow_map_mode == EShadowMapMode::CSM || config.shadow_map_mode == EShadowMapMode::CSM_AUTO;
-    const auto& updates = context.GetSceneUpdates();
     data.light_indices  = uint4(
         updates.main_directional_light_index,
         updates.main_point_light_index,
@@ -250,23 +250,6 @@ QueryFuture GaussianShadowPass::RecordDraw(
         return timing.GetFuture();
     }
     return {};
-}
-
-void GaussianShadowPass::Record(CommandList& commands, const RecordParameters& parameters) {
-    RecordUpload(commands, parameters);
-    if (!parameters.data.config.w) {
-        return;
-    }
-    const bool collect_timing = m_timings.empty();
-    const uint32 count = parameters.data.config.x == 2 ? 6u : parameters.data.config.y;
-    for (uint32 view = 0; view < count; ++view) {
-        for (uint32 draw = 0; draw < parameters.draws.size(); ++draw) {
-            auto timing = RecordDraw(commands, parameters, view, draw, collect_timing);
-            if (timing.Valid()) {
-                m_timings.push_back(std::move(timing));
-            }
-        }
-    }
 }
 
 RenderGraph::PassHandle GaussianShadowPass::AddToGraph(

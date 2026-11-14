@@ -95,16 +95,6 @@ public:
         GraphResources resources
     );
 
-    TextureWithHandle Process(
-        RasterContext&      context,
-        const RasterConfig& raster_config,
-        TextureWithHandle   input_image
-    ) {
-        const RecordParameters parameters = Prepare(context, raster_config, std::move(input_image));
-        Record(context.cmd_list, parameters);
-        return parameters.output;
-    }
-
 private:
     BilateralFilterDenoiserPipeline pipeline;
     TextureWithHandle&              output_image;

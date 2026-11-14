@@ -47,10 +47,6 @@ public:
     CommandList&     cmd_list;
     RenderScene&     render_scene;
 
-    const SceneUpdateBatch* scene_updates = nullptr;
-
-    float frame_time;
-
     uint2 GetResolution() const {
         return scene_resolution;
     }
@@ -211,23 +207,6 @@ public:
         // other resources
         CreateLightingData();
         probe_volume.Create(device, bdls);
-    }
-
-    void Update(float delta_time) {
-        frame_time = delta_time;
-    }
-
-    void BeginSceneFrame(const SceneUpdateBatch& updates) {
-        scene_updates = &updates;
-    }
-
-    void EndSceneFrame() {
-        scene_updates = nullptr;
-    }
-
-    const SceneUpdateBatch& GetSceneUpdates() const {
-        assert(scene_updates && "Scene frame data is only valid during RasterRenderer::RenderFrame().");
-        return *scene_updates;
     }
 
     void CreateLightingData() {

@@ -34,7 +34,8 @@ constexpr std::array<std::string_view, 2> k_exported_texture_names = {"LDR", "HD
 
 } // namespace
 
-RaytracingUI::RaytracingUI(RaytracingConfig& config) : m_config(config) {
+RaytracingUI::RaytracingUI(RaytracingConfig& config, Raytracing::RaytracingDebugState& debug_state) :
+    m_config(config), m_debug_state(debug_state) {
     m_final_color_options["SceneColor"] = EFinalColor::EFC_SceneColor;
     m_final_color_options["DI"]         = EFinalColor::EFC_DI;
     m_final_color_options["Emissive"]   = EFinalColor::EFC_EMISSIVE;
@@ -48,6 +49,40 @@ RaytracingUI::RaytracingUI(RaytracingConfig& config) : m_config(config) {
     m_final_color_options["Material"]   = EFinalColor::EFC_MATERIAL;
     m_final_color_options["Position"]   = EFinalColor::EFC_POSITION;
     m_final_color_options["Custom"]     = EFinalColor::EFC_CUSTOM;
+}
+
+void RaytracingUI::ShowDebug() {
+    auto& debug_input = m_debug_state.input;
+
+    ImGui::Checkbox("Show Final Texture", &debug_input.show_final_texture);
+    ImGui::SliderInt("Mip Level", &debug_input.mip_level, 0, 12);
+    ImGui::Checkbox("Use Bindless", &debug_input.use_bindless);
+    if (ImGui::TreeNode("MaterialTexture")) {
+        for (const auto& name : m_debug_state.material_texture_names) {
+            if (ImGui::Selectable(name.c_str(), debug_input.selected_material_texture_name == name)) {
+                debug_input.selected_material_texture_name = name;
+            }
+        }
+        ImGui::TreePop();
+    }
+
+    const auto& entries = m_debug_state.profiler_data;
+    if (!entries.cpu_entries.empty()) {
+        ImGui::Text("CPU Time:");
+        for (const auto& [name, duration] : entries.cpu_entries) {
+            if (name.ends_with("Percentage")) {
+                ImGui::Text("%s: %.3f%%", name.c_str(), duration * 100);
+            } else {
+                ImGui::Text("%s: %.3f ms", name.c_str(), duration);
+            }
+        }
+    }
+    if (!entries.gpu_entries.empty()) {
+        ImGui::Text("GPU Time:");
+        for (const auto& [name, duration] : entries.gpu_entries) {
+            ImGui::Text("%s: %.3f ms", name.c_str(), duration);
+        }
+    }
 }
 
 void RaytracingUI::ShowConfig() {

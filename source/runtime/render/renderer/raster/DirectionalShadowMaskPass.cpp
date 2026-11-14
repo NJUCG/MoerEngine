@@ -56,7 +56,4 @@ void DirectionalShadowMaskPass::Record(
         );
 }
 
-void DirectionalShadowMaskPass::Process(RasterContext& context) {
-    Record(context.cmd_list, Prepare(context));
-}
 } // namespace Moer::Render::Raster

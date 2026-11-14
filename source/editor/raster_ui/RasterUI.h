@@ -9,6 +9,7 @@
 #include "Core.h"
 #include "misc/Traits.h"
 #include "renderer/raster/RasterConfig.h"
+#include "renderer/raster/RasterFrameStatus.h"
 #include "rhi/RHIResource.h"
 
 namespace Moer {
@@ -16,7 +17,7 @@ namespace Moer {
 class RasterUI {
 
 public:
-    explicit RasterUI(RasterConfig& config);
+    RasterUI(RasterConfig& config, const RasterFrameStatus& status);
     ~RasterUI() = default;
 
     void ShowConfig();
@@ -34,8 +35,9 @@ private:
     Array<std::string> m_frame_buffer_names;
     bool               m_frame_buffer_names_initialized = false;
 
-    CooperativeOpsUI m_cooperative_ops_ui;
-    RasterConfig&     m_config;
+    CooperativeOpsUI         m_cooperative_ops_ui;
+    RasterConfig&            m_config;
+    const RasterFrameStatus& m_status;
 };
 
 } // namespace Moer

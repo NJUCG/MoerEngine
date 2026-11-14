@@ -6,7 +6,8 @@
 
 namespace Moer {
 
-CooperativeOpsUI::CooperativeOpsUI(RasterConfig& config) : m_config(config) {}
+CooperativeOpsUI::CooperativeOpsUI(RasterConfig& config, const CooperativeOpsStatus& status) :
+    m_config(config), m_status(status) {}
 
 void CooperativeOpsUI::ShowConfig() {
     if (!ImGui::TreeNode(
@@ -23,7 +24,7 @@ void CooperativeOpsUI::ShowConfig() {
         ImGui::GetWindowDrawList()->AddRect(min, max, IM_COL32(255, 255, 255, 255));
     };
 
-    const auto& status = m_config.cooperative_ops_status;
+    const auto& status = m_status;
 
     if (ImGui::Selectable("Enable", m_config.cooperative_ops_enabled)) {
         m_config.cooperative_ops_enabled = true;
