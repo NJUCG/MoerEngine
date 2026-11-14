@@ -5,6 +5,7 @@
 #include "renderer/raster/BloomPass.h"
 #include "renderer/raster/TonemappingPass.h"
 #include "renderer/raytracing/RaytracingExportSubmission.h"
+#include "renderer/raytracing/AntiAliasPass.h"
 #include "rendergraph/RenderGraph.h"
 #include "rendergraph/RenderGraphLowering.h"
 #include "rendergraph/RenderGraphPassParameters.h"
@@ -1507,7 +1508,8 @@ void ValidateArguments(int _argc, const char** _argv) {
             argument != "--timestamp-query-mid-failure" &&
             argument != "--timestamp-query-record-failure" &&
             argument != "--gpu-scope-stream" &&
-            argument != "--multiview" && argument != "--compiled-commands") {
+            argument != "--multiview" && argument != "--compiled-commands" &&
+            argument != "--postprocess-regression") {
             throw std::invalid_argument("unsupported argument: " + std::string(argument));
         }
     }
@@ -2124,6 +2126,134 @@ void RunCompiledBindlessCandidates(ShaderManager& manager, bool parallel) {
     discard.UpdateBindlessArray(table);
     LOG_INFO("[TESTCASE][PASS] name=CompiledBindlessCandidates graphs=2 gpu-indexed=true "
              "results=86,88 slots=recycled");
+}
+
+void ExecutePostprocessRegressionGraph(RenderGraph& graph) {
+    CommandList commands;
+    commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+    if (!graph.Compile() || !graph.RecordAndMergeFrontendCommands(commands, false)) {
+        throw std::runtime_error("postprocess regression graph failed: " + graph.GetCompileError());
+    }
+    RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+    RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
+}
+
+void RunTaaNeighborhoodMotionRegression(ShaderManager& manager) {
+    using Raytracing::TAAPipeline;
+    auto& device = RenderDevice::Get();
+    auto pipeline = manager.Compute<TAAPipeline>("pipelines/raytracing/postprocess/TAAPass.hlsl");
+    constexpr uint32 width = 64, height = 64;
+    constexpr uint32 target_x = 24, target_y = 24;
+    std::array<float4, width * height> colors, history;
+    colors.fill(float4(0.2f, 0.2f, 0.2f, 1.f));
+    for (uint32 y = 0; y < height; ++y) {
+        for (uint32 x = 0; x < width; ++x) {
+            history[y * width + x] = float4(0.1f + x * 0.01f, 0.1f + y * 0.01f, 0.3f, 0.f);
+        }
+    }
+    TAAParams params{};
+    params.in_view_size = params.out_view_size = float2(width, height);
+    params.in_pixel_offset = float2(0.0625f, -0.1875f); // First default MSAA jitter sample.
+    params.out_texture_size_inv = float2(1.f / width, 1.f / height);
+    params.input_over_output_size = params.output_over_input_size = float2(1.f);
+    params.clamping_factor = -1.f;
+    params.new_frame_weight = 0.04f;
+    params.pqc = 200.f;
+    params.inv_pqc = 1.f / params.pqc;
+
+    auto run = [&](const std::array<float2, width * height>& motions) {
+        const auto sampled_usage = ETextureUsageFlags::SAMPLED | ETextureUsageFlags::TRANSFER_DST;
+        const auto output_usage = ETextureUsageFlags::UNORDERED_ACCESS | ETextureUsageFlags::TRANSFER_SRC;
+        auto input = device.CreateTexture("taa_input", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+        auto motion = device.CreateTexture("taa_motion", Extent3D(width, height, 1), PF_R32G32_SFLOAT, sampled_usage);
+        auto previous = device.CreateTexture("taa_history", Extent3D(width, height, 1), PF_R32G32B32A32_SFLOAT, sampled_usage);
+        auto output = device.CreateTexture("taa_output", Extent3D(width, height, 1), PF_R16G16B16A16_SFLOAT, output_usage);
+        auto feedback = device.CreateTexture("taa_feedback", Extent3D(width, height, 1), PF_R16G16B16A16_SNORM, output_usage);
+        auto constants = device.CreateBuffer<Moer::byte>("taa_params", sizeof(params), EBufferUsageFlags::CONSTANT_BUFFER | EBufferUsageFlags::TRANSFER_DST);
+        RenderGraph graph("TaaNeighborhoodMotionRegression");
+        const auto input_handle = graph.ImportTexture("Input", input, {});
+        const auto motion_handle = graph.ImportTexture("Motion", motion, {});
+        const auto previous_handle = graph.ImportTexture("Previous", previous, {});
+        const auto output_handle = graph.ImportTexture("Output", output, {});
+        const auto feedback_handle = graph.ImportTexture("Feedback", feedback, {});
+        const auto constants_handle = graph.ImportBuffer("Params", constants, {.byte_size = sizeof(params)});
+        for (const auto handle : {input_handle, motion_handle, previous_handle, output_handle, feedback_handle}) {
+            graph.SetInitialState(handle, RenderGraph::TextureBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        }
+        graph.SetInitialState(constants_handle, RenderGraph::BufferBoundary::Undefined, RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
+        graph.AddRecordPass(
+            "Upload",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Write(input_handle, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(motion_handle, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(previous_handle, RenderGraph::TextureAccessType::TransferDestination)
+                    .Write(constants_handle, RenderGraph::BufferAccessType::TransferDestination);
+            },
+            [&](CommandList& commands) {
+                commands.CopyFrom(std::as_bytes(std::span(colors)), input->GetView());
+                commands.CopyFrom(std::as_bytes(std::span(motions)), motion->GetView());
+                commands.CopyFrom(std::as_bytes(std::span(history)), previous->GetView());
+                commands.CopyFrom(std::as_bytes(std::span(&params, 1)), constants->GetView());
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.AddRecordPass(
+            "TAA",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
+                    .Read(input_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Read(motion_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Read(previous_handle, RenderGraph::TextureAccessType::Sampled)
+                    .Read(constants_handle, RenderGraph::BufferAccessType::ShaderRead)
+                    .Write(output_handle, RenderGraph::TextureAccessType::Storage)
+                    .Write(feedback_handle, RenderGraph::TextureAccessType::Storage);
+            },
+            [&](CommandList& commands) {
+                commands.Compute(pipeline, constants, input, motion, previous, Sampler(SF_LINEAR, SAM_CLAMP_TO_EDGE), output, feedback)
+                    .Dispatch(uint3(width / 16, height / 16, 1));
+            },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        ReadbackFuture readback;
+        graph.AddRecordPass(
+            "Readback",
+            [=](RenderGraph::PassBuilder& builder) {
+                builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
+                    .Read(output_handle, RenderGraph::TextureAccessType::TransferSource).SideEffect();
+            },
+            [&](CommandList& commands) { readback = commands.Readback(output->GetView()); },
+            RenderGraph::PassRecordPolicy::ParallelAllowed
+        );
+        graph.Export(output_handle, RenderGraph::TextureAccessType::TransferSource, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        for (const auto handle : {input_handle, motion_handle, previous_handle}) {
+            graph.Export(handle, RenderGraph::TextureAccessType::Sampled, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        }
+        graph.Export(feedback_handle, RenderGraph::TextureAccessType::Storage, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Write);
+        graph.Export(constants_handle, RenderGraph::BufferAccessType::ShaderRead, RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        ExecutePostprocessRegressionGraph(graph);
+        const auto pixels = readback.Get().CopyAs<uint16>();
+        if (!pixels || pixels->size() != width * height * 4) {
+            throw std::runtime_error("TAA regression readback is invalid");
+        }
+        const size_t first_channel = (target_y * width + target_x) * 4;
+        return std::array<uint16, 3>{(*pixels)[first_channel], (*pixels)[first_channel + 1], (*pixels)[first_channel + 2]};
+    };
+    std::array<float2, width * height> motions{};
+    const auto stationary = run(motions);
+    // This tile's shared [0][0] is source (15,14), outside target (24,24)'s 3x3 neighborhood.
+    motions[14 * width + 15] = float2(2.f, 0.f);
+    if (run(motions) != stationary) {
+        throw std::runtime_error("TAA zero-motion neighborhood borrowed motion from the tile origin");
+    }
+    motions.fill(float2(0.f));
+    motions[target_y * width + target_x] = float2(2.f, 0.f);
+    const auto neighborhood_motion = run(motions);
+    motions.fill(float2(2.f, 0.f));
+    if (neighborhood_motion == stationary || run(motions) != neighborhood_motion) {
+        throw std::runtime_error("TAA failed to select the longest motion inside its neighborhood");
+    }
+    LOG_INFO("[TESTCASE][PASS] name=TaaNeighborhoodMotion zero=stationary outside=ignored inside=selected");
 }
 
 void RunCompiledBloom(ShaderManager& manager, bool parallel) {
@@ -14789,6 +14919,19 @@ int main(int argc, const char** argv) {
             .submission_batch_window = submission_batch_window,
         });
         render_device_initialized = true;
+
+        if (HasArgument(argc, argv, "--postprocess-regression")) {
+            ShaderManager& manager = ShaderManager::Get();
+            shader_manager_initialized = true;
+            RunTaaNeighborhoodMotionRegression(manager);
+            ShaderManager::ShutDown();
+            shader_manager_initialized = false;
+            RenderDevice::Dispose();
+            render_device_initialized = false;
+            TaskSystem::ShutDown();
+            task_system_initialized = false;
+            return 0;
+        }
 
         if (HasArgument(argc, argv, "--compiled-commands")) {
             RunCompiledSubmissionContract();

@@ -182,7 +182,8 @@ float2 OutputToInput(int2 _pixel_pos_to_origin) {
   float3 color_moment2 = 0;
 
   float longest_motion = 0;
-  int2 longest_motion_pos = 0;
+  // An all-zero neighborhood still selects its own center, not the tile origin.
+  int2 longest_motion_pos = in_pos_shared + int2(1, 1);
   float3 this_pixel_color = 0;
 
   [unroll] for (int dy = 0; dy <= 2; ++dy) {
