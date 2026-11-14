@@ -7,9 +7,9 @@
 namespace Moer::Render::VulkanSubmissionDetail {
 
 enum class EWorkerRequestKind : uint8 {
-    Submit,
-    Sync,
-    Stop,
+    Submit, //normal request
+    Sync, // when swapchain recraetes
+    Stop,// shutdown
 };
 
 enum class EWorkerRequestFailurePhase : uint8 {
