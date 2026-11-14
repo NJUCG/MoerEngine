@@ -54,10 +54,6 @@ struct ShadowContext {
     // [Common]: ShadowMap 分辨率
     float  shadowMapSize;   
 
-    // [CSM]: 投影矩阵 W 分量 (用于透视校正，CSM 正交通常为 1.0)
-    // [Point]: 1.0 (Point 使用线性距离比较，无需透视除法)
-    float  clipW;           
-
     // [CSM]: (OrthoWidth, OrthoHeight, ZRange, Near)
     // [Point]: (NearPlane, FarPlane, 0, 0) -> 用于 Reverse-Z 线性化
     float4 scaleData;  
@@ -103,6 +99,24 @@ float GetSlopeScaledBias(float3 normal, float3 lightDir) {
     float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
     float bias = 0.005 * sinTheta / max(cosTheta, 1e-4);
     return clamp(bias, 0.0001, 0.01);
+}
+
+// Callers supply the bias policy so this helper does not depend on PCSS configuration macros.
+float GetShadowDepthBias(
+    float3 normal,
+    float3 lightDir,
+    float fixedBias,
+    bool dynamicBiasEnabled,
+    bool maxBiasEnabled
+) {
+    float bias = fixedBias;
+    if (dynamicBiasEnabled) {
+        bias = GetSlopeScaledBias(normal, lightDir);
+        if (maxBiasEnabled) {
+            bias = min(bias, fixedBias);
+        }
+    }
+    return bias;
 }
 
 void GetTangentBasis(float3 N, out float3 T, out float3 B) {

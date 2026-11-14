@@ -32,7 +32,6 @@ float get_single_shadow(
     ctx.screenUV        = screen_uv;
     ctx.lightSizeWorld  = lighting_data.light_size_world;
     ctx.shadowMapSize   = lighting_data.shadow_csm_sm_size;
-    ctx.clipW           = shadow_clip_pos.w;
     ctx.scaleData       = lighting_data.scale_data[cascade_index];
     ctx.normal          = normal;
     ctx.lightDir        = lightDir;
@@ -80,7 +79,6 @@ float calculate_point_shadow(
     GetTangentBasis(dir, ctx.Tangent, ctx.Bitangent);
     ctx.lightSizeWorld = lighting_data.light_size_world;
     ctx.shadowMapSize  = lighting_data.shadow_csm_sm_size;
-    ctx.clipW          = 1.0;
     ctx.scaleData.x    = near_plane;
     ctx.scaleData.y    = far_plane;
     ctx.normal         = normal;
@@ -89,13 +87,9 @@ float calculate_point_shadow(
     if (lighting_data.pcss_enabled == 1) {
         return CalculatePcssPoint(ctx);
     } else {
-        float dynamicBias = SHADOW_BIAS;
-#if PCSS_DYNAMIC_DEPTH_BIAS == 1
-        dynamicBias = GetSlopeScaledBias(ctx.normal, ctx.lightDir);
-#if PCSS_MAX_DEPTH_BIAS == 1
-        dynamicBias = min(dynamicBias, SHADOW_BIAS);
-#endif
-#endif
+        float dynamicBias = GetShadowDepthBias(
+            ctx.normal, ctx.lightDir, SHADOW_BIAS, PCSS_DYNAMIC_DEPTH_BIAS == 1, PCSS_MAX_DEPTH_BIAS == 1
+        );
         //这里还是Inverse-Z的
         return IsShadowedDir(occluder_depth, fragment_depth, dynamicBias) ? 0.0 : 1.0;
     }
