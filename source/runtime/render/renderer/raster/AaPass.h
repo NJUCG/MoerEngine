@@ -13,6 +13,8 @@
 #include "RasterTool.h"
 #include "rendergraph/RenderGraph.h"
 
+#include <string_view>
+
 namespace Moer::Render::Raster {
 
 class SmaaEdgeDetectionPipeline : public RasterPipeline {
@@ -142,79 +144,47 @@ public:
         assert(format == tex.aa_texture_2.tex->GetFormat());
         assert(format == tex.aa_texture_3.tex->GetFormat());
 
+        const auto create_fullscreen_pipeline = [&]<typename Pipeline>(
+                                                    Pipeline&        pipeline,
+                                                    std::string_view vertex_path,
+                                                    std::string_view pixel_path,
+                                                    std::string_view vertex_entry = "main",
+                                                    std::string_view pixel_entry  = "main"
+                                                ) {
+            GfxPsoCreateInfo pso_full_screen_info(
+                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
+            );
+            pipeline = context.manager.Raster()
+                           .Vertex(vertex_path, vertex_entry)
+                           .Pixel(pixel_path, pixel_entry)
+                           .Build<Pipeline>(std::move(pso_full_screen_info));
+        };
+
         // smaa
-        smaa_edge_detection_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAAEdgeDetectionVS_Wrapper")
-                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAALumaEdgeDetectionPS_Wrapper")
-                .Build<SmaaEdgeDetectionPipeline>(std::move(pso_full_screen_info));
-        }();
-
-        smaa_blending_weight_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex(
-                    "pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationVS_Wrapper"
-                )
-                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAABlendingWeightCalculationPS_Wrapper")
-                .Build<SmaaBlendingWeightPipeline>(std::move(pso_full_screen_info));
-        }();
-
-        smaa_neighborhood_blending_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
-                .Build<SmaaNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
-        }();
-
-        smaa_t2x_neighborhood_blending_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingVS_Wrapper")
-                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAANeighborhoodBlendingPS_Wrapper")
-                .Build<SmaaT2xNeighborhoodBlendingPipeline>(std::move(pso_full_screen_info));
-        }();
-
-        smaa_t2x_resolve_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAAResolveVS_Wrapper")
-                .Pixel("pipelines/postprocess/aa/SmaaWrapper.hlsl", "SMAAResolvePS_Wrapper")
-                .Build<SmaaT2xResolvePipeline>(std::move(pso_full_screen_info));
-        }();
+        constexpr std::string_view smaa_path = "pipelines/postprocess/aa/SmaaWrapper.hlsl";
+        create_fullscreen_pipeline(
+            smaa_edge_detection_pipeline, smaa_path, smaa_path, "SMAAEdgeDetectionVS_Wrapper", "SMAALumaEdgeDetectionPS_Wrapper"
+        );
+        create_fullscreen_pipeline(
+            smaa_blending_weight_pipeline, smaa_path, smaa_path, "SMAABlendingWeightCalculationVS_Wrapper", "SMAABlendingWeightCalculationPS_Wrapper"
+        );
+        create_fullscreen_pipeline(
+            smaa_neighborhood_blending_pipeline, smaa_path, smaa_path, "SMAANeighborhoodBlendingVS_Wrapper", "SMAANeighborhoodBlendingPS_Wrapper"
+        );
+        create_fullscreen_pipeline(
+            smaa_t2x_neighborhood_blending_pipeline, smaa_path, smaa_path, "SMAANeighborhoodBlendingVS_Wrapper", "SMAANeighborhoodBlendingPS_Wrapper"
+        );
+        create_fullscreen_pipeline(
+            smaa_t2x_resolve_pipeline, smaa_path, smaa_path, "SMAAResolveVS_Wrapper", "SMAAResolvePS_Wrapper"
+        );
 
         // fxaa
-        fxaa_precompute_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("core/utils/FullScreenQuad.hlsl")
-                .Pixel("pipelines/postprocess/aa/FxaaPrecompute.hlsl")
-                .Build<FxaaPrecomputePipeline>(std::move(pso_full_screen_info));
-        }();
-
-        fxaa_pipeline = [&]() {
-            GfxPsoCreateInfo pso_full_screen_info(
-                RHIRasterizeInfo::Preset(), {}, {RHIColorAttachmentInfo::Preset(format)}
-            );
-            return context.manager.Raster()
-                .Vertex("core/utils/FullScreenQuad.hlsl")
-                .Pixel("pipelines/postprocess/aa/Fxaa.hlsl")
-                .Build<FxaaPipeline>(std::move(pso_full_screen_info));
-        }();
+        create_fullscreen_pipeline(
+            fxaa_precompute_pipeline, "core/utils/FullScreenQuad.hlsl", "pipelines/postprocess/aa/FxaaPrecompute.hlsl"
+        );
+        create_fullscreen_pipeline(
+            fxaa_pipeline, "core/utils/FullScreenQuad.hlsl", "pipelines/postprocess/aa/Fxaa.hlsl"
+        );
 
         // Other resources initialization
         aa_texture_34[0] = &tex.aa_texture_3;

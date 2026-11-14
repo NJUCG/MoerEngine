@@ -637,7 +637,6 @@ bool ShadowDepthPass::PrepareCSMResources(RasterContext& context, const RasterCo
                 TexConfig::Depth(
                     context.textures.depth_linear_sampler.tex->GetFormat() // 使用普通DepthBuffer的格式
                 )
-                    .Size(sm_size)
                     .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::DEPTH_STENCIL_ATTACHMENT)
                     .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE);
 
