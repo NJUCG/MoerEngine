@@ -10,6 +10,8 @@
 
 namespace Moer::Render {
 
+class RenderDevice;
+
 /**
  * GpuScene 持有真正的 GPU 资源，是 renderer 读取场景数据的入口。
  *
@@ -74,7 +76,11 @@ private:
     void UpdateTexcoord0MegaBuffer(CommandList& cmd_list, const Array<float2>& texcoords0);
     void UpdateIndexMegaBuffer(CommandList& cmd_list, const Array<uint32>& indices);
 
+    // Full rebuild records uploads before publishing the new bindless resources.
     void InitializeResources(GpuSceneUpdate& update);
+    void InitializeTextureResources(RenderDevice& device, const Array<GpuSceneTextureData>& textures);
+    void InitializeBufferResources(RenderDevice& device, const GpuSceneUpdate& update);
+
     void ResolveMaterialTextureHandles(
         Array<GMaterial>&                         materials,
         const Array<GpuSceneMaterialTextureRefs>& texture_refs

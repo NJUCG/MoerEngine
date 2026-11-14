@@ -6,15 +6,8 @@ struct VS_INPUT {
   float4 col : COLOR0;
 };
 
-struct PS_INPUT {
-  float4 pos : SV_POSITION;
-  float4 col : COLOR0;
-  float2 uv : TEXCOORD0;
-  uint id : INSTANCEID;
-};
-
-PS_INPUT main(VS_INPUT input, uint id : SV_INSTANCEID) {
-  PS_INPUT output;
+GuiVertexOutput main(VS_INPUT input, uint id : SV_INSTANCEID) {
+  GuiVertexOutput output;
   output.pos = mul(moer_constants.param.mvp, float4(input.pos.xy, 0.f, 1.f));
   output.col = input.col;
   output.uv = input.uv;

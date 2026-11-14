@@ -46,8 +46,6 @@ struct BRDFContext {
 
     float3 N;
     float3 V;
-    float3 L;
-    float3 H;
 
     float NoV;
     float NoL;
@@ -111,11 +109,10 @@ struct BRDFContext {
     void UpdatePerLight(float3 _light_radiance, float3 _L, float3 _kulla_conty_E_o) {
         light_radiance = _light_radiance;
 
-        L = _L;
-        H = normalize(V + _L);
+        float3 H = normalize(V + _L);
 
         // saturate比max(x,0)更快
-        NoL = saturate(dot(N, L));
+        NoL = saturate(dot(N, _L));
         VoH = saturate(dot(V, H));
         NoH = saturate(dot(N, H));
         NoH2 = NoH * NoH;

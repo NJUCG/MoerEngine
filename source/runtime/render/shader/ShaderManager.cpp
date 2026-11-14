@@ -69,10 +69,6 @@ struct ShaderManager::Impl {
         return RasterPipelineConstructor(device, manager);
     }
 
-    RTConstructor Raytracing() {
-        return RTConstructor(device);
-    }
-
     ShaderManager& manager;
 };
 
@@ -103,10 +99,6 @@ RasterPipelineConstructor ShaderManager::Raster() {
     return impl->Raster();
 }
 
-RTConstructor ShaderManager::Raytracing() {
-    return impl->Raytracing();
-}
-
 Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
 
     ShaderCompilerInput input{
@@ -119,7 +111,7 @@ Shader& ShaderManager::CompileShader(EShaderType _type, ShaderAsset&& _asset) {
         .environment               = std::move(_asset.environment)
     };
 
-    if (Shader* cached_shader = shader_resources_cache.TryGetShader(input).first) {
+    if (Shader* cached_shader = shader_resources_cache.TryGetShader(input)) {
         return *cached_shader;
     }
 

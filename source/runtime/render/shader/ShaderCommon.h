@@ -65,15 +65,9 @@ struct ShaderEntry {
 struct ShaderEntryKey {
     uint64 hash;
 
-    bool operator==(const ShaderEntryKey& _rhs) const noexcept {
-        return hash == _rhs.hash;
-    }
+    bool operator==(const ShaderEntryKey&) const noexcept = default;
 };
 }; // namespace Moer::Render
-static bool
-operator==(const Moer::Render::ShaderEntryKey& _lhs, const Moer::Render::ShaderEntryKey& _rhs) noexcept {
-    return _lhs.hash == _rhs.hash;
-}
 namespace std {
 template<>
 struct hash<Moer::Render::ShaderEntryKey> {
@@ -230,9 +224,7 @@ public:
         return _stream;
     }
 
-    bool operator==(const ShaderCompilerDefines& _other) const {
-        return defines == _other.defines;
-    }
+    bool operator==(const ShaderCompilerDefines&) const = default;
 
 private:
     friend struct ShaderCompilerEnvironment;
@@ -306,9 +298,7 @@ public:
         return _stream;
     }
 
-    bool operator==(const ShaderCompilerEnvironment& _other) const {
-        return GetDefines() == _other.GetDefines() && GetCompilerArgs() == _other.GetCompilerArgs();
-    }
+    bool operator==(const ShaderCompilerEnvironment&) const = default;
 
 private:
     ShaderCompilerDefines macro_defines;

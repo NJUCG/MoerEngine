@@ -168,16 +168,6 @@ private:
     ShaderManager&        shader_manager;
 };
 
-struct RTConstructor {
-    RTConstructor&        RayGen(std::string_view _path, std::string_view _entry_name = "main");
-    RTConstructor&        Miss(std::string_view _path, std::string_view _entry_name = "main");
-    RTConstructor&        HitGroup(std::string_view _path, std::string_view _entry_name = "main");
-    RTConstructor&        Callable(std::string_view _path, std::string_view _entry_name = "main");
-    Render::RenderDevice& device;
-};
-
-using ShaderCodeMap = Moer::UnorderedMap<uint32, ShaderEntry>;
-
 struct TypedShaderCache {
     UnorderedMap<ShaderCompilerInput, ShaderEntryKey>    shader_cache_map;
     UnorderedMap<ShaderEntryKey, SharedPtr<ShaderEntry>> shader_entry_cache;
@@ -207,22 +197,20 @@ struct TypedShaderCache {
 struct ShaderResourcesCache {
     StaticArray<TypedShaderCache, ST_Num> code_cache;
 
-    bool HasCache(const ShaderCompilerInput& _input) const;
-
     Shader& RegisterCache(const ShaderCompilerInput& _input, ShaderCompilerOutput&& _output);
 
-    std::pair<Shader*, bool> TryGetShader(const ShaderCompilerInput& _input) {
+    Shader* TryGetShader(const ShaderCompilerInput& _input) {
         auto& cache = code_cache[_input.target_info.shader_type].shader_cache;
         auto  it    = cache.find(_input);
         if (it != cache.end()) {
             Shader* shader = it->second.get();
             if (shader->source_dependencies.empty() || !ValidateDependencies(*shader)) {
                 cache.erase(it);
-                return {nullptr, false};
+                return nullptr;
             }
-            return {shader, true};
+            return shader;
         }
-        return {nullptr, false};
+        return nullptr;
     }
 
     // 检查 shader 的所有源文件依赖的时间戳是否与编译时一致。
@@ -262,8 +250,8 @@ class RENDER_API ShaderManager {
 public:
     friend RasterPipelineConstructor;
     friend ComputeConstructor;
-    friend RTConstructor;
 
+    // Device association and typed pipeline construction.
     ShaderManager(Render::RenderDevice& _device);
     RasterPipelineConstructor Raster();
     template<typename TPipeline>
@@ -275,8 +263,8 @@ public:
     TPipeline Compute(std::string_view _path, TMacro _mut, std::string_view _entry_name = "main") {
         return ComputeConstructor(GetDevice(), ShaderAsset(_path, _entry_name, _mut), *this).Build<TPipeline>();
     }
-    RTConstructor Raytracing();
 
+    // Compile shader stages, including vertex-factory permutations.
     template<is_shader_mutation TMacro = TShaderMutationSet<>>
     Shader& CompileShader(
         EShaderType      _type,
@@ -310,6 +298,7 @@ public:
         return CompileShader(ST_VERTEX, std::move(asset));
     }
 
+    // Access cached bytecode for pipeline creation.
     ShaderEntry& GetShaderEntry(const Shader& _shader) {
         return shader_resources_cache.GetShaderEntry(_shader);
     }
@@ -318,22 +307,29 @@ public:
     friend Impl;
 
 public:
+    // Shared manager lifetime and cache persistence at shutdown.
     static ShaderManager& Get();
     static void           ShutDown();
 
 private:
+    // Resolve pipeline sources and compile cache misses.
     Shader& ResolvePipelineShader(
         ShaderSource                    source,
         EShaderType                     shader_type,
         const PipelineArgumentMetadata& argument_metadata
     );
     Shader& CompileShader(EShaderType _type, ShaderAsset&& _asset);
+
+    // Persist compiled shader resources between runs.
     void    DumpCache(std::filesystem::path _path);
     void    LoadCache(std::filesystem::path _path);
 
 private:
+    // Device/compiler implementation, owned until ShutDown().
     Render::RenderDevice& GetDevice();
     Impl*                 impl;
+
+    // Compiled shader objects and bytecode share the manager lifetime.
     ShaderResourcesCache  shader_resources_cache;
 };
 } // namespace Moer::Render

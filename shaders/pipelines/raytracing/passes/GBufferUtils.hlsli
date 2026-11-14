@@ -83,7 +83,7 @@ float3 ViewdepthToWorldPos(Moer::ViewParam _view, int2 _pixel_pos, float _view_d
 }
 
 float3
-MotionToPixelSpace(Moer::ViewParam _view, Moer::ViewParam _prev_view, int2 _pixel_pos, float3 _motion) {
+MotionToPixelSpace(int2 _pixel_pos, float3 _motion) {
     float2 cur_center = float2(_pixel_pos) + 0.5f;
     float2 prev_pos   = cur_center + _motion.xy;
     _motion.xy        = prev_pos - cur_center;

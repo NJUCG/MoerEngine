@@ -97,8 +97,9 @@ int MatchRank(std::string_view _name, std::string_view _query) noexcept {
 }
 
 const BuiltinCommand* FindBuiltin(std::string_view _name) {
+    const std::string normalized_name = Normalize(_name);
     for (const BuiltinCommand& command : builtin_commands) {
-        if (Normalize(_name) == command.name) {
+        if (normalized_name == command.name) {
             return &command;
         }
     }
@@ -308,66 +309,45 @@ std::size_t EngineCommandProcessor::VisitCandidates(
         return 0;
     }
 
-    if (_input.front() == '/') {
-        std::string_view  token     = TrimView(_input.substr(1));
-        const std::size_t token_end = token.find_first_of(" \t?");
-        if (token_end != std::string_view::npos) {
-            token = token.substr(0, token_end);
+    const bool        slash_alias = _input.front() == '/';
+    std::string_view  token       = slash_alias ? TrimView(_input.substr(1)) : _input;
+    const std::size_t token_end   = token.find_first_of(slash_alias ? " \t?" : " \t=?");
+    if (token_end != std::string_view::npos) {
+        token = token.substr(0, token_end);
+    }
+    for (const BuiltinCommand& command : builtin_commands) {
+        if (!token.empty() && !StartsWithInsensitive(command.name, token)) {
+            continue;
         }
-        for (const BuiltinCommand& command : builtin_commands) {
-            if (!token.empty() && !StartsWithInsensitive(command.name, token)) {
-                continue;
-            }
-            candidates.push_back({
-                .text       = "/" + std::string(command.name),
-                .helper     = std::string(command.helper),
-                .value      = {},
-                .is_command = true,
-            });
-            if (candidates.size() == _max_count) {
-                break;
-            }
+        candidates.push_back({
+            .text       = slash_alias ? "/" + std::string(command.name) : std::string(command.name),
+            .helper     = std::string(command.helper),
+            .value      = {},
+            .is_command = true,
+        });
+        if (candidates.size() == _max_count) {
+            break;
         }
-    } else {
-        std::string_view  token     = _input;
-        const std::size_t token_end = token.find_first_of(" \t=?");
-        if (token_end != std::string_view::npos) {
-            token = token.substr(0, token_end);
-        }
-        for (const BuiltinCommand& command : builtin_commands) {
-            if (!token.empty() && !StartsWithInsensitive(command.name, token)) {
-                continue;
-            }
-            candidates.push_back({
-                .text       = std::string(command.name),
-                .helper     = std::string(command.helper),
-                .value      = {},
-                .is_command = true,
-            });
-            if (candidates.size() == _max_count) {
-                break;
-            }
-        }
+    }
 
-        if (candidates.size() < _max_count) {
-            // Registry enumeration intentionally uses strict prefixes.
-            // Interactive discovery is broader: rank full-name prefixes
-            // first, then dotted-segment prefixes, then substring matches.
-            const std::vector<CVar::CVarSnapshot> snapshots = CVar::List();
-            for (int rank = 0; rank <= 2 && candidates.size() < _max_count; ++rank) {
-                for (const CVar::CVarSnapshot& snapshot : snapshots) {
-                    if (MatchRank(snapshot.name, token) != rank) {
-                        continue;
-                    }
-                    candidates.push_back({
-                        .text       = snapshot.name,
-                        .helper     = snapshot.helper,
-                        .value      = snapshot.value,
-                        .is_command = false,
-                    });
-                    if (candidates.size() == _max_count) {
-                        break;
-                    }
+    if (!slash_alias && candidates.size() < _max_count) {
+        // Registry enumeration intentionally uses strict prefixes.
+        // Interactive discovery is broader: rank full-name prefixes
+        // first, then dotted-segment prefixes, then substring matches.
+        const std::vector<CVar::CVarSnapshot> snapshots = CVar::List();
+        for (int rank = 0; rank <= 2 && candidates.size() < _max_count; ++rank) {
+            for (const CVar::CVarSnapshot& snapshot : snapshots) {
+                if (MatchRank(snapshot.name, token) != rank) {
+                    continue;
+                }
+                candidates.push_back({
+                    .text       = snapshot.name,
+                    .helper     = snapshot.helper,
+                    .value      = snapshot.value,
+                    .is_command = false,
+                });
+                if (candidates.size() == _max_count) {
+                    break;
                 }
             }
         }
@@ -452,11 +432,14 @@ void EngineCommandProcessor::ProcessBuiltinCommand(
         return;
     }
 
+    const auto append_builtin_help = [this](const BuiltinCommand& _command) {
+        AppendOutput(_command.name);
+        AppendOutput("  help: " + std::string(_command.helper));
+        AppendOutput("  usage: " + std::string(_command.usage));
+        AppendOutput("  slash alias: /" + std::string(_command.name));
+    };
     if (wants_help) {
-        AppendOutput(std::string(command->name));
-        AppendOutput("  help: " + std::string(command->helper));
-        AppendOutput("  usage: " + std::string(command->usage));
-        AppendOutput("  slash alias: /" + std::string(command->name));
+        append_builtin_help(*command);
         return;
     }
 
@@ -468,10 +451,7 @@ void EngineCommandProcessor::ProcessBuiltinCommand(
             }
             target = TrimView(target);
             if (const BuiltinCommand* target_command = FindBuiltin(target)) {
-                AppendOutput(std::string(target_command->name));
-                AppendOutput("  help: " + std::string(target_command->helper));
-                AppendOutput("  usage: " + std::string(target_command->usage));
-                AppendOutput("  slash alias: /" + std::string(target_command->name));
+                append_builtin_help(*target_command);
                 return;
             }
             if (CVar::Find(target)) {

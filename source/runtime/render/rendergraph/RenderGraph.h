@@ -174,30 +174,27 @@ public:
             return resource_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
-        friend bool operator==(ResourceHandle lhs, ResourceHandle rhs) {
-            return lhs.resource_id == rhs.resource_id && lhs.graph_id == rhs.graph_id;
-        }
+        friend bool operator==(const ResourceHandle&, const ResourceHandle&) = default;
     };
 
     template<ResourceKind Kind>
-    struct TypedResourceHandle{
+    struct TypedResourceHandle {
         ResourceHandle handle;
 
-        [[nodiscard]] bool IsValid() const{
+        [[nodiscard]] bool IsValid() const {
             return handle.IsValid();
         }
 
-        [[nodiscard]] ResourceHandle Untyped() const{
+        [[nodiscard]] ResourceHandle Untyped() const {
             return handle;
         }
 
-        friend bool operator==(const TypedResourceHandle&,const TypedResourceHandle&) = default;
-
+        friend bool operator==(const TypedResourceHandle&, const TypedResourceHandle&) = default;
     };
 
-    using TextureHandle= TypedResourceHandle<ResourceKind::Texture>;
-    using BufferHandle = TypedResourceHandle<ResourceKind::Buffer>;
-    using TokenHandle = TypedResourceHandle<ResourceKind::Token>;
+    using TextureHandle = TypedResourceHandle<ResourceKind::Texture>;
+    using BufferHandle  = TypedResourceHandle<ResourceKind::Buffer>;
+    using TokenHandle   = TypedResourceHandle<ResourceKind::Token>;
 
     struct PassHandle {
         uint32 pass_id  = InvalidIndex;
@@ -207,9 +204,7 @@ public:
             return pass_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
-        friend bool operator==(PassHandle lhs, PassHandle rhs) {
-            return lhs.pass_id == rhs.pass_id && lhs.graph_id == rhs.graph_id;
-        }
+        friend bool operator==(const PassHandle&, const PassHandle&) = default;
     };
 
     /** Stable identity for one graph-owned CPU setup task. */
@@ -221,9 +216,7 @@ public:
             return setup_pass_id != InvalidIndex && graph_id != InvalidGraphId;
         }
 
-        friend bool operator==(SetupPassHandle lhs, SetupPassHandle rhs) {
-            return lhs.setup_pass_id == rhs.setup_pass_id && lhs.graph_id == rhs.graph_id;
-        }
+        friend bool operator==(const SetupPassHandle&, const SetupPassHandle&) = default;
     };
 
     enum class SetupPassSafety : uint8 {

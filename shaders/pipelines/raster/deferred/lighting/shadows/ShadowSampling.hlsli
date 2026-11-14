@@ -110,15 +110,6 @@ float2x2 GenerateDirectionalScale2x2Matrix(float2 Direction, float ScaleMinusOne
 }
 
 // =================================================================================================
-// 采样辅助
-// =================================================================================================
-
-// 获取采样点 (带旋转)
-float2 GetSampleOffset(int index, float radius, float2x2 rotation) {
-    return mul(rotation, POISSON_DISK[index]) * radius;
-}
-
-// =================================================================================================
 // PCSS 采样核心函数
 // =================================================================================================
 
@@ -185,12 +176,6 @@ float LinearizeShadowDepthPoint(ShadowContext ctx, float raw_depth) {
 float GetFragmentDepthPoint(ShadowContext ctx) {
     return ctx.fragmentDepth;
 }
-
-// float calculate_penumbra(ShadowContext ctx, float avg_blocker_depth) {
-//     float d_receiver = GetFragmentDepth(ctx);
-//     float penumbra_ndc=max(avg_blocker_depth - d_receiver, 0.0) / (1.0 - avg_blocker_depth + 1e-6) * ctx.lightSizeWorld;
-//     return penumbra_ndc / (ctx.shadowMapSize * ctx.clipW);
-// }
 
 float CalculatePenumbraPoint(ShadowContext ctx, float avg_blocker_dist) {
     float d_receiver     = GetFragmentDepthPoint(ctx);

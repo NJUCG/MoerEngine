@@ -1233,13 +1233,7 @@ struct Rect2D {
         offset{offset_x, offset_y},
         extent(extent_x, extent_y) {}
 
-    bool operator==(Rect2D other) const {
-        return offset == other.offset && extent == other.extent;
-    }
-
-    bool operator!=(Rect2D Other) const {
-        return !(*this == Other);
-    }
+    bool operator==(const Rect2D&) const = default;
 
     bool IsValid() const {
         return offset.x >= 0 && offset.y >= 0 && extent.width > 0 && extent.height > 0;
@@ -1248,9 +1242,7 @@ struct Rect2D {
 
 struct SubpassSettings {
 
-    bool operator==(const SubpassSettings& other) const {
-        return type == other.type && index == other.index;
-    }
+    bool operator==(const SubpassSettings&) const = default;
     enum Type : Moer::uint8 {
         NONE,
         DEFERRED

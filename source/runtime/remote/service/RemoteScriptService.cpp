@@ -51,33 +51,32 @@ RemoteExecuteScriptResponse RemoteScriptService::ExecuteAndWait(RemoteExecuteScr
     response.state      = ERemoteExecutionState::Running;
     m_registry.MarkRunning(response.request_id);
 
+    const auto publish_result = [this, &response](ERemoteExecutionState state) {
+        response.state = state;
+        if (state == ERemoteExecutionState::Completed) {
+            m_registry.MarkCompleted(response.request_id, response.result);
+        } else {
+            m_registry.MarkFailed(response.request_id, response.result);
+        }
+        m_event_hub.Publish(MakeStateEvent(response.request_id, state, response.result));
+    };
+
     try {
         if (!m_submit_fn) {
             response.result.exception_text = "Remote submit function is not available.";
-            response.state                 = ERemoteExecutionState::Failed;
-            m_registry.MarkFailed(response.request_id, response.result);
-            m_event_hub.Publish(MakeStateEvent(response.request_id, response.state, response.result));
+            publish_result(ERemoteExecutionState::Failed);
             return response;
         }
 
         auto future = m_submit_fn(std::move(script_request));
         if (!future.valid()) {
             response.result.exception_text = "Remote submit function returned an invalid future.";
-            response.state                 = ERemoteExecutionState::Failed;
-            m_registry.MarkFailed(response.request_id, response.result);
-            m_event_hub.Publish(MakeStateEvent(response.request_id, response.state, response.result));
+            publish_result(ERemoteExecutionState::Failed);
             return response;
         }
 
         response.result = future.get();
-        response.state =
-            response.result.success ? ERemoteExecutionState::Completed : ERemoteExecutionState::Failed;
-        if (response.state == ERemoteExecutionState::Completed) {
-            m_registry.MarkCompleted(response.request_id, response.result);
-        } else {
-            m_registry.MarkFailed(response.request_id, response.result);
-        }
-        m_event_hub.Publish(MakeStateEvent(response.request_id, response.state, response.result));
+        publish_result(response.result.success ? ERemoteExecutionState::Completed : ERemoteExecutionState::Failed);
         return response;
     } catch (const std::exception& ex) {
         response.result.exception_text = ex.what();
@@ -85,9 +84,7 @@ RemoteExecuteScriptResponse RemoteScriptService::ExecuteAndWait(RemoteExecuteScr
         response.result.exception_text = "Unknown remote script execution error.";
     }
 
-    response.state = ERemoteExecutionState::Failed;
-    m_registry.MarkFailed(response.request_id, response.result);
-    m_event_hub.Publish(MakeStateEvent(response.request_id, response.state, response.result));
+    publish_result(ERemoteExecutionState::Failed);
     return response;
 }
 

@@ -3,9 +3,15 @@
 #include <algorithm>
 #include <iterator>
 #include <limits>
+#include <utility>
 
 namespace Moer {
 namespace {
+
+[[nodiscard]] bool IsValidViewport(const ProfileViewerViewport& _viewport) noexcept {
+    return _viewport.valid && _viewport.domain_end != 0 && _viewport.view_begin < _viewport.view_end &&
+           _viewport.view_end <= _viewport.domain_end;
+}
 
 [[nodiscard]] uint64
 MulDivFloor(uint64 _value, uint32 _numerator, uint32 _denominator) noexcept {
@@ -448,8 +454,7 @@ bool ProfileViewerModel::ZoomViewport(
     uint32                 _scale_numerator,
     uint32                 _scale_denominator
 ) noexcept {
-    if (!_viewport.valid || _viewport.domain_end == 0 || _viewport.view_begin >= _viewport.view_end ||
-        _viewport.view_end > _viewport.domain_end || _anchor_denominator == 0 ||
+    if (!IsValidViewport(_viewport) || _anchor_denominator == 0 ||
         _anchor_numerator > _anchor_denominator || _scale_numerator == 0 || _scale_denominator == 0) {
         return false;
     }
@@ -473,8 +478,7 @@ bool ProfileViewerModel::ZoomViewport(
 }
 
 bool ProfileViewerModel::PanViewport(ProfileViewerViewport& _viewport, int64 _delta) noexcept {
-    if (!_viewport.valid || _viewport.domain_end == 0 || _viewport.view_begin >= _viewport.view_end ||
-        _viewport.view_end > _viewport.domain_end) {
+    if (!IsValidViewport(_viewport)) {
         return false;
     }
 
@@ -499,8 +503,7 @@ bool ProfileViewerModel::FocusViewport(
     uint64                 _end,
     uint64                 _margin
 ) noexcept {
-    if (!_viewport.valid || _viewport.domain_end == 0 || _viewport.view_begin >= _viewport.view_end ||
-        _viewport.view_end > _viewport.domain_end) {
+    if (!IsValidViewport(_viewport)) {
         return false;
     }
 
@@ -523,22 +526,13 @@ bool ProfileViewerModel::ContainsInterval(
     uint64                       _begin,
     uint64                       _end
 ) noexcept {
-    return _viewport.valid && _viewport.domain_end != 0 && _viewport.view_begin < _viewport.view_end &&
-           _viewport.view_end <= _viewport.domain_end && _begin <= _end && _begin < _viewport.domain_end &&
+    return IsValidViewport(_viewport) && _begin <= _end && _begin < _viewport.domain_end &&
            _end <= _viewport.domain_end;
 }
 
 ProfileViewerModel::GpuViewportSlot* ProfileViewerModel::FindGpuViewportSlot(ProfileViewerGpuViewportKey _key
 ) noexcept {
-    if (!IsValidGpuKey(_key)) {
-        return nullptr;
-    }
-    for (GpuViewportSlot& slot : gpu_viewports_) {
-        if (slot.occupied && slot.key == _key) {
-            return &slot;
-        }
-    }
-    return nullptr;
+    return const_cast<GpuViewportSlot*>(std::as_const(*this).FindGpuViewportSlot(_key));
 }
 
 const ProfileViewerModel::GpuViewportSlot*

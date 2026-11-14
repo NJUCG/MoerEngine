@@ -77,10 +77,6 @@ public:
     bool NeedsReload() const {
         return m_b_need_reload;
     }
-    float GetSceneColorAspectRatio() const {
-        return m_scene_color_resolution.x / m_scene_color_resolution.y;
-    }
-
     void SetShowRenderConfigSubUI(bool show) {
         m_b_show_render_config_sub_ui = show;
     }

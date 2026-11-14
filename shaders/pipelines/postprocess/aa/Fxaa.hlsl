@@ -22,6 +22,29 @@ float3 get_color(float2 uv) {
     return TextureHandle(moer_constants.param.input_image).Sample2D<float4>(uv).rgb;
 }
 
+float SearchFxaaEdge(
+    float2 uv_in_edge,
+    float2 edge_step,
+    float edge_luminance,
+    float gradient_threshold,
+    bool positive_direction,
+    out float luminance_delta
+) {
+    float distance = fxaa_search_limit;
+    for (float i = 1.0; i <= fxaa_search_limit; i += 1.0) {
+        if (positive_direction) {
+            luminance_delta = get_luminance(uv_in_edge + i * edge_step) - edge_luminance;
+        } else {
+            luminance_delta = get_luminance(uv_in_edge - i * edge_step) - edge_luminance;
+        }
+        if (abs(luminance_delta) > gradient_threshold) {
+            distance = i;
+            break;
+        }
+    }
+    return distance;
+}
+
 float3 fxaa(float2 uv, float3 color, float M) {
 
     // 1. check contrast
@@ -77,12 +100,10 @@ float3 fxaa(float2 uv, float3 color, float M) {
 
     float positive = abs((is_edge_horizontal ? N : E) - M);
     float negative = abs((is_edge_horizontal ? S : W) - M);
-    float gradient, opposite_luminance;
+    float opposite_luminance;
     if (positive > negative) {
-        gradient           = positive;
         opposite_luminance = is_edge_horizontal ? N : E;
     } else {
-        gradient           = negative;
         opposite_luminance = is_edge_horizontal ? S : W;
     }
 
@@ -94,26 +115,15 @@ float3 fxaa(float2 uv, float3 color, float M) {
     float gradient_threshold = edge_luminance * 0.25;
     float p_luminance_delta;
     float n_luminance_delta;
-    float p_distance = fxaa_search_limit;
-    float n_distance = fxaa_search_limit;
-    float i;
 
     // positive
-    for (i = 1.0; i <= fxaa_search_limit; i += 1.0) {
-        p_luminance_delta = get_luminance(uv_in_edge + i * edge_step) - edge_luminance;
-        if (abs(p_luminance_delta) > gradient_threshold) {
-            p_distance = i;
-            break;
-        }
-    }
+    float p_distance = SearchFxaaEdge(
+        uv_in_edge, edge_step, edge_luminance, gradient_threshold, true, p_luminance_delta
+    );
     // negative
-    for (i = 1.0; i <= fxaa_search_limit; i += 1.0) {
-        n_luminance_delta = get_luminance(uv_in_edge - i * edge_step) - edge_luminance;
-        if (abs(n_luminance_delta) > gradient_threshold) {
-            n_distance = i;
-            break;
-        }
-    }
+    float n_distance = SearchFxaaEdge(
+        uv_in_edge, edge_step, edge_luminance, gradient_threshold, false, n_luminance_delta
+    );
     // edge blend
     float edge_blend;
     if (p_distance < n_distance) {

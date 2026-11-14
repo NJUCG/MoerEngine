@@ -10,7 +10,7 @@ namespace Moer {
 // 4. 在 EditorUI 构造函数中，从 EditorUISettings::LoadWindowVisibilitySettings() 恢复 m_b_show_xxx
 // 5. 在 EditorUI::SyncWindowVisibilitySettings() 中，把 m_b_show_xxx 写回 EditorWindowVisibilitySettings
 // 6. 在本 struct 中添加对应 bool 字段，字段默认值决定没有 ini 记录时的默认显示状态
-// 7. 在 EditorUISettings.cpp 中同步更新 ParseEditorWindowVisibilityLine / WriteAll / IsSameWindowVisibilitySettings
+// 7. 在 EditorUISettings.cpp 的 k_window_visibility_fields 中添加 ini 键名和成员指针
 struct EditorWindowVisibilitySettings {
     bool loaded          = false;
     bool scene_color     = true;
@@ -23,6 +23,8 @@ struct EditorWindowVisibilitySettings {
     bool profile_capture = false;
     bool profile_viewer  = false;
     bool memory_profiler = false;
+
+    bool operator==(const EditorWindowVisibilitySettings&) const = default;
 };
 
 namespace EditorUISettings {

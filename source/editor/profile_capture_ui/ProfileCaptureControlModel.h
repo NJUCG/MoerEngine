@@ -79,12 +79,12 @@ private:
 
     ProfileCaptureControlCallbacks callbacks_{};
     Render::ProfileCaptureControllerSnapshot snapshot_{};
+    // A retained ticket is the pending UI request until Refresh consumes its completion.
     Render::ProfileCaptureRequestTicket       pending_ticket_{};
     Render::ProfileCaptureRequestKind pending_kind_{
         Render::ProfileCaptureRequestKind::Start
     };
     uint64         pending_expected_generation_{0};
-    bool has_pending_request_{false};
     SnapshotStatus snapshot_status_{SnapshotStatus::CallbackUnavailable};
 
     std::optional<Render::ProfileCaptureRequestCompletion> last_completion_{};

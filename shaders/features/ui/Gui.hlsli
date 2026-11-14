@@ -1,4 +1,12 @@
 #include "core/common/Bindless.hlsl"
+
+struct GuiVertexOutput {
+  float4 pos : SV_POSITION;
+  float4 col : COLOR0;
+  float2 uv : TEXCOORD0;
+  uint id : INSTANCEID;
+};
+
 struct DrawParam {
   float2 min_xy;
   float2 max_xy;

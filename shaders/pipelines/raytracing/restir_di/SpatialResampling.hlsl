@@ -13,10 +13,7 @@ main(uint2 dtid
 
   Moer::Surface surface = Moer::GetGBufferSurface(pixel_pos);
 
-  Moer::LightSample light_sample;
-
   Moer::DI::Reservoir res = Moer::DI::Reservoir::EmptyReservoir();
-  int2 temporal_pixel_pos = -1;
 
   if (surface.IsValid()) {
     Moer::DI::Reservoir cur_res = Moer::DI::LoadReservoir(

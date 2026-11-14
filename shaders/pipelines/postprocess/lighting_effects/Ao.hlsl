@@ -24,40 +24,36 @@ float2 hash22(float2 pixel, uint sample_idx) {
 }
 
 // reference: games202 & https://www.shadertoy.com/view/Ms33WB
-float ssao_games202(float2 uv) {
+float CalculateSsao(float2 uv) {
     float3 normal   = Raster::UnpackNormal(TextureHandle(moer_constants.param.normal_tex).Sample2D<float3>(uv));
     float3 position = WorldPosFromDepthTexture(moer_constants.param.depth_tex, uv, moer_constants.param.clip2world);
 
-    float  ao    = 0.0;
-    float2 tmp1  = moer_constants.param.ssao_radius * moer_constants.param.inv_resolution;
-    float2 pixel = floor(uv / moer_constants.param.inv_resolution); // 整数像素坐标
+    float  ao               = 0.0;
+    float2 sample_radius_uv = moer_constants.param.ssao_radius * moer_constants.param.inv_resolution;
+    float2 pixel            = floor(uv / moer_constants.param.inv_resolution); // 整数像素坐标
 
     for (uint i = 0; i < moer_constants.param.ssao_sample_count; i++) {
         float2 offset = hash22(pixel, i) * 2.0 - 1.0;
         float3 sample_position =
-            WorldPosFromDepthTexture(moer_constants.param.depth_tex, uv + offset * tmp1, moer_constants.param.clip2world);
+            WorldPosFromDepthTexture(moer_constants.param.depth_tex, uv + offset * sample_radius_uv, moer_constants.param.clip2world);
 
-        float3 vec      = sample_position - position;
-        float3 len      = length(vec);
-        float3 norm_vec = vec / len;
+        float3 sample_displacement = sample_position - position;
+        float  sample_distance     = length(sample_displacement);
+        float3 sample_direction    = sample_displacement / sample_distance;
 
-        ao += max(0.0, dot(normal, norm_vec) - 0.05) *
-              smoothstep(moer_constants.param.ssao_max_distance, moer_constants.param.ssao_max_distance * 0.5, len);
+        ao += max(0.0, dot(normal, sample_direction) - 0.05) *
+              smoothstep(moer_constants.param.ssao_max_distance, moer_constants.param.ssao_max_distance * 0.5, sample_distance);
     }
     ao = clamp(1.0 - ao / moer_constants.param.ssao_sample_count * moer_constants.param.ssao_intensity, 0.0, 1.0);
 
     return ao;
 }
 
-float get_ao(float2 uv) {
-    return ssao_games202(uv);
-}
-
 AoOutput main(float2 uv : TEXCOORD0) {
     AoOutput output;
 
     if (moer_constants.param.ao_mode == Moer::EAoMode::SSAO || moer_constants.param.ao_mode == Moer::EAoMode::SSAO_AO_ONLY) {
-        output.ambient_only = get_ao(uv);
+        output.ambient_only = CalculateSsao(uv);
     } else {
         output.ambient_only = 1.0;
     }

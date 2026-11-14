@@ -53,11 +53,6 @@ uint64 CountCachedShaders(const ShaderResourcesCache& cache) {
 
 } // namespace
 
-bool ShaderResourcesCache::HasCache(const ShaderCompilerInput& _input) const {
-    auto it = code_cache[_input.target_info.shader_type].shader_cache.find(_input);
-    return it != code_cache[_input.target_info.shader_type].shader_cache.end();
-}
-
 Shader& ShaderResourcesCache::RegisterCache(
     const ShaderCompilerInput& _input,
     ShaderCompilerOutput&&     _output

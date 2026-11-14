@@ -5,6 +5,9 @@
 #include "renderer/common/GraphResourceBoundary.h"
 #include "rhi/RHIResource.h"
 
+#include <algorithm>
+#include <bit>
+
 namespace Moer::Render::Raster {
 
 #define TexHandle       TextureWithHandle
@@ -41,7 +44,7 @@ namespace Moer::Render::Raster {
       TexConfig::Default(PF_B10G11R11_UFLOAT_PACK32)                                                            \
           .Usage(E_SAMPLED_COLOR)                                                                               \
           .Mips(6)                                                                                              \
-          .IndivisualMips()                                                                                     \
+          .IndividualMips()                                                                                     \
           .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(TexHandle,                                                                                                \
       bloom_upsample_chain,                                                                                     \
@@ -49,7 +52,7 @@ namespace Moer::Render::Raster {
       TexConfig::Default(PF_B10G11R11_UFLOAT_PACK32)                                                            \
           .Usage(E_SAMPLED_COLOR)                                                                               \
           .Mips(6)                                                                                              \
-          .IndivisualMips()                                                                                     \
+          .IndividualMips()                                                                                     \
           .SamplerConfig(SF_LINEAR, SAM_CLAMP_TO_EDGE))                                                         \
     X(TexHandle, tonemapping_output, Tex2DTag, TexConfig::Default(PF_R8G8B8A8_UNORM).Usage(E_SAMPLED_COLOR))    \
     X(TexHandle,                                                                                                \
@@ -108,25 +111,25 @@ namespace Moer::Render::Raster {
       ao_output_ambient_only,                                                                      \
       Tex2DTag,                                                                                    \
       TexConfig::Default(PF_R8_UNORM)                                                              \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).DownSampled())            \
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                          \
     X(TexHandle,                                                                                   \
       ao_output_ambient_only_1,                                                                    \
       Tex2DTag,                                                                                    \
       TexConfig::Default(PF_R8_UNORM)                                                              \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).DownSampled())            \
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))                          \
     X(TexHandle,                                                                                   \
       ao_denoiser_accumulate,                                                                      \
       Tex2DTag,                                                                                    \
-      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR).DownSampled())                        \
+      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR))                                      \
     X(TexHandle,                                                                                   \
       ao_denoiser_accumulate_1,                                                                    \
       Tex2DTag,                                                                                    \
-      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR).DownSampled())                        \
+      TexConfig::Default(PF_R8_UNORM).Usage(E_SAMPLED_COLOR))                                      \
     X(TexHandle,                                                                                   \
       camera_motion_vector,                                                                        \
       Tex2DTag,                                                                                    \
       TexConfig::Default(PF_R16G16_SFLOAT)                                                         \
-          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS).DownSampled())
+          .Usage(E_SAMPLED_COLOR | ETextureUsageFlags::UNORDERED_ACCESS))
 
 struct RasterTextures {
     // Full-resolution textures
@@ -144,22 +147,14 @@ struct RasterTextures {
     TextureWithHandle hiz_previous;
 
     static uint32 GetHiZMipCount(const uint2& size) {
-        uint32 max_dim   = size.x > size.y ? size.x : size.y;
-        uint32 mip_count = 1;
-
-        while (max_dim > 1) {
-            max_dim >>= 1;
-            mip_count++;
-        }
-
-        return mip_count;
+        return std::bit_width(std::max({1u, size.x, size.y}));
     }
 
     static TexConfig CreateHiZConfig(const uint2& size) {
         TexConfig cfg = TexConfig::Default(PF_R16_SFLOAT)
                             .Usage(ETextureUsageFlags::SAMPLED | ETextureUsageFlags::UNORDERED_ACCESS)
                             .Mips(GetHiZMipCount(size))
-                            .IndivisualMips()
+                            .IndividualMips()
                             .SamplerConfig(SF_NEAREST, SAM_CLAMP_TO_EDGE);
         return cfg;
     }
