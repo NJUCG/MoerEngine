@@ -64,14 +64,16 @@ source/
           RasterResource.h       #   Per-frame resources (textures, buffers, CSM data)
           RasterTextures.h       #   GBuffer / RT texture definitions
           RasterConfig.h         #   UI-driven config struct (shadow, AO, AA settings)
+          RasterFrameStatus.h    #   Output statistics returned to the editor
           DirectionalShadowMaskPass.cpp/h  # Shadow Mask pass
           ShadowDepthPass.cpp/h  #   CSM depth rendering (cascade setup, frustum split)
           LightingPass.h         #   Deferred lighting pass
           GeometryPass.h         #   Geometry / GBuffer pass
           AoPass.h               #   SSAO / RTAO / SSDO
+          AoFrameResources.h     #   One frame's AO targets and accepted-history selection
           AaPass.h               #   SMAA / FXAA
           SkyboxPass.cpp/h       #   Skybox rendering
-          TonemappingPass.h      #   Tonemapping + bloom
+          TonemappingPass.cpp/h  #   Transient histogram and persistent exposure
         raytracing/              # RT pipeline (ReSTIR DI, path tracing)
         common/ui/               # ImGui renderer integration
       rhi/                       # ★ RHI ABSTRACTION LAYER
@@ -189,7 +191,7 @@ class MyPipeline : public RasterPipeline {
 Pass code calls `cmd_list.Gfx(pipeline, bufferRef, bdls, paramStruct)` — argument order matches `DEFINE_SHADER_ARGS`.
 
 ### Pass Lifecycle
-`RasterRenderer::Render()` calls each pass's `Process()` in order. Each pass owns its pipeline and fills its param struct from `RasterContext`.
+`RasterRenderer::RenderFrame()` declares each pass through `AddToGraph()`. Setup prepares immutable recording parameters; RDG owns resource accesses and command order. Scene updates and frame time are explicit inputs. `RasterContext` retains persistent resources. AO/AA history advances only after native submission acceptance; resource reclamation waits for GPU completion. See [渲染帧的数据与资源边界](docs/RENDERER_FRAME_OWNERSHIP.md).
 
 ## Shadow System Details
 
