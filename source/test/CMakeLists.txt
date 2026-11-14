@@ -206,6 +206,17 @@ target_link_libraries(${test_target}
 )
 set_target_properties(${test_target} PROPERTIES FOLDER ${moer_test_folder})
 
+add_executable(TestShaderEffectsSmoke "ShaderEffectsSmokeTest.cpp")
+target_link_libraries(TestShaderEffectsSmoke PRIVATE Moer::Runtime)
+set_target_properties(TestShaderEffectsSmoke PROPERTIES FOLDER ${moer_test_folder})
+# Opt in: requires a Vulkan ray-tracing GPU and the configured scene assets.
+option(MOER_SHADER_GPU_TESTS "Register shader effect rendering smoke tests" OFF)
+if(MOER_SHADER_GPU_TESTS)
+    add_test(NAME ShaderEffectsSmoke COMMAND $<TARGET_FILE:TestShaderEffectsSmoke>)
+    set_tests_properties(ShaderEffectsSmoke PROPERTIES
+        WORKING_DIRECTORY "${BINARY_ROOT_DIR}/bin/$<CONFIG>" TIMEOUT 180 LABELS "gpu;shader")
+endif()
+
 set(test_target TestShaderStageSupport)
 add_executable(${test_target} "ShaderStageSupportTest.cpp")
 target_link_libraries(${test_target}
