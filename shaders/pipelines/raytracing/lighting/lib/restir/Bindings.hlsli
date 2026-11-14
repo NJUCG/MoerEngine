@@ -399,6 +399,13 @@ float2 GetEnvironmentMapUVFromDir(float3 _dir) {
     return uv;
 }
 
+float GetPdfTextureWeightSum(Texture2D<float> _pdf_tex, uint2 _tex_size) {
+    int   last_mip = max(0, int(floor(log2(max(_tex_size.x, _tex_size.y)))));
+    float avg_val  = _pdf_tex.mips[last_mip][uint2(0u, 0u)];
+
+    return avg_val * square(1u << last_mip);
+}
+
 float EvalEnvMapPdf(float3 _dir) {
     if (!resample_params.restir_di_params.initial_sample_params.env_map_is) {
         return 1.f;
@@ -411,10 +418,7 @@ float EvalEnvMapPdf(float3 _dir) {
     Texture2D<float> env_map_pdf_tex = env_map_pdf.GetTexture2D<float>();
     float            texel_val       = env_map_pdf_tex[texel_pos];
 
-    int   last_mip = max(0, int(floor(log2(max(pdf_tex_size.x, pdf_tex_size.y)))));
-    float avg_val  = env_map_pdf_tex.mips[last_mip][uint2(0u, 0u)];
-
-    float sum = avg_val * square(1u << last_mip);
+    float sum = GetPdfTextureWeightSum(env_map_pdf_tex, pdf_tex_size);
     return texel_val / sum;
 }
 
@@ -424,10 +428,7 @@ float EvalLocalLightSrcPdf(uint _light_idx) {
     Texture2D<float> local_light_pdf_tex =
         TextureHandle(resample_params.bindless_handles.local_light_pdf).GetTexture2D<float>();
 
-    int   last_mip = max(0, int(floor(log2(max(pdf_tex_size.x, pdf_tex_size.y)))));
-    float avg_val  = local_light_pdf_tex.mips[last_mip][uint2(0u, 0u)];
-
-    float sum = avg_val * square(1u << last_mip);
+    float sum = GetPdfTextureWeightSum(local_light_pdf_tex, pdf_tex_size);
     return local_light_pdf_tex[texel_pos] / sum;
 }
 
