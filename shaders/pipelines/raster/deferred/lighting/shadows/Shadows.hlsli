@@ -5,8 +5,8 @@
 #include "pipelines/raster/deferred/lighting/shadows/CSM.hlsli"
 #include "pipelines/raster/deferred/lighting/shadows/PCSS.hlsli"
 
-DEFINE_CALCULATE_PCSS(Point)
-DEFINE_CALCULATE_PCSS(Dir)
+DEFINE_CALCULATE_PCSS(Point, PointShadowContext)
+DEFINE_CALCULATE_PCSS(Dir, DirectionalShadowContext)
 
 float get_single_shadow(
     Moer::LightingData lighting_data,
@@ -25,16 +25,17 @@ float get_single_shadow(
         return 1.0;
     }
 
-    ShadowContext ctx;
-    ctx.shadowMapHandle = lighting_data.cascade_shadow_map[cascade_index];
-    ctx.shadowUV        = shadow_uv;
-    ctx.fragmentDepth   = shadow_ndc_pos.z;
-    ctx.screenUV        = screen_uv;
-    ctx.lightSizeWorld  = lighting_data.light_size_world;
-    ctx.shadowMapSize   = lighting_data.shadow_csm_sm_size;
-    ctx.scaleData       = lighting_data.scale_data[cascade_index];
-    ctx.normal          = normal;
-    ctx.lightDir        = lightDir;
+    DirectionalShadowContext ctx;
+    ctx.shadowMapHandle   = lighting_data.cascade_shadow_map[cascade_index];
+    ctx.shadowUV          = shadow_uv;
+    ctx.receiverDepthNdc  = shadow_ndc_pos.z;
+    ctx.screenUV          = screen_uv;
+    ctx.lightAngleTangent = lighting_data.light_size_world;
+    ctx.shadowMapSize     = lighting_data.shadow_csm_sm_size;
+    ctx.orthographicWidth = lighting_data.scale_data[cascade_index].x;
+    ctx.depthRangeWorld   = lighting_data.scale_data[cascade_index].z;
+    ctx.normal            = normal;
+    ctx.lightDir          = lightDir;
 
     if (lighting_data.pcss_enabled == 1) {
         return CalculatePcssDir(ctx);
@@ -72,17 +73,17 @@ float calculate_point_shadow(
     float fragment_depth = (near_plane / (near_plane - far_plane)) -
                            (near_plane * far_plane / (near_plane - far_plane)) / local_z;
 
-    ShadowContext ctx;
-    ctx.shadowMapHandle = shadow_cube_handle;
-    ctx.fragmentDepth   = local_z;
-    ctx.screenUV        = screen_uv;
-    GetTangentBasis(dir, ctx.Tangent, ctx.Bitangent);
-    ctx.lightSizeWorld = lighting_data.light_size_world;
-    ctx.shadowMapSize  = lighting_data.shadow_csm_sm_size;
-    ctx.scaleData.x    = near_plane;
-    ctx.scaleData.y    = far_plane;
-    ctx.normal         = normal;
-    ctx.lightDir       = dir;
+    PointShadowContext ctx;
+    ctx.shadowMapHandle        = shadow_cube_handle;
+    ctx.receiverFaceDepthWorld = local_z;
+    ctx.screenUV               = screen_uv;
+    GetTangentBasis(dir, ctx.tangent, ctx.bitangent);
+    ctx.lightRadiusWorld       = lighting_data.light_size_world;
+    ctx.shadowMapSize          = lighting_data.shadow_csm_sm_size;
+    ctx.nearPlaneWorld         = near_plane;
+    ctx.farPlaneWorld          = far_plane;
+    ctx.normal                 = normal;
+    ctx.lightDir               = dir;
 
     if (lighting_data.pcss_enabled == 1) {
         return CalculatePcssPoint(ctx);

@@ -36,18 +36,11 @@
 //必须先定义宏，再包含头文件
 #include "pipelines/raster/deferred/lighting/shadows/PCF.hlsli"
 
-DEFINE_CALCULATE_PCF(Point)
-DEFINE_CALCULATE_PCF(Dir)
+DEFINE_CALCULATE_PCF(Point, PointShadowContext)
+DEFINE_CALCULATE_PCF(Dir, DirectionalShadowContext)
 
-bool IsDirectionalLight_Point() {
-    return false;
-}
-bool IsDirectionalLight_Dir() {
-    return true;
-}
-
-#define DEFINE_FIND_BLOCKER(SUFFIX)                                                                          \
-    BlockerStats FindBlocker##SUFFIX(ShadowContext ctx, float search_radius_uv) {                            \
+#define DEFINE_FIND_BLOCKER(SUFFIX, CONTEXT_TYPE)                                                            \
+    BlockerStats FindBlocker##SUFFIX(CONTEXT_TYPE ctx, float search_radius_uv) {                            \
         BlockerStats stats;                                                                                  \
         stats.blockerCase = 1;                                                                               \
         stats.avgDepth    = 0;                                                                               \
@@ -78,7 +71,7 @@ bool IsDirectionalLight_Dir() {
         }                                                                                                    \
                                                                                                              \
         if (PCSS_SHARE_PER_PIXEL_QUAD >= 1) {                                                                \
-            float2 deriv       = max(abs(ddx(ctx.fragmentDepth)), abs(ddy(ctx.fragmentDepth)));              \
+            float2 deriv       = max(abs(ddx(GetFragmentDepth##SUFFIX(ctx))), abs(ddy(GetFragmentDepth##SUFFIX(ctx)))); \
             float  flat_factor = 1.0 - saturate(max(deriv.x, deriv.y) * 100.0);                              \
             if (flat_factor > 0.0) {                                                                         \
                 stats.numBlockers = lerp(stats.numBlockers, QuadAverage(stats.numBlockers), flat_factor);    \
@@ -109,8 +102,8 @@ bool IsDirectionalLight_Dir() {
         return stats;                                                                                        \
     }
 
-DEFINE_FIND_BLOCKER(Point)
-DEFINE_FIND_BLOCKER(Dir)
+DEFINE_FIND_BLOCKER(Point, PointShadowContext)
+DEFINE_FIND_BLOCKER(Dir, DirectionalShadowContext)
 
 float2x2 GetAdaptivePcfTransform(BlockerStats stats) {
     /* 我们利用 SumWeight * Sum(XY) - Sum(X)*Sum(Y) 的形式来避免过早除法带来的精度损失 */
@@ -177,8 +170,8 @@ float SharpenPcfVisibility(float shadow_visibility, float penumbra_uv, float sha
     return saturate(final_sharpness_factor * (shadow_visibility - 0.5) + 0.5);
 }
 
-#define DEFINE_CALCULATE_PCSS(SUFFIX)                                                                                       \
-    float CalculatePcss##SUFFIX(ShadowContext ctx) {                                                                        \
+#define DEFINE_CALCULATE_PCSS(SUFFIX, CONTEXT_TYPE)                                                                         \
+    float CalculatePcss##SUFFIX(CONTEXT_TYPE ctx) {                                                                        \
         /* Blocker Search */                                                                                                \
         float        search_radius_uv = GetSearchRadiusUV##SUFFIX(ctx);                                                     \
         BlockerStats stats            = FindBlocker##SUFFIX(ctx, search_radius_uv);                                         \
@@ -196,16 +189,7 @@ float SharpenPcfVisibility(float shadow_visibility, float penumbra_uv, float sha
         /* Search and filtering can cover different footprints, so full search coverage still requires PCF. */            \
         float penumbra_uv = CalculatePenumbra##SUFFIX(ctx, stats.avgDepth);                                                 \
                                                                                                                             \
-        /* 原 #if PCSS_LIGHT_TYPE == 1 */                                                                                   \
-        if (IsDirectionalLight_##SUFFIX()) {                                                                                \
-            /* 给半影加一个最大值限制 */                                                                                    \
-            /* 比如限制最大模糊半径为 32 个像素 (32.0 / 2048.0 ≈ 0.015) */                                                  \
-            /* 超过这个范围，阴影就不再变软了，防止采样崩坏 */                                                              \
-            float max_penumbra = 32.0 / ctx.shadowMapSize;                                                                  \
-            penumbra_uv        = clamp(penumbra_uv, 0.0, max_penumbra);                                                     \
-        } else {                                                                                                            \
-            penumbra_uv = clamp(penumbra_uv, 0.0, 0.1);                                                                     \
-        }                                                                                                                   \
+        penumbra_uv = ClampPenumbra##SUFFIX(ctx, penumbra_uv);                                                               \
                                                                                                                             \
         /* 计算自适应采样矩阵 */                                                                                            \
         float2x2 pcf_matrix = float2x2(1, 0, 0, 1); /* 默认为单位矩阵(圆形) */                                              \
