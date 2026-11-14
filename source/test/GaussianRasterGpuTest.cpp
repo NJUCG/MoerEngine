@@ -539,6 +539,64 @@ void RunInFlightResize(ShaderManager& manager) {
     std::cout << "in-flight resize passed" << std::endl;
 }
 
+void RunNarrowReference(ShaderManager& manager) {
+    const uint2 size(1, 37);
+    Camera camera;
+    camera.Initialize(float3(0), -90, 0, 60, float(size.x) / size.y, .01f, 100.f);
+    GaussianGpuScene scene;
+    auto snapshot = std::make_shared<GaussianSceneSnapshot>();
+    GaussianInstanceSnapshot instance;
+    instance.asset = Synthetic(1);
+    snapshot->instances.push_back(instance);
+    CommandList commands(EQueueType::Graphics);
+    scene.ApplyUpdate(snapshot, commands);
+
+    // The 1x1 placeholder has the right width for this view, but must grow in height.
+    // Exercise both allocation sites with independent workspaces.
+    for (bool prepared : {false, true}) {
+        Raster::GaussianSplatPass pass(manager);
+        GaussianViewSettings settings;
+        settings.background = float3(.2f, .3f, .4f);
+        const auto record = [&](bool needs_reference) {
+            if (prepared) {
+                const auto parameters = pass.Prepare(&scene, camera, size, false, settings, {}, needs_reference);
+                pass.Record(commands, parameters);
+            } else {
+                pass.RecordAccumulation(commands, &scene, camera, size, false, false, settings, {}, true,
+                    needs_reference);
+                if (needs_reference) {
+                    pass.RecordDisplay(commands, settings);
+                }
+            }
+        };
+        record(false);
+        RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        record(true);
+        auto color = RecordReadback(commands, pass.GetColor()->GetView(), "Narrow reference color");
+        auto transmittance = RecordReadback(commands, pass.GetTransmittance()->GetView(), "Narrow reference T");
+        auto display = RecordReadback(commands, pass.GetDisplay()->GetView(), "Narrow reference display");
+        RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        const auto rgb = color.Get().CopyAs<float>();
+        const auto t = transmittance.Get().CopyAs<float>();
+        const auto pixels = display.Get().CopyAs<float>();
+        Require(rgb && t && pixels && rgb->size() == size.x * size.y * 4 &&
+            t->size() == size.x * size.y && pixels->size() == rgb->size(),
+            "Narrow reference readback invalid");
+        Require((*rgb)[(size.y / 2) * 4] > .1f, "Narrow reference scene has no visible center splat");
+        for (uint32 y = 0; y < size.y; ++y) {
+            for (uint32 channel = 0; channel < 3; ++channel) {
+                const double encoded = std::clamp(double((*rgb)[y * 4 + channel]) +
+                    (*t)[y] * settings.background[channel], 0., 1.);
+                const double expected = encoded <= .04045 ? encoded / 12.92 :
+                    std::pow((encoded + .055) / 1.055, 2.4);
+                Require(std::abs(expected - (*pixels)[y * 4 + channel]) < .00002,
+                    "Reference export retained a 1x1 placeholder in a 1xH view");
+            }
+        }
+    }
+    std::cout << "1xH reference allocation passed through standalone and prepared paths" << std::endl;
+}
+
 void RunViewportPng() {
     auto&      device = RenderDevice::Get();
     const auto path  = std::filesystem::temp_directory_path() /
@@ -1112,6 +1170,7 @@ int main(int argc, char** argv) {
         RunHybrid(manager, false, 1.f, true, true);
         RunHybrid(manager, true, .5f, true, true);
         RunInFlightResize(manager);
+        RunNarrowReference(manager);
         RunViewSettings(manager);
         Run(manager, Synthetic(2), 2, {}, true);
         Run(manager, Synthetic(600), 600, {}, false, true);

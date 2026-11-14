@@ -617,7 +617,9 @@ RenderGraph::PassHandle GaussianSplatPass::AddAccumulationToGraph(
         );
         InitializeGraphicsTexture(state.m_display);
     }
-    if (!state.m_reference || (needs_reference && state.m_reference->GetWidth() != resolution.x)) {
+    if (!state.m_reference ||
+        (needs_reference && (state.m_reference->GetWidth() != resolution.x ||
+                             state.m_reference->GetHeight() != resolution.y))) {
         state.m_reference = RenderDevice::Get().CreateTexture(
             "Gaussian reference RGB",
             needs_reference ? Extent3D(resolution.x, resolution.y, 1) : Extent3D(1, 1, 1),
@@ -945,7 +947,9 @@ GaussianSplatPass::RecordParameters GaussianSplatPass::Prepare(
             if (instance.range.w & (is_editor_view ? 2u : 1u))
                 work_count += instance.range.y;
     m_impl->Resize(resolution, work_count > k_max_work_count ? 0 : uint(work_count));
-    if (!m_impl->m_reference || (needs_reference && m_impl->m_reference->GetWidth() != resolution.x)) {
+    if (!m_impl->m_reference ||
+        (needs_reference && (m_impl->m_reference->GetWidth() != resolution.x ||
+                             m_impl->m_reference->GetHeight() != resolution.y))) {
         m_impl->m_reference = RenderDevice::Get().CreateTexture(
             "Gaussian reference RGB",
             needs_reference ? Extent3D(resolution.x, resolution.y, 1) : Extent3D(1, 1, 1),
