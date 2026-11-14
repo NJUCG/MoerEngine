@@ -9,9 +9,8 @@
 #include "rhi/RHICommand.h"
 #include "rhi/RHICommon.h"
 
-#include <algorithm>
 #include <cassert>
-#include <type_traits>
+#include <span>
 #include <utility>
 
 namespace Moer::Render {
@@ -59,7 +58,7 @@ void UploadByteBuffer(
         RecreateByteBufferIfNeeded(bindless_array, target, name, required_byte_size, usage);
     RecordGraphicsBufferUpload(
         cmd_list,
-        std::span<byte>(static_cast<byte*>(const_cast<void*>(data)), required_byte_size),
+        std::span<const byte>(static_cast<const byte*>(data), required_byte_size),
         target.buf->GetView(),
         name
     );
@@ -301,14 +300,30 @@ void GpuScene::ResolveMaterialTextureHandles(
 void GpuScene::InitializeResources(GpuSceneUpdate& update) {
     assert(update.full_rebuild);
     auto& device = RenderDevice::Get();
-    auto& bdls   = m_bindless_array;
 
-    const Sampler default_sampler = Sampler(SF_LINEAR, SAM_REPEAT);
-    m_res                         = Res{};
+    m_res = Res{};
     m_map_texture_key_to_bindless_handle.clear();
-    m_res.texture_array.reserve(update.textures.size());
+    InitializeTextureResources(device, update.textures);
 
-    for (const GpuSceneTextureData& texture : update.textures) {
+    ResolveMaterialTextureHandles(update.materials, update.material_texture_refs);
+    m_draw_commands = update.draw_commands;
+
+    InitializeBufferResources(device, update);
+    m_pending_commands.UpdateBindlessArray(m_bindless_array);
+
+    if (device.SupportsRaytracingAccelerationStructures()) {
+        InitRaytracingScene(m_pending_commands, update.rt_meshes, update.rt_instances);
+    }
+}
+
+void GpuScene::InitializeTextureResources(
+    RenderDevice&                     device,
+    const Array<GpuSceneTextureData>& textures
+) {
+    const Sampler default_sampler(SF_LINEAR, SAM_REPEAT);
+    m_res.texture_array.reserve(textures.size());
+
+    for (const GpuSceneTextureData& texture : textures) {
         TextureWithHandle gpu_texture{};
         gpu_texture.tex = device.CreateTexture(
             texture.name,
@@ -329,24 +344,21 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
             assert(offset + mip_byte_size <= texture.data.size());
             RecordNewGraphicsTextureUpload(
                 m_pending_commands,
-                std::span<byte>(
-                    reinterpret_cast<byte*>(const_cast<uint8*>(texture.data.data())) + offset, mip_byte_size
-                ),
+                std::as_bytes(std::span(texture.data)).subspan(offset, mip_byte_size),
                 gpu_texture.tex->GetView(mip, 1).Slice(layer)
             );
             offset += mip_byte_size;
         }
 
-        gpu_texture.hdl = bdls->AllocateTexture(
+        gpu_texture.hdl = m_bindless_array->AllocateTexture(
             gpu_texture.tex->GetView(0, gpu_texture.tex->GetNumMips()), default_sampler
         );
         m_map_texture_key_to_bindless_handle[texture.key] = gpu_texture.hdl;
         m_res.texture_array.push_back(std::move(gpu_texture));
     }
+}
 
-    ResolveMaterialTextureHandles(update.materials, update.material_texture_refs);
-    m_draw_commands = update.draw_commands;
-
+void GpuScene::InitializeBufferResources(RenderDevice& device, const GpuSceneUpdate& update) {
     auto create_byte_buffer = [&](BufferWithHandle& target,
                                   std::string_view  name,
                                   uint64            byte_size,
@@ -426,15 +438,12 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
     );
 
     auto record_copy = [&](const auto& source, BufferWithHandle& target, std::string_view name) {
-        using Element = typename std::decay_t<decltype(source)>::value_type;
         if (source.empty()) {
             return;
         }
         RecordGraphicsBufferUpload(
             m_pending_commands,
-            std::span<byte>(
-                reinterpret_cast<byte*>(const_cast<Element*>(source.data())), source.size() * sizeof(Element)
-            ),
+            std::as_bytes(std::span(source)),
             target.buf->GetView(),
             name
         );
@@ -458,7 +467,7 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
     record_copy(update.texcoords0, m_res.texcoord0_buf, "CopyFrom GpuScene::Texcoord0MegaBuffer");
     record_copy(update.indices, m_res.index_buf, "CopyFrom GpuScene::IndexMegaBuffer");
 
-    Array<BufferWithHandle*> buffers = {
+    BufferWithHandle* buffers[] = {
         &m_res.light_buf,
         &m_res.material_buf,
         &m_res.draw_cmd_buf,
@@ -471,20 +480,10 @@ void GpuScene::InitializeResources(GpuSceneUpdate& update) {
         &m_res.texcoord0_buf,
         &m_res.index_buf,
     };
-    buffers.erase(
-        std::remove_if(buffers.begin(), buffers.end(), [](const BufferWithHandle* buffer) {
-            return buffer->buf == nullptr;
-        }),
-        buffers.end()
-    );
-
     for (BufferWithHandle* buffer : buffers) {
-        buffer->hdl = bdls->AllocateBuffer(buffer->buf->GetView());
-    }
-    m_pending_commands.UpdateBindlessArray(bdls);
-
-    if (device.SupportsRaytracingAccelerationStructures()) {
-        InitRaytracingScene(m_pending_commands, update.rt_meshes, update.rt_instances);
+        if (buffer->buf != nullptr) {
+            buffer->hdl = m_bindless_array->AllocateBuffer(buffer->buf->GetView());
+        }
     }
 }
 
@@ -543,10 +542,7 @@ void GpuScene::UpdateDrawCommandBuffer(
 
     RecordGraphicsBufferUpload(
         cmd_list,
-        std::span<byte>(
-            reinterpret_cast<byte*>(const_cast<DrawIndexedCmdData*>(draw_commands.data())),
-            draw_commands.size() * sizeof(DrawIndexedCmdData)
-        ),
+        std::as_bytes(std::span(draw_commands)),
         m_res.draw_cmd_buf.buf->GetView(),
         "CopyFrom GpuScene::DrawCmdBuffer"
     );
@@ -903,10 +899,7 @@ void GpuScene::RestoreDrawCommands(CommandList& cmd_list) {
     }
     RecordGraphicsBufferUpload(
         cmd_list,
-        std::span<byte>(
-            reinterpret_cast<byte*>(m_draw_commands.data()),
-            m_draw_commands.size() * sizeof(DrawIndexedCmdData)
-        ),
+        std::as_bytes(std::span(m_draw_commands)),
         m_res.draw_cmd_buf.buf->GetView(),
         "RestoreDrawCommands"
     );
