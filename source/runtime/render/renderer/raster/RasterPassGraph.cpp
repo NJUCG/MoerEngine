@@ -624,6 +624,9 @@ void AoPass::AddToGraph(
             if (ssdo) {
                 builder.Write(resources.indirect, RenderGraph::TextureAccessType::ColorAttachment);
             }
+            if (ray_query) {
+                builder.Write(resources.geometry, RenderGraph::TextureAccessType::Storage);
+            }
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AmbientOcclusion", [&] {
@@ -679,6 +682,7 @@ void RtaoDenoiserPass::AddToGraph(
     RenderGraph&        graph,
     RasterContext&      context,
     const RasterConfig& ui_config,
+    const Camera&       camera,
     uint32              ao_only_index,
     GraphResources      resources
 ) {
@@ -690,8 +694,8 @@ void RtaoDenoiserPass::AddToGraph(
     auto prepared = graph.AddSetupPass(
         "RtaoDenoise.Prepare",
         uint8{0},
-        [this, &context, &ui_config, ao_only_index](const uint8&) {
-            return Prepare(context, ui_config, ao_only_index);
+        [this, &context, &ui_config, &camera, ao_only_index](const uint8&) {
+            return Prepare(context, ui_config, camera, ao_only_index);
         }
     );
     if (!prepared.IsValid()) {
@@ -701,8 +705,8 @@ void RtaoDenoiserPass::AddToGraph(
     graph.AddRecordPass(
         "RtaoDenoise",
         [resources](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
-                .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
+            builder.Read(resources.current_geometry, RenderGraph::TextureAccessType::Sampled)
+                .Read(resources.history_geometry, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.camera_motion_vector, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.history_read, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.ao_only, RenderGraph::TextureAccessType::Sampled)

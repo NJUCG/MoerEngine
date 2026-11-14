@@ -29,9 +29,10 @@ public:
     DEFINE_SHADER_TEX(rw_ao_only);
     DEFINE_SHADER_TEX(rw_camera_mv);
     DEFINE_SHADER_TLAS(tlas);
+    DEFINE_SHADER_TEX(rw_geometry);
     DEFINE_SHADER_BINDLESS_ARRAY(bdls);
 
-    DEFINE_SHADER_ARGS(param, rw_ao_only, rw_camera_mv, tlas, bdls);
+    DEFINE_SHADER_ARGS(param, rw_ao_only, rw_camera_mv, tlas, rw_geometry, bdls);
 
     MUTATION_BOOL(RTAO_COSINE_WEIGHTED);
 };
@@ -72,6 +73,7 @@ public:
         RenderGraph::TextureHandle camera_motion_vector{};
         RenderGraph::BufferHandle  motion_vector_data{};
         RenderGraph::TextureHandle indirect{};
+        RenderGraph::TextureHandle geometry{};
     };
 
     struct CompositeGraphResources {
@@ -92,6 +94,7 @@ public:
         TextureWithHandle ao_only;
         TextureWithHandle camera_mv;
         TextureWithHandle indirect;
+        TextureWithHandle geometry;
     };
 
     struct RecordParameters {
@@ -227,10 +230,14 @@ public:
             parameters.textures.ao_only   = ao_only_half;
             parameters.textures.camera_mv = context.textures.camera_motion_vector_half;
             parameters.textures.indirect = context.textures.ao_indirect_half;
+            parameters.textures.geometry = parameters.output.ao_only_idx == 0 ?
+                context.textures.ao_history_geometry_half : context.textures.ao_history_geometry_1_half;
         } else {
             parameters.textures.ao_only   = ao_only_full;
             parameters.textures.camera_mv = context.textures.camera_motion_vector;
             parameters.textures.indirect = context.textures.ao_indirect;
+            parameters.textures.geometry = parameters.output.ao_only_idx == 0 ?
+                context.textures.ao_history_geometry : context.textures.ao_history_geometry_1;
         }
 
         {
@@ -315,6 +322,7 @@ public:
                         parameters.textures.ao_only.tex,
                         parameters.textures.camera_mv.tex,
                         parameters.tlas,
+                        parameters.textures.geometry.tex,
                         parameters.bindless
                     )
                 .Dispatch(
