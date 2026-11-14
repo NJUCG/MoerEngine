@@ -598,9 +598,10 @@ void AoPass::AddToGraph(
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
     const bool ray_query = ui_config.ao_mode == EAoMode::RTAO || ui_config.ao_mode == EAoMode::RTAO_AO_ONLY;
+    const bool ssdo = ui_config.ao_mode == EAoMode::SSDO || ui_config.ao_mode == EAoMode::SSDO_AO_ONLY;
     graph.AddRecordPass(
         "AmbientOcclusion",
-        [resources, ray_query](RenderGraph::PassBuilder& builder) {
+        [resources, ray_query, ssdo](RenderGraph::PassBuilder& builder) {
             builder
                 .ExecuteOn(
                     RenderGraph::QueueRole::Graphics,
@@ -620,6 +621,9 @@ void AoPass::AddToGraph(
                                 RenderGraph::TextureAccessType::ColorAttachment
                 )
                 .Read(resources.motion_vector_data, RenderGraph::BufferAccessType::ShaderRead);
+            if (ssdo) {
+                builder.Write(resources.indirect, RenderGraph::TextureAccessType::ColorAttachment);
+            }
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AmbientOcclusion", [&] {
@@ -637,6 +641,7 @@ void AoPass::AddCompositeToGraph(
     uint32                  ao_only_handle,
     CompositeGraphResources resources
 ) {
+    const bool ssdo = ui_config.ao_mode == EAoMode::SSDO;
     auto prepared = graph.AddSetupPass(
         "AoComposite.Prepare",
         uint8{0},
@@ -650,13 +655,16 @@ void AoPass::AddCompositeToGraph(
 
     graph.AddRecordPass(
         "AoComposite",
-        [resources](RenderGraph::PassBuilder& builder) {
+        [resources, ssdo](RenderGraph::PassBuilder& builder) {
             builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
                 .Read(resources.ao_only, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.lighting_output, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.depth, RenderGraph::TextureAccessType::Sampled)
                 .Read(resources.normal, RenderGraph::TextureAccessType::Sampled)
                 .Write(resources.ao_output, RenderGraph::TextureAccessType::Storage);
+            if (ssdo) {
+                builder.Read(resources.indirect, RenderGraph::TextureAccessType::Sampled);
+            }
         },
         [this, prepared](CommandList& cmd_list) {
             RecordWithPassMarker(cmd_list, "AoComposite", [&] {

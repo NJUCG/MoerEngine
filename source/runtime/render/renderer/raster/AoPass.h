@@ -71,6 +71,7 @@ public:
         RenderGraph::TextureHandle ao_only{};
         RenderGraph::TextureHandle camera_motion_vector{};
         RenderGraph::BufferHandle  motion_vector_data{};
+        RenderGraph::TextureHandle indirect{};
     };
 
     struct CompositeGraphResources {
@@ -79,6 +80,7 @@ public:
         RenderGraph::TextureHandle depth{};
         RenderGraph::TextureHandle normal{};
         RenderGraph::TextureHandle ao_output{};
+        RenderGraph::TextureHandle indirect{};
     };
 
     struct AoPassOutput {
@@ -89,6 +91,7 @@ public:
     struct AoTextureSet {
         TextureWithHandle ao_only;
         TextureWithHandle camera_mv;
+        TextureWithHandle indirect;
     };
 
     struct RecordParameters {
@@ -113,12 +116,18 @@ public:
     };
 
     AoPass(RasterContext& context) {
-        auto create_pso_func = [&]() {
+        auto create_pso_func = [&](bool include_indirect = false) {
+            Array<RHIColorAttachmentInfo> attachments{
+                RHIColorAttachmentInfo::Preset(context.textures.ao_output_ambient_only.tex->GetFormat()),
+                RHIColorAttachmentInfo::Preset(context.textures.camera_motion_vector.tex->GetFormat())
+            };
+            if (include_indirect) {
+                attachments.push_back(RHIColorAttachmentInfo::Preset(context.textures.ao_indirect.tex->GetFormat()));
+            }
             GfxPsoCreateInfo pso_full_screen_info(
                 RHIRasterizeInfo::Preset(),
                 {},
-                {RHIColorAttachmentInfo::Preset(context.textures.ao_output_ambient_only.tex->GetFormat()),
-                 RHIColorAttachmentInfo::Preset(context.textures.camera_motion_vector.tex->GetFormat())}
+                std::move(attachments)
             );
             return pso_full_screen_info;
         };
@@ -145,7 +154,7 @@ public:
         ssdo_pipeline = context.manager.Raster()
                             .Vertex("core/utils/FullScreenQuad.hlsl")
                             .Pixel("pipelines/postprocess/lighting_effects/Ssdo.hlsl")
-                            .Build<SsdoPipeline>(std::move(create_pso_func()));
+                            .Build<SsdoPipeline>(create_pso_func(true));
 
         ao_composite_pipeline = context.manager.Compute<AoCompositePipeline>(
             "pipelines/postprocess/lighting_effects/AoComposite.hlsl"
@@ -217,9 +226,11 @@ public:
         if (ui_config.ao_half_resolution) {
             parameters.textures.ao_only   = ao_only_half;
             parameters.textures.camera_mv = context.textures.camera_motion_vector_half;
+            parameters.textures.indirect = context.textures.ao_indirect_half;
         } else {
             parameters.textures.ao_only   = ao_only_full;
             parameters.textures.camera_mv = context.textures.camera_motion_vector;
+            parameters.textures.indirect = context.textures.ao_indirect;
         }
 
         {
@@ -320,7 +331,8 @@ public:
                     parameters.textures.ao_only.GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
                     ColorAttachment(parameters.textures.ao_only.tex),
-                    ColorAttachment(parameters.textures.camera_mv.tex)
+                    ColorAttachment(parameters.textures.camera_mv.tex),
+                    ColorAttachment(parameters.textures.indirect.tex)
                 );
             return;
         }
@@ -359,6 +371,8 @@ public:
         param.inv_full_resolution = float2(1.0f) / param.full_resolution;
         param.depth_tex           = context.textures.depth_nearest_sampler.hdl;
         param.normal_tex          = context.textures.normal.hdl;
+        param.indirect_tex = (ui_config.ao_half_resolution ? context.textures.ao_indirect_half :
+                                                             context.textures.ao_indirect).hdl;
         if (ui_config.ao_half_resolution) {
             const uint2 full = uint2(context.textures.ao_output.GetSize());
             param.ao_resolution = float2(std::max(1u, full.x / 2), std::max(1u, full.y / 2));

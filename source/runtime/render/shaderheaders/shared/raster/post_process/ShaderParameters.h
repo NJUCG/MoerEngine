@@ -115,6 +115,7 @@ struct AoCompositeParam {
     uint   is_half_resolution;
     uint   depth_tex;
     uint   normal_tex;
+    uint   indirect_tex;
 };
 
 struct BilateralFilterDenoiserPipelineBindlessParam {
