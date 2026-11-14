@@ -80,6 +80,7 @@ public:
     ShadowDepthPass(RasterContext& context);
     void SetGaussians(
         RasterContext&          context,
+        const SceneUpdateBatch& updates,
         const GaussianGpuScene* scene,
         GaussianViewSettings    settings,
         bool                    editor_view,
@@ -101,36 +102,31 @@ public:
     }
 
     [[nodiscard]] RecordParameters
-    Prepare(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
-    void Record(CommandList& cmd_list, const RecordParameters& parameters);
+    Prepare(RasterContext& context, const SceneUpdateBatch& updates, const RasterConfig& ui_config, const Camera& camera);
     GraphPassHandle AddToGraph(
         RenderGraph&        graph,
         RasterContext&      context,
+        const SceneUpdateBatch& updates,
         const RasterConfig& ui_config,
         const Camera&       camera,
         GraphResources      resources
     );
 
-    // Legacy synchronous adapter. New graph passes call Prepare/Record directly.
-    void Process(RasterContext& context, const RasterConfig& ui_config, const Camera& camera);
-
     // 资源管理
     [[nodiscard]] bool PrepareCSMResources(RasterContext& context, const RasterConfig& ui_config);
     [[nodiscard]] bool PreparePointShadowResources(RasterContext& context, const RasterConfig& ui_config);
 
-    // 辅助函数
-    static std::optional<ecs::CLightDirectional> GetMainLightDirection(RasterContext& context);
-    static std::optional<ecs::CLightPoint>       GetMainPointLight(RasterContext& context);
-
 private:
-    bool RefreshShadowCasterBounds(RasterContext& context);
+    bool RefreshShadowCasterBounds(const SceneUpdateBatch& updates);
+    static std::optional<ecs::CLightDirectional> GetMainLightDirection(const SceneUpdateBatch& updates);
+    static std::optional<ecs::CLightPoint> GetMainPointLight(const SceneUpdateBatch& updates);
 
     void PrepareCSM(
-        RasterContext& context, const RasterConfig& ui_config, const Camera& camera,
+        RasterContext& context, const SceneUpdateBatch& updates, const RasterConfig& ui_config, const Camera& camera,
         RecordParameters& parameters
     );
     void PreparePointShadows(
-        RasterContext& context, const RasterConfig& config, const Camera& camera,
+        RasterContext& context, const SceneUpdateBatch& updates, const RasterConfig& config, const Camera& camera,
         RecordParameters& parameters
     );
     [[nodiscard]] GeometryPassBindlessParam BuildDrawParameters(
@@ -139,11 +135,6 @@ private:
     ) const;
     void RecordShadowDraw(CommandList& cmd_list, const RecordParameters& parameters, const DrawBatch& batch);
     void RecordPointShadowMultiviewDraw(
-        CommandList&            cmd_list,
-        const RecordParameters& parameters,
-        const DrawBatch&        batch
-    );
-    void RecordPointShadowMultiview(
         CommandList&            cmd_list,
         const RecordParameters& parameters,
         const DrawBatch&        batch

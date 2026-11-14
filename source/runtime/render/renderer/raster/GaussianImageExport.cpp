@@ -136,15 +136,11 @@ RenderGraph::PassHandle GaussianImageExport::AddToGraph(
     // layout; the public source and status return to the raster graph boundary.
     const auto source = ImportRasterTexture(graph, "GaussianExport.source", display.GetTexture());
     const auto status = ImportRasterBuffer(graph, "GaussianExport.status", frame_status.GetBuffer());
-    const auto snapshot = RenderDevice::Get().CreateTexture(
-        "GaussianExport.snapshot", Extent3D(resolution.x, resolution.y, 1), format,
-        ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST
-    );
-    const auto image = graph.ImportTexture("GaussianExport.snapshot", snapshot, {});
-    graph.SetInitialState(image, RenderGraph::TextureBoundary::Undefined,
-        RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
-    graph.Export(image, RenderGraph::TextureAccessType::TransferSource,
-        RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+    const auto image = graph.CreateTransientTexture("GaussianExport.snapshot", RGTransientTextureDesc{
+        .extent = Extent3D(resolution.x, resolution.y, 1),
+        .format = format,
+        .usage = ETextureUsageFlags::TRANSFER_SRC | ETextureUsageFlags::TRANSFER_DST,
+    });
     const RenderGraph::TextureRange source_range{
         .mip_first = display.mip_level, .mip_count = display.num_mips,
         .layer_first = display.array_layer, .layer_count = display.num_array
@@ -156,8 +152,8 @@ RenderGraph::PassHandle GaussianImageExport::AddToGraph(
                 .Read(source, RenderGraph::TextureAccessType::TransferSource, source_range)
                 .Write(image, RenderGraph::TextureAccessType::TransferDestination);
         },
-        [=](CommandList& commands) {
-            commands.CopyFrom(display, snapshot->GetView());
+        [&graph, display, image](CommandList& commands) {
+            commands.CopyFrom(display, graph.GetPhysicalTexture(image)->GetView());
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );
@@ -169,10 +165,9 @@ RenderGraph::PassHandle GaussianImageExport::AddToGraph(
                 .Read(status, RenderGraph::BufferAccessType::TransferSource)
                 .SideEffect();
         },
-        [this, snapshot, frame_status, request_id](CommandList& commands) {
-            m_image_readback  = commands.Readback(snapshot->GetView(), "Gaussian PNG display");
+        [this, &graph, image, frame_status, request_id](CommandList& commands) {
+            m_image_readback  = commands.Readback(graph.GetPhysicalTexture(image)->GetView(), "Gaussian PNG display");
             m_status_readback = commands.Readback(frame_status, "Gaussian PNG validity");
-            commands.AddCallback([snapshot]() {});
             if (!m_image_readback.Valid() || !m_status_readback.Valid()) {
                 m_image_readback  = {};
                 m_status_readback = {};

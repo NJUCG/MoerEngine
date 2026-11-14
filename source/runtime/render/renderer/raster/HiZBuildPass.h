@@ -115,10 +115,6 @@ public:
         GraphResources resources
     );
 
-    void Process(RasterContext& context) {
-        Record(context.cmd_list, Prepare(context));
-    }
-
 private:
     HiZBuildPipeline pipeline;
 };

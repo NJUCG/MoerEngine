@@ -50,13 +50,13 @@ public:
     ~GaussianShadowPass();
     RecordParameters Prepare(
         RasterContext&          context,
+        const SceneUpdateBatch& updates,
         const RasterConfig&     config,
         const Camera&           camera,
         const GaussianGpuScene& scene,
         GaussianViewSettings    settings,
         bool                    editor_view
     );
-    void Record(CommandList& commands, const RecordParameters& parameters);
     RenderGraph::PassHandle
     AddToGraph(RenderGraph& graph, std::shared_ptr<const RecordParameters> parameters);
     TextureRef AddDepthDebugToGraph(RenderGraph& graph, const RecordParameters& parameters);

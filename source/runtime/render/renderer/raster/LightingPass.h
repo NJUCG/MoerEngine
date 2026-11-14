@@ -130,10 +130,6 @@ public:
         GraphResources resources
     );
 
-    void Process(RasterContext& context, const RasterConfig& ui_config) {
-        Record(context.cmd_list, Prepare(context, ui_config));
-    }
-
 private:
     PbrMaterialShadingPipeline pipeline;
 };

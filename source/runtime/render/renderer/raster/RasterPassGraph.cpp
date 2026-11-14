@@ -17,7 +17,6 @@
 #include "SkyboxPass.h"
 #include "SsrPass.h"
 #include "TessellatedSurfacePass.h"
-#include "TonemappingPass.h"
 #include "misc/Types.h"
 
 #include "profile/ProfileScope.h"
@@ -58,6 +57,7 @@ std::vector<RenderGraph::TextureHandle> ImportShadowMaps(RenderGraph& graph, con
 ShadowDepthPass::GraphPassHandle ShadowDepthPass::AddToGraph(
     RenderGraph&        graph,
     RasterContext&      context,
+    const SceneUpdateBatch& updates,
     const RasterConfig& ui_config,
     const Camera&       camera,
     GraphResources      resources
@@ -65,7 +65,7 @@ ShadowDepthPass::GraphPassHandle ShadowDepthPass::AddToGraph(
     MOER_PROFILE_SCOPE("Raster.AddToGraph.ShadowDepthPass");
     // Allocation and cache decisions determine the graph's physical resources
     // and node count, so they must finish before Compile. GPU recording remains parallel.
-    auto       parameters = std::make_shared<const RecordParameters>(Prepare(context, ui_config, camera));
+    auto       parameters = std::make_shared<const RecordParameters>(Prepare(context, updates, ui_config, camera));
     const auto table      = graph.ImportToken("Raster.bindless", parameters->bindless.Get());
     RenderGraph::PassHandle publication{};
     if (parameters->update_bindless_array) {
@@ -173,13 +173,14 @@ ShadowDepthPass::GraphPassHandle ShadowDepthPass::AddToGraph(
 RenderGraph::PassHandle ProbeUpdatePass::AddToGraph(
     RenderGraph&        graph,
     RasterContext&      context,
+    const SceneUpdateBatch& updates,
     const RasterConfig& config,
     const Camera&       camera,
     uint64              frame_index,
     GraphResources      resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.ProbeUpdatePass");
-    auto parameters = std::make_shared<const RecordParameters>(Prepare(context, config, camera, frame_index));
+    auto parameters = std::make_shared<const RecordParameters>(Prepare(context, updates, config, camera, frame_index));
     if (!parameters->enabled) {
         return {};
     }
@@ -514,6 +515,7 @@ void LightingPass::AddToGraph(
 void SkyboxPass::AddToGraph(
     RenderGraph& graph,
     const RasterContext& context,
+    const SceneUpdateBatch& updates,
     const RasterConfig& config,
     const Camera& camera,
     GraphResources resources,
@@ -523,8 +525,8 @@ void SkyboxPass::AddToGraph(
     auto prepared = graph.AddSetupPass(
         "Skybox.Prepare",
         uint8{0},
-        [this, &context, &config, &camera, clear_depth](const uint8&) {
-            auto parameters = Prepare(context, config, camera);
+        [this, &context, &updates, &config, &camera, clear_depth](const uint8&) {
+            auto parameters = Prepare(context, updates, config, camera);
             parameters.clear_depth = clear_depth;
             return parameters;
         }
@@ -1007,90 +1009,6 @@ RenderGraph::PassHandle BloomPass::AddRecordPasses(
         },
         [this, prepared](CommandList& commands) {
             RecordApply(commands, prepared.Get());
-        },
-        RenderGraph::PassRecordPolicy::ParallelAllowed
-    );
-}
-
-void TonemappingPass::AddToGraph(
-    RenderGraph& graph,
-    const RasterContext& context,
-    const RasterConfig& ui_config,
-    TextureWithHandle input_image,
-    GraphResources resources
-) {
-    MOER_PROFILE_SCOPE("Raster.AddToGraph.TonemappingPass");
-    auto prepared = graph.AddSetupPass(
-        "Tonemapping.Prepare",
-        std::move(input_image),
-        [this, &context, &ui_config](const TextureWithHandle& input) {
-            return Prepare(context, ui_config, input);
-        }
-    );
-    if (!prepared.IsValid()) {
-        return;
-    }
-
-    AddRecordPasses(graph, resources, prepared);
-}
-
-RenderGraph::PassHandle TonemappingPass::AddRecordPasses(
-    RenderGraph& graph, GraphResources resources, RGPreparedValue<RecordParameters> prepared
-) {
-    graph.AddRecordPass(
-        "Tonemapping.ClearHistogram",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
-                .Write(resources.histogram, RenderGraph::BufferAccessType::TransferDestination);
-        },
-        [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "Tonemapping.ClearHistogram", [&] {
-                RecordClear(cmd_list, prepared.Get());
-            });
-        },
-        RenderGraph::PassRecordPolicy::ParallelAllowed
-    );
-    graph.AddRecordPass(
-        "Tonemapping.BuildHistogram",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
-                .Read(resources.input, RenderGraph::TextureAccessType::Sampled)
-                .ReadWrite(resources.histogram, RenderGraph::BufferAccessType::Storage);
-        },
-        [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "Tonemapping.BuildHistogram", [&] {
-                RecordHistogram(cmd_list, prepared.Get());
-            });
-        },
-        RenderGraph::PassRecordPolicy::ParallelAllowed
-    );
-    graph.AddRecordPass(
-        "Tonemapping.CalculateExposure",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Compute)
-                .Read(resources.histogram, RenderGraph::BufferAccessType::ShaderRead)
-                .ReadWrite(resources.exposure, RenderGraph::BufferAccessType::Storage);
-        },
-        [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "Tonemapping.CalculateExposure", [&] {
-                RecordExposure(cmd_list, prepared.Get());
-            });
-        },
-        RenderGraph::PassRecordPolicy::ParallelAllowed
-    );
-    return graph.AddRecordPass(
-        "Tonemapping.Apply",
-        [resources](RenderGraph::PassBuilder& builder) {
-            builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Graphics)
-                .Read(resources.input, RenderGraph::TextureAccessType::Sampled)
-                .Read(resources.histogram, RenderGraph::BufferAccessType::ShaderRead)
-                .Read(resources.exposure, RenderGraph::BufferAccessType::ShaderRead)
-                .Write(resources.tonemapping_output, RenderGraph::TextureAccessType::ColorAttachment);
-        },
-        [this, prepared](CommandList& cmd_list) {
-            RecordWithPassMarker(cmd_list, "Tonemapping.Apply", [&] {
-                RecordTonemapping(cmd_list, prepared.Get());
-            });
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );

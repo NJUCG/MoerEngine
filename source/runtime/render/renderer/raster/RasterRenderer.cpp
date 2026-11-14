@@ -201,6 +201,7 @@ struct LightingUploadRecordParameters {
 
 [[nodiscard]] static LightingUploadRecordParameters PrepareGlobalLightingData(
     RasterContext&      context,
+    const SceneUpdateBatch& updates,
     const RasterConfig& ui_config,
     const Camera&       camera
 ) {
@@ -209,7 +210,7 @@ struct LightingUploadRecordParameters {
     LightingData* lighting_data = &prepared_data;
 
     lighting_data->clip2world      = Transpose(camera.GetViewProjectionMatrixInv());
-    lighting_data->light_count     = context.GetSceneUpdates().light_count;
+    lighting_data->light_count     = updates.light_count;
     lighting_data->camera_position = camera.GetPosition();
 
     // Shadow Parameters
@@ -366,6 +367,7 @@ public:
     void AddToGraph(
         RenderGraph&                                  graph,
         RasterContext&                                context,
+        const SceneUpdateBatch&                       updates,
         const RasterConfig&                           config,
         const Camera&                                 camera,
         GraphResources                                resources,
@@ -374,8 +376,8 @@ public:
         auto prepared = graph.AddSetupPass(
             "UploadLightingData.Prepare",
             uint8{0},
-            [&context, &config, &camera](const uint8&) {
-                return PrepareGlobalLightingData(context, config, camera);
+            [&context, &updates, &config, &camera](const uint8&) {
+                return PrepareGlobalLightingData(context, updates, config, camera);
             },
             setup_dependencies
         );
@@ -689,7 +691,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         scene_extent_request.immediate = true;
     }
     (void)scene_render_extent_tracker.Observe(scene_extent_request);
-    raster_context.BeginSceneFrame(frame_packet.scene_updates);
 
     if (time == 0) {
         const uint32 frame_thread_id = IsCurrentlyRenderThread() ? GetRenderThreadId() : GetGameThreadId();
@@ -945,8 +946,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         raster_commit_view_proj = camera.GetViewProjectionMatrix();
         raster_commit_aa_phase  = smaa_t2x_phase;
         raster_commit_aa_mode = raster_config.aa_mode;
-        raster_context.Update(gaussian_display_context ?
-            std::clamp(camera.GetDeltaTime(), 0.f, .1f) : camera.GetDeltaTime());
+        const float frame_time = gaussian_display_context ?
+            std::clamp(camera.GetDeltaTime(), 0.f, .1f) : camera.GetDeltaTime();
         auto& status = feedback.status.emplace();
         status.cooperative_ops_status = cooperative_ops_pass->Prepare(raster_config.cooperative_ops_enabled);
 
@@ -1028,7 +1029,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             RenderGraph::TextureHandle aa_output;
             RenderGraph::TextureHandle bloom_downsample_chain;
             RenderGraph::TextureHandle bloom_upsample_chain;
-            RenderGraph::BufferHandle  tonemapping_histogram;
             RenderGraph::BufferHandle  tonemapping_exposure;
             RenderGraph::TextureHandle tonemapping_output;
             RenderGraph::TextureHandle selected_framebuffer;
@@ -1039,6 +1039,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
         shadow_depth_pass->SetGaussians(
             raster_context,
+            scene_updates,
             has_meshes && has_visible_gaussians ? render_scene->GetGaussianGpuScene() : nullptr,
             frame_packet.gaussian_view_settings,
             frame_packet.active_viewport_mode == EEditorViewportMode::Scene,
@@ -1187,9 +1188,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 );
                 graph_resources.bloom_upsample_chain =
                     import_texture("bloom_upsample_chain", raster_context.textures.bloom_upsample_chain.tex);
-                const auto& tonemapping_histogram = tonemapping_pass->GetHistogramBuffer();
-                graph_resources.tonemapping_histogram =
-                    ImportRasterBuffer(graph, "tonemapping_histogram", tonemapping_histogram.Get());
                 const auto& tonemapping_exposure = tonemapping_pass->GetExposureBuffer();
                 graph_resources.tonemapping_exposure =
                     ImportRasterBuffer(graph, "tonemapping_exposure", tonemapping_exposure.Get());
@@ -1245,11 +1243,12 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 }
                 if (has_meshes) {
                     shadow_depth_handle = shadow_depth_pass->AddToGraph(
-                        graph, raster_context, raster_config, camera, {.shadow_maps = graph_resources.shadow_maps}
+                        graph, raster_context, scene_updates, raster_config, camera, {.shadow_maps = graph_resources.shadow_maps}
                     );
                     probe_update_pass->AddToGraph(
                         graph,
                         raster_context,
+                        scene_updates,
                         raster_config,
                         camera,
                         time,
@@ -1259,6 +1258,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     LightingUploadPass{}.AddToGraph(
                         graph,
                         raster_context,
+                        scene_updates,
                         raster_config,
                         camera,
                         {.lighting_data = graph_resources.lighting_data}
@@ -1325,6 +1325,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 skybox_pass->AddToGraph(
                     graph,
                     raster_context,
+                        scene_updates,
                     raster_config,
                     camera,
                     {
@@ -1519,8 +1520,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     raster_context,
                     raster_config,
                     processing_image,
+                    frame_time,
                     {.input              = processing_image_resource,
-                     .histogram          = graph_resources.tonemapping_histogram,
                      .exposure           = graph_resources.tonemapping_exposure,
                      .tonemapping_output = graph_resources.tonemapping_output}
                 );
@@ -1821,7 +1822,6 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             feedback.displayable_frame_buffer_names.emplace_back(view.GetTexture()->GetName());
         }
     }
-    raster_context.EndSceneFrame();
     return feedback;
 }
 

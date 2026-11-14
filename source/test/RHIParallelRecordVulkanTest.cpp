@@ -4,6 +4,7 @@
 #include "platform/Platform.h"
 #include "renderer/raster/BloomPass.h"
 #include "renderer/raster/TonemappingPass.h"
+#include "renderer/raster/RasterTool.h"
 #include "renderer/raytracing/RaytracingExportSubmission.h"
 #include "renderer/raytracing/AntiAliasPass.h"
 #include "rendergraph/RenderGraph.h"
@@ -2669,7 +2670,7 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
     auto& device = RenderDevice::Get();
     constexpr uint32 width = 16;
     constexpr uint32 height = 16;
-    auto             run    = [&](bool record_parallel) {
+    auto             run    = [&](bool record_parallel, bool merged) {
         TonemappingPass pass(device, manager, PF_R32G32B32A32_SFLOAT);
         auto            input = device.CreateTexture(
             "tonemap_test_input",
@@ -2688,7 +2689,6 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         TonemappingPass::RecordParameters params{};
         params.input                 = {input, 0, {}};
         params.output                = {output, 0, {}};
-        params.histogram             = pass.GetHistogramBuffer();
         params.exposure              = pass.GetExposureBuffer();
         params.histogram_groups      = uint3(1, 1, 1);
         params.shader.resolution     = uint2(width, height);
@@ -2709,12 +2709,9 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         ae.frame_time                = 0.1f;
         ae.diff_log2_threshold       = 0.01f;
 
-        RenderGraph                     graph("CompiledTonemapping");
+        RenderGraph                     graph("CompiledTonemapping", RenderGraph::QueueTopology::FromRHI());
         TonemappingPass::GraphResources resources{
                            .input     = graph.ImportTexture("Input", input, {}),
-                           .histogram = graph.ImportBuffer(
-                "Histogram", params.histogram, {.byte_size = params.histogram->GetByteSize()}
-            ),
                            .exposure = graph.ImportBuffer(
                 "Exposure", params.exposure, {.byte_size = params.exposure->GetByteSize()}
             ),
@@ -2728,14 +2725,8 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
                 RenderGraph::AccessMode::None
             );
         }
-        for (auto buffer : {resources.histogram, resources.exposure}) {
-            graph.SetInitialState(
-                buffer,
-                RenderGraph::BufferBoundary::Undefined,
-                RenderGraph::QueueRole::None,
-                RenderGraph::AccessMode::None
-            );
-        }
+        graph.SetInitialState(resources.exposure, RenderGraph::BufferBoundary::Undefined,
+            RenderGraph::QueueRole::None, RenderGraph::AccessMode::None);
         graph.AddRecordPass(
             "Upload",
             [=](RenderGraph::PassBuilder& builder) {
@@ -2798,20 +2789,20 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         auto prepared = graph.AddSetupPass("Prepare", params, [](const auto& parameters) {
             return parameters;
         });
-        pass.AddRecordPasses(graph, resources, prepared);
+        const auto tonemapping = pass.AddRecordPasses(graph, resources, prepared);
         ReadbackFuture output_readback, histogram_readback, exposure_readback;
         graph.AddRecordPass(
             "Readback",
             [=](RenderGraph::PassBuilder& builder) {
                 builder.ExecuteOn(RenderGraph::QueueRole::Graphics, RenderGraph::GpuWorkType::Transfer)
                     .Read(resources.tonemapping_output, RenderGraph::TextureAccessType::TransferSource)
-                    .Read(resources.histogram, RenderGraph::BufferAccessType::TransferSource)
+                    .Read(tonemapping.histogram, RenderGraph::BufferAccessType::TransferSource)
                     .Read(resources.exposure, RenderGraph::BufferAccessType::TransferSource)
                     .SideEffect();
             },
             [&](CommandList& commands) {
                 output_readback    = commands.Readback(output->GetView());
-                histogram_readback = commands.Readback(params.histogram->GetView());
+                histogram_readback = commands.Readback(graph.GetPhysicalBuffer(tonemapping.histogram)->GetView());
                 exposure_readback  = commands.Readback(params.exposure->GetView());
             },
             RenderGraph::PassRecordPolicy::ParallelAllowed
@@ -2828,23 +2819,23 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
             RenderGraph::QueueRole::Graphics,
             RenderGraph::AccessMode::Read
         );
-        for (auto buffer : {resources.histogram, resources.exposure}) {
-            graph.Export(
-                buffer,
-                RenderGraph::BufferAccessType::TransferSource,
-                RenderGraph::QueueRole::Graphics,
-                RenderGraph::AccessMode::Read
-            );
-        }
-        if (!graph.Compile() ||
-            !graph.ExecuteFrontendRecordingPlan(
-                {},
-                record_parallel,
-                {},
-                RenderGraph::ActiveRecordingOptions{.enabled = true, .state_ownership = ERHIResourceStateOwnership::Compiled}
-            )) {
+        graph.Export(resources.exposure, RenderGraph::BufferAccessType::TransferSource,
+            RenderGraph::QueueRole::Graphics, RenderGraph::AccessMode::Read);
+        if (!graph.Compile())
             throw std::runtime_error("tonemapping graph failed: " + graph.GetCompileError());
+        bool recorded = false;
+        if (merged) {
+            CommandList commands(EQueueType::Graphics);
+            commands.SetResourceStateOwnership(ERHIResourceStateOwnership::Compiled);
+            recorded = graph.RecordAndMergeFrontendCommands(commands, record_parallel);
+            if (recorded)
+                RHIExecutor::Get().Submit(EQueueType::Graphics, commands.Submit(), ERHIExecSubmitFlags::FlushGPU);
+        } else {
+            recorded = graph.ExecuteFrontendRecordingPlan({}, record_parallel, {},
+                RenderGraph::ActiveRecordingOptions{.enabled = true});
         }
+        if (!recorded)
+            throw std::runtime_error("tonemapping graph failed: " + graph.GetCompileError());
         RHIExecutor::Get().Sync(ERHISyncDepth::RHI);
         const auto histogram = histogram_readback.Get().CopyAs<uint32>();
         const auto exposure  = exposure_readback.Get().CopyAs<float>();
@@ -2863,8 +2854,8 @@ void RunCompiledTonemapping(ShaderManager& manager, bool parallel, bool with_blo
         result->push_back(exposure->front());
         return *result;
     };
-    const auto reference = run(false);
-    const auto compiled  = run(parallel);
+    const auto reference = run(false, false);
+    const auto compiled  = run(parallel, true);
     if (reference.size() != compiled.size()) {
         throw std::runtime_error("compiled tonemapping output size mismatch");
     }

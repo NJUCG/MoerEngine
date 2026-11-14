@@ -565,9 +565,8 @@ ShadowDepthPass::ShadowDepthPass(RasterContext& context) : m_culling_pass(contex
     );
 }
 
-bool ShadowDepthPass::RefreshShadowCasterBounds(RasterContext& context) {
+bool ShadowDepthPass::RefreshShadowCasterBounds(const SceneUpdateBatch& scene_updates) {
     MOER_PROFILE_SCOPE("Raster.Shadow.RefreshCasterBounds");
-    const SceneUpdateBatch& scene_updates = context.GetSceneUpdates();
     if (!scene_updates.scene_ready) {
         if (!m_shadow_caster_bounds_valid && m_shadow_caster_bounds.empty()) {
             return false;
@@ -713,8 +712,8 @@ bool ShadowDepthPass::PreparePointShadowResources(RasterContext& context, const 
     return bindless_changed;
 }
 
-std::optional<ecs::CLightDirectional> ShadowDepthPass::GetMainLightDirection(RasterContext& context) {
-    const auto& light = context.GetSceneUpdates().main_directional_light;
+std::optional<ecs::CLightDirectional> ShadowDepthPass::GetMainLightDirection(const SceneUpdateBatch& updates) {
+    const auto& light = updates.main_directional_light;
     if (!light) {
         LOG_ERROR(
             "No directional light found in the scene. Please ensure at least one entity has "
@@ -726,8 +725,8 @@ std::optional<ecs::CLightDirectional> ShadowDepthPass::GetMainLightDirection(Ras
     return light;
 }
 
-std::optional<ecs::CLightPoint> ShadowDepthPass::GetMainPointLight(RasterContext& context) {
-    const auto& light = context.GetSceneUpdates().main_point_light;
+std::optional<ecs::CLightPoint> ShadowDepthPass::GetMainPointLight(const SceneUpdateBatch& updates) {
+    const auto& light = updates.main_point_light;
     if (!light) {
         LOG_ERROR(
             "No point light found in the scene. Please ensure at least one entity has CLightPoint component."
@@ -740,6 +739,7 @@ std::optional<ecs::CLightPoint> ShadowDepthPass::GetMainPointLight(RasterContext
 
 void ShadowDepthPass::PrepareCSM(
     RasterContext& context,
+    const SceneUpdateBatch& updates,
     const RasterConfig& ui_config,
     const Camera& camera,
     RecordParameters& parameters
@@ -751,7 +751,7 @@ void ShadowDepthPass::PrepareCSM(
     parameters.update_bindless_array |= PrepareCSMResources(context, ui_config);
 
     // Light
-    auto light = GetMainLightDirection(context);
+    auto light = GetMainLightDirection(updates);
     if (!light) {
         return;
     }
@@ -940,6 +940,7 @@ void ShadowDepthPass::PrepareCSM(
 
 void ShadowDepthPass::SetGaussians(
     RasterContext&          context,
+    const SceneUpdateBatch& updates,
     const GaussianGpuScene* scene,
     GaussianViewSettings    settings,
     bool                    editor_view,
@@ -958,7 +959,6 @@ void ShadowDepthPass::SetGaussians(
         active |= (instance.range.w & 12u) != 0;
         if ((instance.range.w & 4u) && i < scene->GetBounds().size()) bounds.push_back(scene->GetBounds()[i]);
     }
-    const auto& updates = context.GetSceneUpdates();
     const bool  valid_light =
         (config.shadow_map_mode == EShadowMapMode::POINT_CUBE && updates.main_point_light.has_value()) ||
         ((config.shadow_map_mode == EShadowMapMode::CSM ||
@@ -1005,6 +1005,7 @@ Array<TextureRef> ShadowDepthPass::GetGaussianShadowTextures(RasterContext& cont
 }
 ShadowDepthPass::RecordParameters ShadowDepthPass::Prepare(
     RasterContext& context,
+    const SceneUpdateBatch& updates,
     const RasterConfig& ui_config,
     const Camera& camera
 ) {
@@ -1015,8 +1016,8 @@ ShadowDepthPass::RecordParameters ShadowDepthPass::Prepare(
         .point_shadow_view_matrices = m_point_shadow_view_matrices
     };
 
-    const bool  shadow_caster_bounds_changed = RefreshShadowCasterBounds(context);
-    const auto& scene_tick_state             = context.GetSceneUpdates().tick_state;
+    const bool  shadow_caster_bounds_changed = RefreshShadowCasterBounds(updates);
+    const auto& scene_tick_state             = updates.tick_state;
     const bool  main_light_changed =
         scene_tick_state.updated_light || scene_tick_state.created_light || scene_tick_state.destroyed_light;
     if (shadow_caster_bounds_changed || main_light_changed) {
@@ -1033,38 +1034,30 @@ ShadowDepthPass::RecordParameters ShadowDepthPass::Prepare(
         case EShadowMapMode::NONE:
             break;
         case EShadowMapMode::POINT_CUBE:
-            PreparePointShadows(context, ui_config, camera, parameters);
+            PreparePointShadows(context, updates, ui_config, camera, parameters);
             break;
         case EShadowMapMode::CSM:
         case EShadowMapMode::CSM_AUTO:
-            PrepareCSM(context, ui_config, camera, parameters);
+            PrepareCSM(context, updates, ui_config, camera, parameters);
             break;
         default:
             LOG_ERROR("Shadow map mode {} not supported", static_cast<int>(ui_config.shadow_map_mode));
             break;
     }
-    if (m_gaussian_scene) parameters.gaussian = m_gaussian_pass->Prepare(context, ui_config, camera, *m_gaussian_scene, m_gaussian_settings, m_gaussian_editor_view);
+    if (m_gaussian_scene) parameters.gaussian = m_gaussian_pass->Prepare(context, updates, ui_config, camera, *m_gaussian_scene, m_gaussian_settings, m_gaussian_editor_view);
     return parameters;
-}
-
-void ShadowDepthPass::Process(
-    RasterContext& context,
-    const RasterConfig& ui_config,
-    const Camera& camera
-) {
-    const auto parameters = Prepare(context, ui_config, camera);
-    Record(context.cmd_list, parameters);
 }
 
 void ShadowDepthPass::PreparePointShadows(
     RasterContext&      context,
+    const SceneUpdateBatch& updates,
     const RasterConfig& config,
     const Camera&       camera,
     RecordParameters&   parameters
 ) {
     parameters.update_bindless_array |= PreparePointShadowResources(context, config);
 
-    auto light = GetMainPointLight(context);
+    auto light = GetMainPointLight(updates);
     if (!light) {
         return;
     }
@@ -1186,39 +1179,6 @@ GeometryPassBindlessParam ShadowDepthPass::BuildDrawParameters(
     param.enable_alpha_test             = config.geometry_enable_alpha_test ? 1 : 0;
     param.alpha_test_blend_pixel_cutoff = config.geometry_alpha_test_blend_pixel_cutoff;
     return param;
-}
-
-void ShadowDepthPass::Record(CommandList& cmd_list, const RecordParameters& parameters) {
-    if (parameters.update_bindless_array) {
-        cmd_list.UpdateBindlessArray(parameters.bindless);
-    }
-    for (const DrawBatch& batch : parameters.draws) {
-        ScopedGpuMarker marker(cmd_list, batch.marker_name, GpuMarkerPalette::Subpass());
-        m_culling_pass.Record(cmd_list, batch.culling);
-        if (batch.multiview) {
-            RecordPointShadowMultiview(cmd_list, parameters, batch);
-        } else {
-            RecordShadowDraw(cmd_list, parameters, batch);
-        }
-    }
-    if (parameters.gaussian) m_gaussian_pass->Record(cmd_list, *parameters.gaussian);
-}
-
-void ShadowDepthPass::RecordPointShadowMultiview(
-    CommandList& cmd_list,
-    const RecordParameters& parameters,
-    const DrawBatch& batch
-) {
-    cmd_list.CopyFrom(
-        std::span<const byte>(
-            reinterpret_cast<const byte*>(&batch.multiview_matrices),
-            sizeof(PointShadowViewMatrices)
-        ),
-        parameters.point_shadow_view_matrices->GetView(),
-        "Raster::PointShadowMultiviewMatrices"
-    );
-
-    RecordPointShadowMultiviewDraw(cmd_list, parameters, batch);
 }
 
 void ShadowDepthPass::RecordPointShadowMultiviewDraw(
