@@ -62,6 +62,12 @@ Texture2D SMAAGetTexture2D(uint handle_idx) {
 
 // vertex shader
 
+void GenerateSmaaFullscreenVertex(uint vertex_index, out float4 clip_position, out float2 uv) {
+    uv = float2((vertex_index << 1) & 2, vertex_index & 2);
+    clip_position = float4(uv * 2.0f - 1.0f, 0.0f, 1.0f);
+    uv.y = 1 - uv.y;
+}
+
 struct SMAAEdgeDetectionVS_Output {
     float4 Pos : SV_POSITION;
     [[vk::location(0)]] float2 UV : TEXCOORD0;
@@ -70,9 +76,7 @@ struct SMAAEdgeDetectionVS_Output {
 
 SMAAEdgeDetectionVS_Output SMAAEdgeDetectionVS_Wrapper(uint VertexIndex : SV_VertexID) {
     SMAAEdgeDetectionVS_Output output = (SMAAEdgeDetectionVS_Output)0;
-    output.UV = float2((VertexIndex << 1) & 2, VertexIndex & 2);
-    output.Pos = float4(output.UV * 2.0f - 1.0f, 0.0f, 1.0f);
-    output.UV.y = 1 - output.UV.y;
+    GenerateSmaaFullscreenVertex(VertexIndex, output.Pos, output.UV);
     
     SMAAEdgeDetectionVS(output.UV, output.offset);
 
@@ -88,9 +92,7 @@ struct SMAABlendingWeightCalculationVS_Output {
 
 SMAABlendingWeightCalculationVS_Output SMAABlendingWeightCalculationVS_Wrapper(uint VertexIndex : SV_VertexID) {
     SMAABlendingWeightCalculationVS_Output output = (SMAABlendingWeightCalculationVS_Output)0;
-    output.UV = float2((VertexIndex << 1) & 2, VertexIndex & 2);
-    output.Pos = float4(output.UV * 2.0f - 1.0f, 0.0f, 1.0f);
-    output.UV.y = 1 - output.UV.y;
+    GenerateSmaaFullscreenVertex(VertexIndex, output.Pos, output.UV);
     
     SMAABlendingWeightCalculationVS(output.UV, output.pixcoord, output.offset);
 
@@ -105,9 +107,7 @@ struct SMAANeighborhoodBlendingVS_Output {
 
 SMAANeighborhoodBlendingVS_Output SMAANeighborhoodBlendingVS_Wrapper(uint VertexIndex : SV_VertexID) {
     SMAANeighborhoodBlendingVS_Output output = (SMAANeighborhoodBlendingVS_Output)0;
-    output.UV = float2((VertexIndex << 1) & 2, VertexIndex & 2);
-    output.Pos = float4(output.UV * 2.0f - 1.0f, 0.0f, 1.0f);
-    output.UV.y = 1 - output.UV.y;
+    GenerateSmaaFullscreenVertex(VertexIndex, output.Pos, output.UV);
     
     SMAANeighborhoodBlendingVS(output.UV, output.offset);
 
@@ -121,9 +121,7 @@ struct SMAAResolveVS_Output {
 
 SMAAResolveVS_Output SMAAResolveVS_Wrapper(uint VertexIndex : SV_VertexID) {
     SMAAResolveVS_Output output = (SMAAResolveVS_Output)0;
-    output.UV = float2((VertexIndex << 1) & 2, VertexIndex & 2);
-    output.Pos = float4(output.UV * 2.0f - 1.0f, 0.0f, 1.0f);
-    output.UV.y = 1 - output.UV.y;
+    GenerateSmaaFullscreenVertex(VertexIndex, output.Pos, output.UV);
 
     return output;
 }
