@@ -2,6 +2,7 @@
 #include "CityHash.h"
 #include "PicoSHA2.h"
 #include "misc/Types.h"
+#include <sstream>
 #include <string>
 
 static_assert(picosha2::k_digest_size == 32);
@@ -32,26 +33,22 @@ std::string Hash64City::ToString() {
 }
 
 void Hash64City::FromString(std::string_view& src) {
-    auto* start = (Moer::uint64*)(&hash_code[0]);
-    *start      = CityHash64(src.data(), src.size());
+    FromData(reinterpret_cast<const Moer::uint8*>(src.data()), src.size());
 }
 void Hash64City::FromData(const Moer::uint8* data, size_t size) {
-
-    auto* start = (Moer::uint64*)(&hash_code[0]);
-    *start      = CityHash64((const char*)data, size);
+    hash_code = std::bit_cast<decltype(hash_code)>(CityHash64(reinterpret_cast<const char*>(data), size));
 }
 void Hash64City::Update(std::string_view& src) {
-    Moer::uint64 src_seed           = *(Moer::uint64*)(&hash_code[0]);
-    *(Moer::uint64*)(&hash_code[0]) = CityHash64WithSeed(src.data(), src.length(), src_seed);
+    const Moer::uint64 seed = std::bit_cast<Moer::uint64>(hash_code);
+    hash_code = std::bit_cast<decltype(hash_code)>(CityHash64WithSeed(src.data(), src.size(), seed));
 }
 void Hash64City::Update(const Moer::uint8* data, Moer::uint32 size) {
-    Moer::uint64 src_seed           = *(Moer::uint64*)(&hash_code[0]);
-    *(Moer::uint64*)(&hash_code[0]) = CityHash64WithSeed(reinterpret_cast<const char*>(data), size, src_seed);
+    Update(reinterpret_cast<const char*>(data), size);
 }
 
 void Hash64City::Update(const char* data, Moer::uint32 size) {
-    Moer::uint64 src_seed           = *(Moer::uint64*)(&hash_code[0]);
-    *(Moer::uint64*)(&hash_code[0]) = CityHash64WithSeed(data, size, src_seed);
+    std::string_view text(data, size);
+    Update(text);
 }
 
 std::atomic<Moer::uint32> HashedName::s_size = 0;

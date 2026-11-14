@@ -8,7 +8,7 @@
 
 #include "misc/Types.h"
 #include <atomic>
-#include <cstring>
+#include <bit>
 #include <functional>
 #include <mutex>
 #include <shared_mutex>
@@ -92,10 +92,10 @@ inline Moer::uint32 GetHash(Moer::int64 target) {
 }
 
 inline Moer::uint32 GetHash(float value) {
-    return *(Moer::uint32*)&value;
+    return std::bit_cast<Moer::uint32>(value);
 }
 inline Moer::uint32 GetHash(double value) {
-    return GetHash(*(Moer::uint64*)&value);
+    return GetHash(std::bit_cast<Moer::uint64>(value));
 }
 inline Moer::uint32 GetHash(const char* value) {
     return std::hash<std::string_view>{}(std::string_view(value));
@@ -168,21 +168,12 @@ private:
 struct SHA256Hash {
 public:
     Moer::StaticArray<Moer::uint8, 32> hash_code{};
-    SHA256Hash() {
-        for (unsigned char& i : hash_code) {
-            i = 0;
-        }
-    }
+    SHA256Hash() = default;
     std::string ToString();
     void        FromString(std::string_view& src);
-    friend bool operator==(const SHA256Hash& lhs, const SHA256Hash& rhs) {
-        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) == 0;
-    }
-    friend bool operator!=(const SHA256Hash& lhs, const SHA256Hash& rhs) {
-        return !(lhs == rhs);
-    }
+    friend bool operator==(const SHA256Hash&, const SHA256Hash&) = default;
     friend bool operator<(const SHA256Hash& lhs, const SHA256Hash& rhs) {
-        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) < 0;
+        return lhs.hash_code < rhs.hash_code;
     }
 };
 
@@ -190,11 +181,7 @@ struct CORE_API Hash64City {
 public:
     Moer::StaticArray<Moer::uint8, 8> hash_code{};
 
-    Hash64City() {
-        for (unsigned char& i : hash_code) {
-            i = 0;
-        }
-    }
+    Hash64City() = default;
 
     std::string ToString();
     void        FromString(std::string_view& src);
@@ -203,14 +190,9 @@ public:
     void        Update(const Moer::uint8* data, Moer::uint32 size);
     //todo: Update() not utterly correct
     void        Update(const char* data, Moer::uint32 size);
-    friend bool operator==(const Hash64City& lhs, const Hash64City& rhs) {
-        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) == 0;
-    }
-    friend bool operator!=(const Hash64City& lhs, const Hash64City& rhs) {
-        return !(lhs == rhs);
-    }
+    friend bool operator==(const Hash64City&, const Hash64City&) = default;
     friend bool operator<(const Hash64City& lhs, const Hash64City& rhs) {
-        return std::memcmp(lhs.hash_code.data(), rhs.hash_code.data(), sizeof(lhs.hash_code)) < 0;
+        return lhs.hash_code < rhs.hash_code;
     }
 };
 static_assert(sizeof(Hash64City) == 8);
