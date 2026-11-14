@@ -50,6 +50,28 @@ void ReportIssue(
     }
 }
 
+void ReportSetResult(
+    OverrideReport&       _report,
+    OverrideIssueCallback _on_issue,
+    void*                 _context,
+    std::string_view      _name,
+    const CVarSetResult&  _result,
+    std::string_view      _fallback_detail
+) {
+    if (_result.Succeeded()) {
+        ++_report.applied_count;
+        return;
+    }
+    ReportIssue(
+        _report,
+        _on_issue,
+        _context,
+        _name,
+        _result.detail ? _result.detail : _fallback_detail,
+        _result.status
+    );
+}
+
 void ApplyTable(
     const toml::table&    _table,
     ESetSource            _source,
@@ -72,18 +94,7 @@ void ApplyTable(
         }
 
         const CVarSetResult result = SetValueFromString(key.str(), *value, _source);
-        if (result.Succeeded()) {
-            ++_report.applied_count;
-        } else {
-            ReportIssue(
-                _report,
-                _on_issue,
-                _context,
-                key.str(),
-                result.detail ? result.detail : "cvar override failed",
-                result.status
-            );
-        }
+        ReportSetResult(_report, _on_issue, _context, key.str(), result, "cvar override failed");
     }
 }
 
@@ -163,18 +174,7 @@ OverrideReport ApplyCommandLineOverrides(
         }
 
         const CVarSetResult result = SetValueFromString(name, value, ESetSource::CommandLine);
-        if (result.Succeeded()) {
-            ++report.applied_count;
-        } else {
-            ReportIssue(
-                report,
-                _on_issue,
-                _context,
-                name,
-                result.detail ? result.detail : "command-line cvar override failed",
-                result.status
-            );
-        }
+        ReportSetResult(report, _on_issue, _context, name, result, "command-line cvar override failed");
     }
     return report;
 }
