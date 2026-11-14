@@ -1,3 +1,4 @@
+#include "AoFrameResources.h"
 /**
  * 此文件应该只有在宏 WITH_CUDA 被设置的情况下使用
  * 
@@ -204,6 +205,7 @@ public:
     void Engine1_LoadTexturesToBuffers(
         TensorRTResource& res,
         uint32            ao_only_idx,
+        bool              has_previous_ao,
         bool              is_verbose,
         bool              is_force_ldr
     ) {
@@ -363,7 +365,8 @@ public:
                 copy_to_buf(res.motion, 2, device_mem_addr_map[name]);
 
             } else if (std::strcmp(name, "in_prev_ao") == 0) {
-                copy_to_buf((ao_only_idx ? res.ao : res.prev_ao), 1, device_mem_addr_map[name]);
+                const uint32 history_index = has_previous_ao ? ao_only_idx ^ 1u : ao_only_idx;
+                copy_to_buf(history_index ? res.prev_ao : res.ao, 1, device_mem_addr_map[name]);
 
             } else if (std::strcmp(name, "in_prev_embed") == 0) {
 
@@ -828,19 +831,15 @@ public:
 
     */
 
-    TextureWithHandle Process(RasterContext& context, const RasterConfig& ui_config, uint32 ao_only_idx) {
+    TextureWithHandle Process(RasterContext& context, const RasterConfig& ui_config, const AoFrameResources& frame) {
         assert(ui_config.ai_is_cuda_enabled);
         if (!context.cmd_list.IsEmpty()) {
             throw std::logic_error("TensorRT requires a submitted compiled graphics prefix");
         }
 
-        const bool  half        = ui_config.ao_half_resolution;
-        const auto& ao          = half ? context.textures.ao_output_ambient_only_half.tex :
-                                         context.textures.ao_output_ambient_only.tex;
-        const auto& previous_ao = half ? context.textures.ao_output_ambient_only_1_half.tex :
-                                         context.textures.ao_output_ambient_only_1.tex;
-        const auto& motion =
-            half ? context.textures.camera_motion_vector_half.tex : context.textures.camera_motion_vector.tex;
+        const auto& ao = frame.final_ao[0].tex;
+        const auto& previous_ao = frame.final_ao[1].tex;
+        const auto& motion = frame.camera_motion.tex;
         if (res->ao.moer_texture != ao || res->prev_ao.moer_texture != previous_ao ||
             res->motion.moer_texture != motion) {
             RecreateResource(
@@ -870,7 +869,9 @@ public:
 
         // engine1->LoadRandomValueToBuffers(*res);
         // engine1->LoadZeroToBuffers();
-        engine1->Engine1_LoadTexturesToBuffers(*res, ao_only_idx, false, ui_config.ai_trt_force_ldr);
+        engine1->Engine1_LoadTexturesToBuffers(
+            *res, frame.write_index, frame.has_previous_output, false, ui_config.ai_trt_force_ldr
+        );
         sync();
 
         engine1->Run(res->interop.stream_to_run);

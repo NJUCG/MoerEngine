@@ -596,14 +596,15 @@ void AoPass::AddToGraph(
     const RasterConfig& ui_config,
     const Camera& camera,
     uint64 frame_index,
+    AoFrameResources frame,
     GraphResources resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.AoPass");
     auto prepared = graph.AddSetupPass(
         "AmbientOcclusion.Prepare",
         uint8{0},
-        [this, &context, &ui_config, &camera, frame_index](const uint8&) {
-            return Prepare(context, ui_config, camera, frame_index);
+        [this, &context, &ui_config, &camera, frame_index, frame](const uint8&) {
+            return Prepare(context, ui_config, camera, frame_index, frame);
         }
     );
     if (!prepared.IsValid()) {
@@ -665,15 +666,15 @@ void AoPass::AddCompositeToGraph(
     RenderGraph&            graph,
     RasterContext&          context,
     const RasterConfig&     ui_config,
-    uint32                  ao_only_handle,
+    AoFrameResources        frame,
     CompositeGraphResources resources
 ) {
     const bool ssdo = ui_config.ao_mode == EAoMode::SSDO;
     auto prepared = graph.AddSetupPass(
         "AoComposite.Prepare",
         uint8{0},
-        [this, &context, &ui_config, ao_only_handle](const uint8&) {
-            return PrepareComposite(context, ui_config, ao_only_handle);
+        [this, &context, &ui_config, frame](const uint8&) {
+            return PrepareComposite(context, ui_config, frame);
         }
     );
     if (!prepared.IsValid()) {
@@ -707,19 +708,18 @@ void RtaoDenoiserPass::AddToGraph(
     RasterContext&      context,
     const RasterConfig& ui_config,
     const Camera&       camera,
-    uint32              ao_only_index,
+    AoFrameResources    frame,
     GraphResources      resources
 ) {
     MOER_PROFILE_SCOPE("Raster.AddToGraph.RtaoDenoiserPass");
-    if (!ui_config.rtao_denoiser_enable ||
-        (ui_config.ao_mode != EAoMode::RTAO && ui_config.ao_mode != EAoMode::RTAO_AO_ONLY)) {
+    if (!frame.denoise) {
         return;
     }
     auto prepared = graph.AddSetupPass(
         "RtaoDenoise.Prepare",
         uint8{0},
-        [this, &context, &ui_config, &camera, ao_only_index](const uint8&) {
-            return Prepare(context, ui_config, camera, ao_only_index);
+        [this, &context, &ui_config, &camera, frame](const uint8&) {
+            return Prepare(context, ui_config, camera, frame);
         }
     );
     if (!prepared.IsValid()) {
@@ -740,17 +740,6 @@ void RtaoDenoiserPass::AddToGraph(
             RecordWithPassMarker(cmd_list, "RtaoDenoise", [&] {
                 RecordDenoise(cmd_list, prepared.Get());
             });
-        },
-        RenderGraph::PassRecordPolicy::ParallelAllowed
-    );
-    graph.AddRecordPass(
-        "RtaoDenoise.Copy",
-        [=](RenderGraph::PassBuilder& builder) {
-            builder.Read(resources.history_write, RenderGraph::TextureAccessType::Sampled)
-                .Write(resources.ao_only, RenderGraph::TextureAccessType::ColorAttachment);
-        },
-        [this, prepared](CommandList& commands) {
-            RecordCopy(commands, prepared.Get());
         },
         RenderGraph::PassRecordPolicy::ParallelAllowed
     );

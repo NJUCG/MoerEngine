@@ -6,10 +6,12 @@
 #include "shader/ShaderPipeline.h"
 #include "shaderheaders/shared/raster/post_process/ShaderParameters.h"
 
+#include "AoFrameResources.h"
 #include "RasterConfig.h"
 #include "RasterResource.h"
 #include "RasterTool.h"
 #include "rendergraph/RenderGraph.h"
+#include <optional>
 
 namespace Moer::Render::Raster {
 
@@ -85,30 +87,17 @@ public:
         RenderGraph::TextureHandle indirect{};
     };
 
-    struct AoPassOutput {
-        uint32 ao_only;     // bindless hdl, for composite
-        uint32 ao_only_idx; // 0 or 1, for denoiser double-buffering
-    };
-
-    struct AoTextureSet {
-        TextureWithHandle ao_only;
-        TextureWithHandle camera_mv;
-        TextureWithHandle indirect;
-        TextureWithHandle geometry;
-    };
-
     struct RecordParameters {
-        EAoMode                       mode{EAoMode::NONE};
-        ERtaoSampleMode               rtao_sample_mode{ERtaoSampleMode::UNIFORM};
-        AoPassOutput                  output{};
-        AoTextureSet                  textures{};
-        BindlessArrayRef              bindless{};
-        BufferWithHandle              motion_vector_data{};
-        CameraMotionVectorData        motion_vector_upload{};
-        RaytracingTlasRef              tlas{};
-        AoPipelineBindlessParam        ao{};
-        RtaoPipelineBindlessParam      rtao{};
-        SsdoPipelineBindlessParam      ssdo{};
+        EAoMode                   mode{EAoMode::NONE};
+        ERtaoSampleMode           rtao_sample_mode{ERtaoSampleMode::UNIFORM};
+        AoFrameResources          frame{};
+        BindlessArrayRef          bindless{};
+        BufferWithHandle          motion_vector_data{};
+        CameraMotionVectorData    motion_vector_upload{};
+        RaytracingTlasRef         tlas{};
+        AoPipelineBindlessParam   ao{};
+        RtaoPipelineBindlessParam rtao{};
+        SsdoPipelineBindlessParam ssdo{};
     };
 
     struct CompositeRecordParameters {
@@ -177,106 +166,97 @@ public:
         camera_mv_data_in_gpu.hdl = context.bdls->AllocateBuffer(camera_mv_data_in_gpu.buf->GetView());
     }
 
-    [[nodiscard]] uint32 NextAoOnlyIndex() const noexcept {
-        return committed_ao_only_idx ^ 1u;
-    }
-
     [[nodiscard]] const BufferRef& GetMotionVectorDataBuffer() const {
         return camera_mv_data_in_gpu.buf;
     }
 
-    [[nodiscard]] AoPassOutput DescribeNextOutput(
-        RasterContext&       context,
-        const RasterConfig&  ui_config
+    [[nodiscard]] AoFrameResources SelectFrameResources(
+        const RasterContext& context,
+        const RasterConfig&  config
     ) const {
-        const bool half_res = ui_config.ao_half_resolution;
-        TextureWithHandle ao_only_full = context.textures.ao_output_ambient_only;
-        TextureWithHandle ao_only_half = context.textures.ao_output_ambient_only_half;
-        const uint32      ao_only_idx  = NextAoOnlyIndex();
-        if (ao_only_idx) {
-            ao_only_full = context.textures.ao_output_ambient_only_1;
-            ao_only_half = context.textures.ao_output_ambient_only_1_half;
+        const auto&      textures = context.textures;
+        AoFrameResources frame{};
+        frame.half_resolution = config.ao_half_resolution;
+        frame.denoise         = config.rtao_denoiser_enable &&
+                        (config.ao_mode == EAoMode::RTAO || config.ao_mode == EAoMode::RTAO_AO_ONLY);
+        frame.write_index = accepted_frame ? accepted_frame->write_index ^ 1u : 0u;
+        if (frame.half_resolution) {
+            frame.final_ao      = {textures.ao_output_ambient_only_half, textures.ao_output_ambient_only_1_half};
+            frame.geometry      = {textures.ao_history_geometry_half, textures.ao_history_geometry_1_half};
+            frame.noisy_ao      = textures.ao_noisy_half;
+            frame.camera_motion = textures.camera_motion_vector_half;
+            frame.indirect      = textures.ao_indirect_half;
+        } else {
+            frame.final_ao      = {textures.ao_output_ambient_only, textures.ao_output_ambient_only_1};
+            frame.geometry      = {textures.ao_history_geometry, textures.ao_history_geometry_1};
+            frame.noisy_ao      = textures.ao_noisy;
+            frame.camera_motion = textures.camera_motion_vector;
+            frame.indirect      = textures.ao_indirect;
         }
-        return AoPassOutput{
-            .ao_only     = (half_res ? ao_only_half : ao_only_full).hdl,
-            .ao_only_idx = ao_only_idx,
-        };
+        const auto size           = frame.Output().GetSize();
+        frame.has_previous_output = accepted_frame &&
+                                    accepted_frame->half_resolution == frame.half_resolution &&
+                                    accepted_frame->resolution.x == size.x && accepted_frame->resolution.y == size.y;
+        frame.has_denoised_history = frame.has_previous_output && accepted_frame->denoised;
+        return frame;
     }
 
     [[nodiscard]] RecordParameters Prepare(
-        RasterContext&       context,
-        const RasterConfig&  ui_config,
-        const Camera&        camera,
-        uint64               frame_idx
+        RasterContext&          context,
+        const RasterConfig&     ui_config,
+        const Camera&           camera,
+        uint64                  frame_idx,
+        const AoFrameResources& frame
     ) const {
         RecordParameters parameters{};
-        parameters.mode             = ui_config.ao_mode;
-        parameters.rtao_sample_mode = ui_config.rtao_sample_mode;
-        parameters.bindless         = context.bdls;
-        parameters.motion_vector_data = camera_mv_data_in_gpu;
-        parameters.motion_vector_upload.world2clip_prev = camera_mv_data_in_cpu.world2clip;
+        parameters.mode                                 = ui_config.ao_mode;
+        parameters.rtao_sample_mode                     = ui_config.rtao_sample_mode;
+        parameters.bindless                             = context.bdls;
+        parameters.motion_vector_data                   = camera_mv_data_in_gpu;
+        parameters.motion_vector_upload.world2clip_prev = Transpose(
+            accepted_frame ? accepted_frame->view_projection : camera.GetViewProjectionMatrix()
+        );
         parameters.motion_vector_upload.world2clip =
             Transpose(camera.GetViewProjectionMatrix());
-        parameters.output = DescribeNextOutput(context, ui_config);
-
-        TextureWithHandle ao_only_full = context.textures.ao_output_ambient_only;
-        TextureWithHandle ao_only_half = context.textures.ao_output_ambient_only_half;
-        if (parameters.output.ao_only_idx != 0u) {
-            ao_only_full = context.textures.ao_output_ambient_only_1;
-            ao_only_half = context.textures.ao_output_ambient_only_1_half;
-        }
-
-        if (ui_config.ao_half_resolution) {
-            parameters.textures.ao_only   = ao_only_half;
-            parameters.textures.camera_mv = context.textures.camera_motion_vector_half;
-            parameters.textures.indirect = context.textures.ao_indirect_half;
-            parameters.textures.geometry = parameters.output.ao_only_idx == 0 ?
-                context.textures.ao_history_geometry_half : context.textures.ao_history_geometry_1_half;
-        } else {
-            parameters.textures.ao_only   = ao_only_full;
-            parameters.textures.camera_mv = context.textures.camera_motion_vector;
-            parameters.textures.indirect = context.textures.ao_indirect;
-            parameters.textures.geometry = parameters.output.ao_only_idx == 0 ?
-                context.textures.ao_history_geometry : context.textures.ao_history_geometry_1;
-        }
+        parameters.frame = frame;
 
         {
-            auto& param = parameters.ao;
-            param.clip2world        = Transpose(camera.GetViewProjectionMatrixInv());
-            param.inv_resolution = float2(1.0f) / float2(parameters.textures.ao_only.GetSize());
-            param.ssao_intensity    = ui_config.ssao_intensity;
-            param.ssao_max_distance = ui_config.ssao_max_distance;
-            param.ssao_sample_count = ui_config.ssao_spp;
-            param.ssao_radius       = ui_config.ssao_sample_radius;
-            param.ao_mode           = static_cast<uint32>(ui_config.ao_mode);
-            param.normal_tex        = context.textures.normal.hdl;
-            param.depth_tex         = context.textures.depth_linear_sampler.hdl;
-            param.noise_tex         = context.textures.noise_tex.hdl;
+            auto& param                 = parameters.ao;
+            param.clip2world            = Transpose(camera.GetViewProjectionMatrixInv());
+            param.inv_resolution        = float2(1.0f) / float2(parameters.frame.EvaluationOutput().GetSize());
+            param.ssao_intensity        = ui_config.ssao_intensity;
+            param.ssao_max_distance     = ui_config.ssao_max_distance;
+            param.ssao_sample_count     = ui_config.ssao_spp;
+            param.ssao_radius           = ui_config.ssao_sample_radius;
+            param.ao_mode               = static_cast<uint32>(ui_config.ao_mode);
+            param.normal_tex            = context.textures.normal.hdl;
+            param.depth_tex             = context.textures.depth_linear_sampler.hdl;
+            param.noise_tex             = context.textures.noise_tex.hdl;
             param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
         }
         {
-            auto& param = parameters.rtao;
-            param.clip2world         = Transpose(camera.GetViewProjectionMatrixInv());
-            param.frame_idx          = frame_idx;
-            param.normal_tex         = context.textures.normal.hdl;
-            param.depth_tex          = context.textures.depth_nearest_sampler.hdl;
-            param.spp                = ui_config.rtao_spp;
-            param.resolution         = float2(parameters.textures.ao_only.GetSize());
-            param.inv_resolution     = float2(1.0) / param.resolution;
-            param.ray_trace_distance = ui_config.rtao_ray_trace_distance;
-            param.intensity          = ui_config.rtao_intensity;
+            auto& param                 = parameters.rtao;
+            param.clip2world            = Transpose(camera.GetViewProjectionMatrixInv());
+            param.frame_idx             = frame_idx;
+            param.normal_tex            = context.textures.normal.hdl;
+            param.depth_tex             = context.textures.depth_nearest_sampler.hdl;
+            param.spp                   = ui_config.rtao_spp;
+            param.resolution            = float2(parameters.frame.EvaluationOutput().GetSize());
+            param.inv_resolution        = float2(1.0) / param.resolution;
+            param.ray_trace_distance    = ui_config.rtao_ray_trace_distance;
+            param.intensity             = ui_config.rtao_intensity;
             param.camera_mv_data_handle = camera_mv_data_in_gpu.hdl;
             param.noise_tex             = context.textures.noise_tex.hdl;
-            param.depth_tex_resolution  =
+            param.depth_tex_resolution =
                 float2(context.textures.depth_nearest_sampler.GetSize());
             if (context.rt_scene()) {
                 parameters.tlas = context.rt_scene()->GetTlas();
             }
         }
         {
-            auto& param = parameters.ssdo;
-            param.clip2world = Transpose(camera.GetViewProjectionMatrixInv());
-            param.inv_resolution = float2(1.0f) / float2(parameters.textures.ao_only.GetSize());
+            auto& param                   = parameters.ssdo;
+            param.clip2world              = Transpose(camera.GetViewProjectionMatrixInv());
+            param.inv_resolution          = float2(1.0f) / float2(parameters.frame.EvaluationOutput().GetSize());
             param.ssdo_sample_count       = ui_config.ssao_spp;
             param.ssdo_radius             = ui_config.ssdo_sample_radius;
             param.ssdo_max_distance       = ui_config.ssdo_max_distance;
@@ -303,11 +283,6 @@ public:
         );
     }
 
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
-        RecordUpload(cmd_list, parameters);
-        RecordEvaluate(cmd_list, parameters);
-    }
-
     void RecordEvaluate(CommandList& cmd_list, const RecordParameters& parameters) {
 
         if (parameters.mode == EAoMode::RTAO || parameters.mode == EAoMode::RTAO_AO_ONLY) {
@@ -315,16 +290,16 @@ public:
                 parameters.rtao_sample_mode == ERtaoSampleMode::COSINE_WEIGHTED ?
                     rtao_pipeline_cosine :
                     rtao_pipeline_uniform;
-            const uint2 res = uint2(parameters.textures.ao_only.GetSize());
+            const uint2 res = uint2(parameters.frame.EvaluationOutput().GetSize());
             cmd_list.Compute(
                         active_pipeline,
                         parameters.rtao,
-                        parameters.textures.ao_only.tex,
-                        parameters.textures.camera_mv.tex,
+                        parameters.frame.EvaluationOutput().tex,
+                        parameters.frame.camera_motion.tex,
                         parameters.tlas,
-                        parameters.textures.geometry.tex,
+                        parameters.frame.CurrentGeometry().tex,
                         parameters.bindless
-                    )
+            )
                 .Dispatch(
                     uint3((res.x + 7u) / 8u, (res.y + 7u) / 8u, 1),
                     "RTAO Compute Pass"
@@ -336,11 +311,11 @@ public:
             cmd_list.Gfx(ssdo_pipeline, parameters.bindless, parameters.ssdo)
                 .Draw(
                     "SSDO Pass",
-                    parameters.textures.ao_only.GetRect2D(),
+                    parameters.frame.EvaluationOutput().GetRect2D(),
                     std::move(RasterTool::GetFullScreenDrawDatas()),
-                    ColorAttachment(parameters.textures.ao_only.tex),
-                    ColorAttachment(parameters.textures.camera_mv.tex),
-                    ColorAttachment(parameters.textures.indirect.tex)
+                    ColorAttachment(parameters.frame.EvaluationOutput().tex),
+                    ColorAttachment(parameters.frame.camera_motion.tex),
+                    ColorAttachment(parameters.frame.indirect.tex)
                 );
             return;
         }
@@ -348,49 +323,44 @@ public:
         cmd_list.Gfx(ao_pipeline, parameters.bindless, parameters.ao)
             .Draw(
                 "AO Pass",
-                parameters.textures.ao_only.GetRect2D(),
+                parameters.frame.EvaluationOutput().GetRect2D(),
                 std::move(RasterTool::GetFullScreenDrawDatas()),
-                ColorAttachment(parameters.textures.ao_only.tex),
-                ColorAttachment(parameters.textures.camera_mv.tex)
+                ColorAttachment(parameters.frame.EvaluationOutput().tex),
+                ColorAttachment(parameters.frame.camera_motion.tex)
             );
     }
 
     void AddToGraph(
-        RenderGraph& graph,
-        RasterContext& context,
+        RenderGraph&        graph,
+        RasterContext&      context,
         const RasterConfig& ui_config,
-        const Camera& camera,
-        uint64 frame_index,
-        GraphResources resources
+        const Camera&       camera,
+        uint64              frame_index,
+        AoFrameResources    frame,
+        GraphResources      resources
     );
 
     [[nodiscard]] CompositeRecordParameters PrepareComposite(
-        RasterContext&      context,
-        const RasterConfig& ui_config,
-        uint32              ao_only_hdl
+        RasterContext&          context,
+        const RasterConfig&     ui_config,
+        const AoFrameResources& frame
     ) const {
         CompositeRecordParameters parameters{};
-        auto& param = parameters.shader;
-        param.ao_tex              = ao_only_hdl;
-        param.color_tex           = context.textures.lighting_output.hdl;
+        auto&                     param = parameters.shader;
+        param.ao_tex                    = frame.Output().hdl;
+        param.color_tex                 = context.textures.lighting_output.hdl;
         param.ao_mode                   = static_cast<uint32>(ui_config.ao_mode);
-        param.is_half_resolution  = ui_config.ao_half_resolution ? 1u : 0u;
-        param.full_resolution     = float2(context.textures.ao_output.GetSize());
-        param.inv_full_resolution = float2(1.0f) / param.full_resolution;
-        param.depth_tex           = context.textures.depth_nearest_sampler.hdl;
-        param.normal_tex          = context.textures.normal.hdl;
-        param.indirect_tex = (ui_config.ao_half_resolution ? context.textures.ao_indirect_half :
-                                                             context.textures.ao_indirect).hdl;
-        if (ui_config.ao_half_resolution) {
-            const uint2 full = uint2(context.textures.ao_output.GetSize());
-            param.ao_resolution = float2(std::max(1u, full.x / 2), std::max(1u, full.y / 2));
-        } else {
-            param.ao_resolution = param.full_resolution;
-        }
-        parameters.output   = context.textures.ao_output;
-        parameters.bindless = context.bdls;
-        const uint2 res      = uint2(parameters.output.GetSize());
-        parameters.groups   = uint3((res.x + 7u) / 8u, (res.y + 7u) / 8u, 1);
+        param.is_half_resolution        = frame.half_resolution ? 1u : 0u;
+        param.full_resolution           = float2(context.textures.ao_output.GetSize());
+        param.inv_full_resolution       = float2(1.0f) / param.full_resolution;
+        param.depth_tex                 = context.textures.depth_nearest_sampler.hdl;
+        param.normal_tex                = context.textures.normal.hdl;
+        param.indirect_tex              = frame.indirect.hdl;
+        param.ao_resolution             = float2(frame.Output().GetSize());
+        parameters.output               = context.textures.ao_output;
+        parameters.bindless             = context.bdls;
+        const uint2 res                 = uint2(parameters.output.GetSize());
+        parameters.groups               = uint3((res.x + 7u) / 8u, (res.y + 7u) / 8u, 1);
         return parameters;
     }
 
@@ -400,7 +370,7 @@ public:
                     parameters.shader,
                     parameters.output.tex,
                     parameters.bindless
-                )
+        )
             .Dispatch(parameters.groups, "AO Composite Pass");
     }
 
@@ -408,37 +378,20 @@ public:
         RenderGraph&            graph,
         RasterContext&          context,
         const RasterConfig&     ui_config,
-        uint32                  ao_only_handle,
+        AoFrameResources        frame,
         CompositeGraphResources resources
     );
 
-    void CommitFrame(const RecordParameters& parameters) {
-        camera_mv_data_in_cpu = parameters.motion_vector_upload;
-        committed_ao_only_idx = parameters.output.ao_only_idx;
+    // Called only after native submission acceptance. Rejected frames never
+    // become temporal history, even if their prefix was already recorded.
+    void CommitFrame(const AoFrameResources& frame, const Matrix4x4f& view_projection) {
+        accepted_frame = AcceptedFrame{
+            frame.write_index, uint2(frame.Output().GetSize()), frame.half_resolution, frame.denoise, view_projection
+        };
     }
 
-    void CommitFrame(const Matrix4x4f& view_proj, uint32 ao_only_idx) {
-        camera_mv_data_in_cpu.world2clip_prev = camera_mv_data_in_cpu.world2clip;
-        camera_mv_data_in_cpu.world2clip      = Transpose(view_proj);
-        committed_ao_only_idx                 = ao_only_idx;
-    }
-
-    AoPassOutput Process(
-        RasterContext& context,
-        const RasterConfig& ui_config,
-        const Camera& camera,
-        uint64 frame_idx
-    ) {
-        const RecordParameters parameters = Prepare(context, ui_config, camera, frame_idx);
-        Record(context.cmd_list, parameters);
-        CommitFrame(parameters);
-        return parameters.output;
-    }
-
-    void CompositeAo(RasterContext& context, const RasterConfig& ui_config, uint32 ao_only_hdl) {
-        const CompositeRecordParameters parameters =
-            PrepareComposite(context, ui_config, ao_only_hdl);
-        RecordComposite(context.cmd_list, parameters);
+    void ResetHistory() {
+        accepted_frame.reset();
     }
 
 private:
@@ -448,9 +401,15 @@ private:
     SsdoPipeline        ssdo_pipeline;
     AoCompositePipeline ao_composite_pipeline;
 
-    CameraMotionVectorData camera_mv_data_in_cpu{}; // mv: motion vector
-    BufferWithHandle       camera_mv_data_in_gpu; // mv: motion vector
-    uint32                 committed_ao_only_idx{0};
+    struct AcceptedFrame {
+        uint32     write_index;
+        uint2      resolution;
+        bool       half_resolution;
+        bool       denoised;
+        Matrix4x4f view_projection;
+    };
+    std::optional<AcceptedFrame> accepted_frame;
+    BufferWithHandle             camera_mv_data_in_gpu;
 };
 
 } // namespace Moer::Render::Raster

@@ -130,9 +130,6 @@ public:
         FxaaPrecomputePipelineBindlessParam  fxaa_precompute{};
         FxaaPipelineBindlessParam            fxaa{};
         SmaaSharedPipelineBindlessParam       smaa{};
-        bool                                 commit_history_valid{false};
-        uint8                                commit_frame_parity{0};
-        Matrix4x4f                           commit_view_proj{Matrix4x4f::Identity()};
     };
 
     AaPass(RasterContext& context) {
@@ -257,7 +254,6 @@ public:
         parameters.output    = context.textures.aa_output;
         parameters.texture_1 = context.textures.aa_texture_1;
         parameters.texture_2 = context.textures.aa_texture_2;
-        parameters.commit_view_proj = camera.GetViewProjectionMatrix();
 
         if (ui_config.aa_mode == EAaMode::NONE ||
             ui_config.aa_mode == EAaMode::FXAA_SIMPLIFIED ||
@@ -307,8 +303,6 @@ public:
         const uint8 phase = uses_temporal_history ? smaa_t2x_phase : 0u;
         assert(phase < aa_texture_34.size());
         parameters.temporal_output       = *aa_texture_34[phase];
-        parameters.commit_history_valid  = uses_temporal_history;
-        parameters.commit_frame_parity   = phase;
 
         parameters.smaa = [&]() {
             SmaaSharedPipelineBindlessParam param{};
@@ -381,17 +375,6 @@ public:
                   ColorAttachment(parameters.output.tex));
     }
 
-    void Record(CommandList& cmd_list, const RecordParameters& parameters) {
-        RecordEdgesOrLuma(cmd_list, parameters);
-        if (parameters.mode >= EAaMode::SMAA_1X) {
-            RecordWeights(cmd_list, parameters);
-        }
-        RecordBlend(cmd_list, parameters);
-        if (parameters.mode == EAaMode::SMAA_T2X) {
-            RecordResolve(cmd_list, parameters);
-        }
-    }
-
     void AddToGraph(
         RenderGraph& graph,
         const RasterContext& context,
@@ -402,37 +385,10 @@ public:
         GraphResources resources
     );
 
-    void Commit(const RecordParameters& parameters) {
-        history_valid = parameters.commit_history_valid;
-        if (!history_valid) {
-            frame_parity      = 0;
-            current_view_proj = Matrix4x4f::Identity();
-            return;
-        }
-        frame_parity      = parameters.commit_frame_parity;
-        current_view_proj = parameters.commit_view_proj;
-    }
-
     void CommitFrame(EAaMode mode, uint8 smaa_t2x_phase, const Matrix4x4f& view_proj) {
-        RecordParameters parameters{};
-        parameters.commit_history_valid = mode == EAaMode::SMAA_T2X;
-        parameters.commit_frame_parity  = parameters.commit_history_valid ? smaa_t2x_phase : 0u;
-        parameters.commit_view_proj      = view_proj;
-        Commit(parameters);
-    }
-
-    TextureWithHandle Process(
-        RasterContext&      context,
-        const RasterConfig& ui_config,
-        const Camera&       camera,
-        TextureWithHandle   input_image,
-        uint8               smaa_t2x_phase
-    ) {
-        const RecordParameters parameters =
-            Prepare(context, ui_config, camera, std::move(input_image), smaa_t2x_phase);
-        Record(context.cmd_list, parameters);
-        Commit(parameters);
-        return parameters.output;
+        history_valid = mode == EAaMode::SMAA_T2X;
+        frame_parity = history_valid ? smaa_t2x_phase : 0u;
+        current_view_proj = history_valid ? view_proj : Matrix4x4f::Identity();
     }
 
 private:

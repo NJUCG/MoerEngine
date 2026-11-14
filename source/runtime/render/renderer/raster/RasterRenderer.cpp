@@ -754,7 +754,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         if (recreate_scene_resources) {
             raster_context.csm_data.shadow_cache_config_snapshot_valid = false;
             aa_pass->ResetHistory();
-            rtao_denoiser_pass->ResetHistory();
+            ao_pass->ResetHistory();
 
 #if WITH_CUDA
             cuda_pass->RecreateResource(raster_context.textures.ao_output.tex);
@@ -808,7 +808,8 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
     TextureRef default_output_texture = raster_context.textures.output.tex;
     bool       raster_pipeline_recorded = false;
     Matrix4x4f raster_commit_view_proj  = Matrix4x4f::Identity();
-    uint32     raster_commit_ao_index   = 0u;
+    std::optional<AoFrameResources> raster_ao_frame;
+    EAaMode raster_commit_aa_mode{EAaMode::NONE};
     uint8      raster_commit_aa_phase   = 0u;
 
     // 窗口资源就绪后再使用已准备好的场景快照。
@@ -899,7 +900,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         if (has_meshes != m_had_mesh_pipeline_work) {
             // Surface histories cannot survive an interval with no mesh passes.
             raster_context.InvalidateHiZHistory();
-            rtao_denoiser_pass->ResetHistory();
+            ao_pass->ResetHistory();
         }
         m_had_mesh_pipeline_work    = has_meshes;
         const bool record_gaussians = has_visible_gaussians || bool(frame_packet.gaussian_export_request);
@@ -942,6 +943,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
 
         raster_commit_view_proj = camera.GetViewProjectionMatrix();
         raster_commit_aa_phase  = smaa_t2x_phase;
+        raster_commit_aa_mode = raster_config.aa_mode;
         raster_context.Update(gaussian_display_context ?
             std::clamp(camera.GetDeltaTime(), 0.f, .1f) : camera.GetDeltaTime());
         cooperative_ops_pass->Commit(
@@ -956,7 +958,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         const auto& scene_gizmos = frame_packet.scene_view_gizmos;
         const bool  draw_scene_gizmos =
             frame_packet.active_viewport_mode == EEditorViewportMode::Scene && scene_gizmos.enabled;
-        AoPass::AoPassOutput ao_result{};
+        if (has_meshes) {
+            raster_ao_frame = ao_pass->SelectFrameResources(raster_context, raster_config);
+        }
         TextureWithHandle   processing_image = raster_context.textures.ao_output;
         RenderGraph::TextureHandle processing_image_resource{};
         TextureView         selected_framebuffer_view{};
@@ -1014,7 +1018,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
             RenderGraph::TextureHandle ao_indirect;
             RenderGraph::TextureHandle camera_motion_vector;
             RenderGraph::TextureHandle ao_history_read;
-            RenderGraph::TextureHandle ao_history_write;
+            RenderGraph::TextureHandle ao_final;
             RenderGraph::TextureHandle ao_geometry_read;
             RenderGraph::TextureHandle ao_geometry_write;
             RenderGraph::BufferHandle  motion_vector_data;
@@ -1157,50 +1161,16 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                     import_texture("shadow_mask", raster_context.textures.shadow_mask.tex);
                 graph_resources.lighting_output =
                     import_texture("lighting_output", raster_context.textures.lighting_output.tex);
-                const uint32 next_ao_only_index = ao_pass->NextAoOnlyIndex();
-                const bool  ao_half_resolution = raster_config.ao_half_resolution;
-                const auto& ao_only_texture =
-                    next_ao_only_index == 0u ?
-                        (ao_half_resolution ? raster_context.textures.ao_output_ambient_only_half :
-                                              raster_context.textures.ao_output_ambient_only) :
-                        (ao_half_resolution ? raster_context.textures.ao_output_ambient_only_1_half :
-                                              raster_context.textures.ao_output_ambient_only_1);
-                const auto& camera_motion_vector_texture =
-                    ao_half_resolution ? raster_context.textures.camera_motion_vector_half :
-                                         raster_context.textures.camera_motion_vector;
-                const auto& ao_history_read_texture =
-                    next_ao_only_index == 0u ?
-                        (ao_half_resolution ? raster_context.textures.ao_denoiser_accumulate_1_half :
-                                              raster_context.textures.ao_denoiser_accumulate_1) :
-                        (ao_half_resolution ? raster_context.textures.ao_denoiser_accumulate_half :
-                                              raster_context.textures.ao_denoiser_accumulate);
-                const auto& ao_history_write_texture =
-                    next_ao_only_index == 0u ?
-                        (ao_half_resolution ? raster_context.textures.ao_denoiser_accumulate_half :
-                                              raster_context.textures.ao_denoiser_accumulate) :
-                        (ao_half_resolution ? raster_context.textures.ao_denoiser_accumulate_1_half :
-                                              raster_context.textures.ao_denoiser_accumulate_1);
-                graph_resources.ao_only = import_texture("ao_only", ao_only_texture.tex);
-                graph_resources.ao_indirect = import_texture(
-                    "ao_indirect", (ao_half_resolution ? raster_context.textures.ao_indirect_half :
-                                                       raster_context.textures.ao_indirect).tex
-                );
-                graph_resources.camera_motion_vector =
-                    import_texture("camera_motion_vector", camera_motion_vector_texture.tex);
-                graph_resources.ao_history_read =
-                    import_texture("ao_history_read", ao_history_read_texture.tex);
-                graph_resources.ao_history_write =
-                    import_texture("ao_history_write", ao_history_write_texture.tex);
-                const auto geometry_0 = ao_half_resolution ? raster_context.textures.ao_history_geometry_half :
-                                                           raster_context.textures.ao_history_geometry;
-                const auto geometry_1 = ao_half_resolution ? raster_context.textures.ao_history_geometry_1_half :
-                                                           raster_context.textures.ao_history_geometry_1;
-                graph_resources.ao_geometry_read = import_texture(
-                    "ao_geometry_read", (next_ao_only_index == 0 ? geometry_1 : geometry_0).tex
-                );
-                graph_resources.ao_geometry_write = import_texture(
-                    "ao_geometry_write", (next_ao_only_index == 0 ? geometry_0 : geometry_1).tex
-                );
+                if (raster_ao_frame) {
+                    const auto& frame = *raster_ao_frame;
+                    graph_resources.ao_only = import_texture("ao_evaluation", frame.EvaluationOutput().tex);
+                    graph_resources.ao_final = import_texture("ao_final", frame.Output().tex);
+                    graph_resources.ao_history_read = import_texture("ao_history", frame.PreviousOutput().tex);
+                    graph_resources.camera_motion_vector = import_texture("camera_motion", frame.camera_motion.tex);
+                    graph_resources.ao_indirect = import_texture("ao_indirect", frame.indirect.tex);
+                    graph_resources.ao_geometry_read = import_texture("ao_geometry_history", frame.PreviousGeometry().tex);
+                    graph_resources.ao_geometry_write = import_texture("ao_geometry", frame.CurrentGeometry().tex);
+                }
                 const auto& motion_vector_data = ao_pass->GetMotionVectorDataBuffer();
                 graph_resources.motion_vector_data =
                     ImportRasterBuffer(graph, "motion_vector_data", motion_vector_data.Get());
@@ -1384,14 +1354,14 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 }
 
                 if (has_meshes) {
-                    ao_result = ao_pass->DescribeNextOutput(raster_context, raster_config);
-                    raster_commit_ao_index = ao_result.ao_only_idx;
+                    const auto& ao_frame = *raster_ao_frame;
                     ao_pass->AddToGraph(
                         graph,
                         raster_context,
                         raster_config,
                         camera,
                         time,
+                        ao_frame,
                         {
                             .normal = graph_resources.normal,
                             .depth = graph_resources.depth,
@@ -1408,12 +1378,12 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         raster_context,
                         raster_config,
                         camera,
-                        ao_result.ao_only_idx,
+                        ao_frame,
                         {
                             .camera_motion_vector = graph_resources.camera_motion_vector,
                             .ao_only = graph_resources.ao_only,
                             .history_read = graph_resources.ao_history_read,
-                            .history_write = graph_resources.ao_history_write,
+                            .history_write = graph_resources.ao_final,
                             .current_geometry = graph_resources.ao_geometry_write,
                             .history_geometry = graph_resources.ao_geometry_read
                         }
@@ -1422,9 +1392,9 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                         graph,
                         raster_context,
                         raster_config,
-                        ao_result.ao_only,
+                        ao_frame,
                         {
-                            .ao_only = graph_resources.ao_only,
+                            .ao_only = graph_resources.ao_final,
                             .lighting_output = graph_resources.lighting_output,
                             .depth = graph_resources.depth,
                             .normal = graph_resources.normal,
@@ -1459,7 +1429,7 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
                 // The interop owner releases Sampled images to CUDA in
                 // GENERAL, waits for CUDA, then reacquires them as Sampled.
                 processing_image =
-                    tensor_rt_pass->Process(raster_context, raster_config, ao_result.ao_only_idx);
+                    tensor_rt_pass->Process(raster_context, raster_config, *raster_ao_frame);
             }
 #endif
             auto add_postprocess = [&](RenderGraph& graph) {
@@ -1806,19 +1776,15 @@ RasterFrameFeedback RasterRenderer::RenderFrame(RasterFramePacket frame_packet) 
         frame_native_accepted = timeline->WaitSubmitted(time);
     }
     if (frame_native_accepted && raster_pipeline_recorded) {
-        const bool has_mesh_history = !frame_packet.has_gaussian_assets ||
-            frame_packet.gaussian_content == EGaussianSceneContent::MeshOnly ||
-            frame_packet.gaussian_content == EGaussianSceneContent::Mixed;
-        if (has_mesh_history) raster_context.CommitHiZHistory(raster_commit_view_proj);
-        else raster_context.InvalidateHiZHistory();
-        if (has_mesh_history) {
-            ao_pass->CommitFrame(raster_commit_view_proj, raster_commit_ao_index);
-            rtao_denoiser_pass->CommitFrame(frame_packet.raster_config);
+        if (raster_ao_frame) {
+            raster_context.CommitHiZHistory(raster_commit_view_proj);
+            ao_pass->CommitFrame(*raster_ao_frame, raster_commit_view_proj);
         } else {
-            rtao_denoiser_pass->ResetHistory();
+            raster_context.InvalidateHiZHistory();
+            ao_pass->ResetHistory();
         }
         aa_pass->CommitFrame(
-            frame_packet.raster_config.aa_mode,
+            raster_commit_aa_mode,
             raster_commit_aa_phase,
             raster_commit_view_proj
         );
