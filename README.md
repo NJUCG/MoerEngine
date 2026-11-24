@@ -4,8 +4,6 @@
 
 **| 简体中文 | [English](./docs/README.en.md) |**
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NJUCG/MoerEngine)
-
 > 注：MoerEngine目前仍处于早期开发阶段，功能和性能均不完善，并正在进行小范围重构。
 
 ## 目录
